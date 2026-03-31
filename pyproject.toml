@@ -1,0 +1,15 @@
+[tool.uv.workspace]
+members = [
+    "basis",
+    "packages/jotter"
+]
+
+[tool.uv.sources]
+basis = { path = "./basis" }
+jotter = { path = "./packages/jotter" }
+
+[dependency-groups]
+dev = [
+    "fastapi[standard]>=0.127.0",
+    "uvicorn>=0.40.0",
+]
