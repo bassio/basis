@@ -4,37 +4,46 @@ import basis.components.component as component
 class Tabs(component.Component):
     __tag__ = "ui-tabs"
     target = ""
-    
+    selected_value = ""
+
     def __init__(self):
         super().__init__()
         # Wait for component to mount to DOM
         window.setTimeout(ffi.create_proxy(self.initialize_tabs), 50)
         
     def initialize_tabs(self):
+        print("INITIALIZING TABS")
         checked = self.__element__.querySelector('input[type="radio"]:checked')
         if checked:
+            print("checked.value", checked.value)
             self.update_target(checked.value)
 
     def on_tab_change(self, event):
         self.update_target(event.target.value)
 
     def update_target(self, selected_value):
-        if not self.target:
-            return
 
-        if self.target.startswith("#"):
+        self.selected_value = selected_value
+
+        if self.target in ("", "self", None):
+            container = self.__element__
+        elif self.target.startswith("#"):
             target_id = self.target.replace("#", "")
             container = document.getElementById(target_id)
         else:
             container = document.querySelector(self.target)
             
         if not container:
-            return
+            container = self.__element__
             
-        child_content_for_selected_tab = self.__element__.querySelector(f'[content-for="{selected_value}"]')
+        child_content_for_selected_tab = container.querySelector(f'[content-for][content-for="{selected_value}"]')
+        child_content_for_unselected_tabs = container.querySelectorAll(f'[content-for]:not([content-for="{selected_value}"])')
 
-        if child_content_for_selected_tab:
-            container.innerHTML = child_content_for_selected_tab.innerHTML
+        #if child_content_for_selected_tab:
+        #    child_content_for_selected_tab.style.display = 'block'
+        #for unselected_content in list(child_content_for_unselected_tabs):
+        #    unselected_content.style.display = 'none'
+            
 
     def style(self):
         """
@@ -48,7 +57,6 @@ class Tabs(component.Component):
 
         .ui-tabs-container .ui-tab-content {
             display: none;
-            visibility: hidden;
         }
         """
 

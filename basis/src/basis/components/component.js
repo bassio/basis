@@ -19,7 +19,13 @@ function CustomElementFactory(config) {
 
       console.log(`JS: Initializing constructor for '${this.tagName}' element`);
 
-      this.attachShadow({ mode: "open" });
+      const shadow = this.config['__shadow__'];
+
+      if (shadow) {
+
+        this.attachShadow({ mode: "open" });
+        
+      }
 
     }
 
@@ -28,7 +34,8 @@ function CustomElementFactory(config) {
     }
 
     connectedCallback() {
-      //console.log(`JS: ${this.tagName} added to page (connectedCallback())`);
+      
+      console.log(`JS: ${this.tagName} added to page (connectedCallback())`);
 
       const shadow = this.config['__shadow__'];
 
@@ -50,8 +57,13 @@ function CustomElementFactory(config) {
 
       }
       else {
-        const fragment = init_template.content.cloneNode(true); // cloneNode(true) is essential for deep cloning all children      
-        this.appendChild(fragment);
+        const shadowRoot = this.shadowRoot;
+
+        const templateContent = init_template.content
+        const fragment = templateContent.cloneNode(true); // cloneNode(true) is essential for deep cloning all children      
+        //shadowRoot.appendChild(document.importNode(templateContent, true));
+        //this.appendChild(document.importNode(templateContent, true));
+
       }
       
       

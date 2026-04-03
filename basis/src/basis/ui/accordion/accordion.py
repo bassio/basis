@@ -2,7 +2,6 @@ import basis.components.component as component
 
 class Accordion(component.Component):
     __tag__ = "ui-accordion"
-    __shadow__ = True
     
     def style(self):
         """
@@ -22,7 +21,6 @@ class Accordion(component.Component):
 
 class AccordionItem(component.Component):
     __tag__ = "ui-accordion-item"
-    __shadow__ = True
     name = "default-group"
     title = ""
 

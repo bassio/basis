@@ -1,3 +1,4 @@
+from pyscript import document
 import basis.components.component as component
 
 class Tab(component.Component):
@@ -5,7 +6,7 @@ class Tab(component.Component):
     label = ""
     value = ""
     name = "tabs-group"
-    checked = "false"
+    checked = False
 
     def style(self):
         """
@@ -69,11 +70,25 @@ class Tab(component.Component):
 
 class TabContent(component.Component):
     __tag__ = "ui-tab-content"
-    value = ""
+    
+    def style(self):
+        """
+        .ui-tab-content {
+            display: none; // hide by default
+        }
+        """
+        
+    @property
+    def tab_selected(self):
+        checked = self.tabs_selector.querySelector('input[type="radio"]:checked')
+        tab_selected_value = checked.value
+        if self.value == tab_selected_value:
+            return True
+        else:
+            return False
 
     def template(self):
         """
-        <div class="ui-tab-content" content-for="{value}">
-            <slot></slot>
+        <div class="ui-tab-content" content-for="{value}" >
         </div>
         """

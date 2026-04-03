@@ -234,6 +234,7 @@ class AttributeBinding(Binding):
     attr:str
     content:str
     fields:list[str]
+    is_boolean:bool = False
     
 @dataclass
 class ModelBinding(Binding):
@@ -427,9 +428,28 @@ class Component(object):
                     tag = str.lower(element.tagName)
 
                     #custom_element_ancestors = [a for a in get_ancestor_tags(element) if '-' in a]
-                    childcomponent_py = Component._registry[tag]
-                    bindings.append(ChildBinding(component_instance=self, node=element, childclass=childcomponent_py))
 
+                    childcomponent_py = Component._registry[tag]
+                    dom_child_node_attrs = {c.name: c.value for c in node.attributes}
+
+                    #child_instance = childcomponent_py()
+
+                    child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
+
+                    print(f"Child ATTRS in __init_bindings__ of {self.__class__} from dom of child component {childcomponent_py}", dom_child_node_attrs)
+
+                    node.appendChild(child_instance.__template__)
+
+                    try:
+                        print(node.tagName)
+                        print(node.innerHTML)
+                    except:
+                        pass
+                    
+                    #print("SHADOW:", node.shadowRoot.children[0])
+
+                    #bindings.append(ChildBinding(component_instance=self, node=element, childclass=childcomponent_py))
+                    
                     '''
                     if len(custom_element_ancestors) == 0:
                         childcomponent_py = Component._registry[tag]
@@ -462,23 +482,45 @@ class Component(object):
                         fields.append(event_attr_value)
 
                 for other_attr in other_attrs:
+
                     other_attr_value = element.getAttribute(other_attr)
+
+                    if other_attr.startswith("{") and other_attr.endswith("}"):
+                        other_attr_no_braces = other_attr.strip("{}")
+
+                        if other_attr_value == "": # i.e. empty value for example <input checked />
+                            other_attr_value == other_attr #i.e. the name with the braces so that we could Formatter().parse it e.g. <input {checked} >
+                        
+                        other_attr_isboolean = True
+
+                        element.removeAttribute(other_attr) #remove the e.g. {checked} attribute from the dom
+
+                    else:
+                        other_attr_no_braces = other_attr
+                        other_attr_isboolean = False
                     
                     has_expr = any(fname is not None for _, fname, _, _ in formatter.parse(other_attr_value))
                     
                     if has_expr:
                         fieldnames = extract_dependencies(other_attr_value, ALLOWED_BUILTINS)
-                        bindings.append(AttributeBinding(component_instance=self, node=element, attr=other_attr, content=other_attr_value, fields=fieldnames))
+                        bindings.append(AttributeBinding(component_instance=self, node=element, attr=other_attr_no_braces, content=other_attr_value, fields=fieldnames, is_boolean=other_attr_isboolean))
                         fields += fieldnames
 
                 if 'if' in other_attrs:
                     if_expr = element.getAttribute('if')
-                    if_expr_clean = if_expr.strip("{}")
-                    fieldnames = extract_dependencies(if_expr, ALLOWED_BUILTINS)
+                    if_expr_clean = if_expr.removeprefix("{").removesuffix("}")
+
+                    # interestingly here the extract_dependencies requires the braces around the 
+                    # expression because it depends on the Formatter().parse() functionality
+                    # hence if_expr rather than if_expr_clean
+                    fieldnames = extract_dependencies(if_expr, ALLOWED_BUILTINS) 
+
+                    print("if dependencies:", fieldnames)
                     
                     anchor = document.createComment(f"if: {if_expr_clean}")
+                    print(f"inserting {element.tagName} element prior to anchor")
                     element.parentNode.insertBefore(anchor, element)
-                        
+                    
                     bindings.append(IfBinding(
                         component_instance=self,
                         node=element,
@@ -552,7 +594,7 @@ class Component(object):
                 return True
         return False
 
-    def fill_slots(self, light_dom_source):
+    def fill_slots_old(self, light_dom_source):
         """Distribute light-DOM children from `light_dom_source` into <slot> elements
         inside this component's rendered template.
 
@@ -572,7 +614,7 @@ class Component(object):
         non_default_slot_bindings = [sb for sb in slot_bindings if not sb.is_default]
         default_slot_bindings = [sb for sb in slot_bindings if sb not in non_default_slot_bindings]
 
-        print("LEN SLOT BINDINGS:" , len(slot_bindings), type(self))
+        #print("LEN SLOT BINDINGS:" , len(slot_bindings), type(self))
 
         if not slot_bindings:
             return
@@ -632,7 +674,7 @@ class Component(object):
         if fields_on_class:
             with self.refrain() as refrained:
                 for field in fields_on_class:
-                    print(f"setting attr from class {self.__class__.__name__} on the instance: {field}")
+                    print(f"setting attr from class {self.__class__.__name__} on the instance: {field}, with value {cls.__dict__[field]}")
                     setattr(refrained, field, cls.__dict__[field])
 
 
@@ -667,11 +709,12 @@ class Component(object):
     @classmethod
     def mount(cls, container, replace=False, **attributes):
 
-        new_instance = cls()
+        print(f"mount: starting mounting {cls}")
+
+        new_instance = cls() # this naturally calls __init_bindings__ and __init_fields__
 
         # set attributes from kwargs
         if len(attributes):
-            print(f"setting attributes in mount of {cls}:", attributes)
             with new_instance.refrain() as refrained:
                 for k, v in attributes.items():
                     setattr(refrained, k, v)
@@ -683,20 +726,27 @@ class Component(object):
         # the LIMITATION for this is that components have to have a single element at their root.
         self_element = new_template.firstElementChild
         
-        print("self_element", self_element)
 
         child_bindings = [eb for eb in new_instance.__bindings__ if isinstance(eb, ChildBinding)]
+
 
         # PRE-SNAPSHOT: capture each child binding's authored light-DOM content and
         # attributes BEFORE the template enters the live DOM i.e. before connectedCallback().
 
+        # SLOTS ....
+        # Distribute slotted content into the child's rendered template
+        new_instance.fill_slots(new_instance.__element__, container)
+
         if replace:
             container.replaceWith(new_template)
             for k, v in attributes.items():
-                print("Setting attributes on container", k, v)
                 self_element.setAttribute(k, v)
+
         else:
             container.appendChild(new_template)
+            for k, v in attributes.items():
+                self_element.setAttribute(k, v)
+
 
         # connectedCallback fires here for every custom element now in the live DOM.
         # Any JS-injected template content lands in nodes whose authored children
@@ -710,25 +760,92 @@ class Component(object):
             binding.node.removeAttribute(binding.event)
             setattr(binding.element, binding.event, ffi.create_proxy(self_event_method))
 
+        # SLOTS ....
         # Distribute slotted content into the child's rendered template
-        new_instance.fill_slots(container)
-
+        # new_instance.fill_slots(container)
+        
+        '''
         for binding in child_bindings: #custom elements
             #obtain attributes set on the <custom-element> tag from the JS component side (after mounting parent of course!)
             updated_child_node_attrs = {c.name: c.value for c in binding.node.attributes}
 
-            print(f"updated attrs for {binding.childclass}:", updated_child_node_attrs)
-
             custom_child_instance = binding.childclass.mount(binding.node, replace=True, **updated_child_node_attrs)
             binding.childinstance = custom_child_instance
             
+        '''
 
         for nested_child in cls.get_nested_children():
             nested_child.mount(self_element, replace=False) #appendChild
 
-        #print(f"finished mounting {cls}")
+        print(f"mount: finished mounting {cls}")
 
         return new_instance
+    
+    @staticmethod
+    def fill_slots(template, light_dom_source):
+
+        default_slot_elements = template.querySelectorAll("slot:not([name])")
+        named_slot_elements = template.querySelectorAll("slot[name]")
+        
+        #print("LEN SLOT BINDINGS:" , len(default_slot_elements) + len(named_slot_elements))
+
+        # Snapshot childNodes now (live NodeList changes as we move nodes)
+        light_children = list(light_dom_source.childNodes)
+
+        # Partition by slot attribute value
+        named_children: dict = {}
+        default_children: list = []
+
+        for child in light_children:
+            slot_attr = None
+            try:
+                slot_attr = child.getAttribute('slot')
+            except Exception:
+                pass  # Text nodes don't have getAttribute
+
+            if slot_attr:
+                if slot_attr not in named_children:
+                    named_children[slot_attr] = []
+                named_children[slot_attr].append(child)
+            else:
+                default_children.append(child)
+        
+        #print("default_children", default_children)
+        #print("named_children", named_children)
+        
+        for slot_node in named_slot_elements:
+            parent = slot_node.parentNode
+            if parent is None:
+                continue
+
+            slot_name = slot_node.getAttribute('name')
+            children_to_insert = named_children.get(slot_name, [])
+
+            # Move each child before the <slot> placeholder
+            for child in children_to_insert:
+                parent.insertBefore(child, slot_node)
+
+            # Remove the <slot> placeholder regardless of whether it was filled
+            slot_node.remove()
+
+        # Fill each <slot> in order
+        for slot_node in default_slot_elements:
+            parent = slot_node.parentNode
+            if parent is None:
+                continue
+
+            children_to_insert = default_children
+            
+            # Move each child before the <slot> placeholder
+            for child in children_to_insert:
+                #print(child.textContent)
+                parent.insertBefore(child, slot_node)
+
+            # Remove the <slot> placeholder regardless of whether it was filled
+            slot_node.remove()
+
+        return template
+    
 
     @classmethod
     def is_static(cls):
@@ -791,6 +908,8 @@ class Component(object):
 
 
     def react(self, names):
+
+        print(f"In react({names}) of {self}")
         
         text_bindings:list[TextBinding] = [tb for tb in self.__bindings__ if isinstance(tb, TextBinding)]
         attr_bindings:list[AttributeBinding] = [ab for ab in self.__bindings__ if isinstance(ab, AttributeBinding)]
@@ -802,33 +921,34 @@ class Component(object):
 
         looped_nodes = [lb.node for lb in loop_bindings] + [lb.node for lb in keyed_loop_bindings]
         
+
         text_bindings_to_update = []
         attr_bindings_to_update = []
         model_bindings_to_update = []
         if_bindings_to_update = []
-
-        for ib in if_bindings:
-            if len(set(ib.fields).intersection(names)):
-                if ib not in if_bindings_to_update:
-                    if_bindings_to_update.append(ib)
 
         for tb in text_bindings:
             if len(set(tb.fields).intersection(names)):
                 if tb not in text_bindings_to_update:
                     text_bindings_to_update.append(tb)
 
+        for ab in attr_bindings:
+            if len(set(ab.fields).intersection(names)):
+                if ab not in attr_bindings_to_update:
+                    attr_bindings_to_update.append(ab)
+
         for mb in model_bindings:
             if len(set(mb.fields).intersection(names)):
                 if mb not in model_bindings_to_update:
                     model_bindings_to_update.append(mb)
 
-        for ab in attr_bindings:
-            if len(set(ab.fields).intersection(names)):
-                if ab not in attr_bindings_to_update:
-                    attr_bindings_to_update.append(ab)
-        
-        #print(f"In react({names}) of {self}")
-        
+        #print("in react", "if bindings:", if_bindings)
+        for ib in if_bindings:
+            print("ib fields:", ib.fields)
+            if len(set(ib.fields).intersection(names)):
+                if ib not in if_bindings_to_update:
+                    if_bindings_to_update.append(ib)
+
         attr_bindings_to_pop = []
         text_bindings_to_pop = []
         new_child_bindings = []
@@ -972,6 +1092,10 @@ class Component(object):
                     new_child_bindings.append(new_cb)
                     self.__bindings__.append(new_cb)
                     
+                    new_cb = ChildBinding(component_instance=self, node=cloned_element, childclass=childcomponent_py)
+                    new_child_bindings.append(new_cb)
+                    self.__bindings__.append(new_cb)
+                    
 
                     for tb in text_bindings:
                         if lb.node.contains(tb.node) \
@@ -1049,9 +1173,13 @@ class Component(object):
             if ab.node not in looped_nodes:
                 if not ab.attr in ["in"]:
                     final_val = safe_format(ab.content, self.__dict__, ALLOWED_BUILTINS)
-                    ab.node.setAttribute(ab.attr, final_val)
+
+                    if ab.is_boolean:
+                        ab.node.toggleAttribute(ab.attr, bool(final_val))
+                    else:
+                        ab.node.setAttribute(ab.attr, final_val)
+
                 else:
-                    
                     _, fname, _, _ = next(iter(formatter.parse(ab.content)))
                     evaluated_val = safe_eval(fname, self.__dict__, ALLOWED_BUILTINS)
                     final_val = json.dumps(evaluated_val)
@@ -1059,6 +1187,7 @@ class Component(object):
                     
         for ib in if_bindings_to_update:
             expr_eval = bool(safe_eval(ib.expr, self.__dict__, ALLOWED_BUILTINS))
+            #print("Expr_eval for IfBinding:", ib.expr, expr_eval, )
             if expr_eval == False:
                 #print("REMOVING node from DOM based on IfBinding")
                 ib.node.remove()
