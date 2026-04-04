@@ -17,6 +17,9 @@ except ImportError:
     PYSCRIPT = False
 
 
+from basis.shared.store import Store
+
+
 ALLOWED_BUILTINS = {'False': False,
                     'True': True,
                     'None': None,
@@ -183,21 +186,70 @@ def safe_format(template_str, context, allowed_builtins):
                 result += str(val)
     return result
 
+def safe_format_with_stores(template_str, context, allowed_builtins, store_registry, component_instance_registry):
+    
+    result = ""
+    formatter = Formatter()
+    for literal_text, fname, format_spec, conversion in formatter.parse(template_str):
+        result += literal_text
+        if fname is not None:
+            if fname.startswith("$"):
+                store_name, attr_name = fname.strip("$").split(".")
+                val = getattr(store_registry[store_name], attr_name)
+            elif fname.startswith("#"):
+                component_name, attr_name = fname.strip("#").split(".")
+                if component_name in component_instance_registry:
+                    print("FOUND COMPONENT INSTANCE IN REGISTRY: ")
+                    val = getattr(component_instance_registry[component_name], attr_name)
+                else:
+                    print("COULD NOT FIND COMPONENT INSTANCE IN THE REGISTRY: ", component_name)
+                    val = ""
+            else:
+                val = safe_eval(fname, context, allowed_builtins)
+            
+            if format_spec:
+                result += format(val, format_spec)
+            else:
+                result += str(val)
+    
+    return result
+
 def extract_dependencies(template_str, allowed_builtins):
     
     formatter = Formatter()
     deps = set()
     for _, fname, _, _ in formatter.parse(template_str):
         if fname is not None:
-            try:
-                tree = ast.parse(fname, mode='eval')
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Name):
-                        if node.id not in allowed_builtins and isinstance(getattr(node, 'ctx', None), ast.Load):
-                            deps.add(node.id)
-            except SyntaxError:
-                pass
+            if (dollar_or_hash_sign:=fname[0]) in ['$', '#']:
+                fname_no_sign = fname.strip("$#")
+                try:
+                    tree = ast.parse(fname_no_sign, mode='eval')
 
+                    store_name = None
+                    attr_name = None
+
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.Name): # extract store_name
+                            if node.id not in allowed_builtins and isinstance(getattr(node, 'ctx', None), ast.Load):
+                                store_name = node.id
+                        if isinstance(node, ast.Attribute): # extract the attr in the Store
+                            attr_name = node.attr
+                            
+                    if store_name and attr_name:
+                        deps.add(f"{dollar_or_hash_sign}{store_name}.{attr_name}")
+                        
+                except SyntaxError:
+                    pass
+            else:
+                try:
+                    tree = ast.parse(fname, mode='eval')
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.Name):
+                            if node.id not in allowed_builtins and isinstance(getattr(node, 'ctx', None), ast.Load):
+                                deps.add(node.id)
+                except SyntaxError:
+                    pass
+        
     return list(deps)
 
 def client(func):
@@ -209,7 +261,14 @@ def client(func):
 
     return wrapper
 
-    
+@dataclass
+class Field(object):
+    name:str
+
+class StoreField(object):
+    name:str
+    store:str
+
 @dataclass
 class Binding(object):
     component_instance:"Component"
@@ -320,6 +379,11 @@ class Refrain:
 
 class Component(object):
     _registry = {}
+    _instance_registry = {}
+    _pending_subscriptions = {}
+
+    S = Store._registry
+    C = _instance_registry
 
     @classmethod
     def from_template(cls, templatestr, **kwargs):
@@ -384,6 +448,7 @@ class Component(object):
 
     def __init__(self):
         super().__init__()
+        self.__dict__['_subscriptions'] = []
         self.__init_bindings__()
         self.__init_fields__()
 
@@ -418,7 +483,9 @@ class Component(object):
 
             return ancestors
 
-        bindings.append(SelfBinding(component_instance=self, node=self.__template__.firstElementChild))
+        self_element = self.__template__.firstElementChild
+        bindings.append(SelfBinding(component_instance=self, node=self_element))
+
 
         for i, node in enumerate(nodes):
             if hasattr(node, 'getAttributeNames'): #confirm it is an ELEMENT not a TEXT node
@@ -439,26 +506,6 @@ class Component(object):
                     print(f"Child ATTRS in __init_bindings__ of {self.__class__} from dom of child component {childcomponent_py}", dom_child_node_attrs)
 
                     node.appendChild(child_instance.__template__)
-
-                    try:
-                        print(node.tagName)
-                        print(node.innerHTML)
-                    except:
-                        pass
-                    
-                    #print("SHADOW:", node.shadowRoot.children[0])
-
-                    #bindings.append(ChildBinding(component_instance=self, node=element, childclass=childcomponent_py))
-                    
-                    '''
-                    if len(custom_element_ancestors) == 0:
-                        childcomponent_py = Component._registry[tag]
-                        bindings.append(ChildBinding(component_instance=self, node=element, childclass=childcomponent_py))
-                    else:
-                        childcomponent_py = Component._registry[tag]
-                        bindings.append(ChildBinding(component_instance=self, node=element, childclass=childcomponent_py))
-                        pass
-                    '''
                     
                 if str.lower(element.tagName) == 'slot':
                     slot_name = element.getAttribute('name')
@@ -499,10 +546,14 @@ class Component(object):
                         other_attr_no_braces = other_attr
                         other_attr_isboolean = False
                     
-                    has_expr = any(fname is not None for _, fname, _, _ in formatter.parse(other_attr_value))
-                    
+                    fnames = [fname for _, fname, _, _ in formatter.parse(other_attr_value) if fname is not None]
+                    has_expr = any(fnames)
+
                     if has_expr:
                         fieldnames = extract_dependencies(other_attr_value, ALLOWED_BUILTINS)
+
+                        print("fieldnames", fieldnames)
+
                         bindings.append(AttributeBinding(component_instance=self, node=element, attr=other_attr_no_braces, content=other_attr_value, fields=fieldnames, is_boolean=other_attr_isboolean))
                         fields += fieldnames
 
@@ -576,95 +627,36 @@ class Component(object):
 
                 text_content = node.textContent
                 
-                has_expr = any(fname is not None for _, fname, _, _ in formatter.parse(text_content))
-                                
+                fnames = [fname for _, fname, _, _ in formatter.parse(text_content) if fname is not None]
+                has_expr = any(fnames)
+
                 if has_expr:
                     fieldnames = extract_dependencies(text_content, ALLOWED_BUILTINS)
-                    bindings.append(TextBinding(component_instance=self, node=node, content=node.textContent, fields=fieldnames))
+                    print("text field names", fieldnames)
+                    bindings.append(TextBinding(component_instance=self, node=node, content=text_content, fields=fieldnames))
                     fields += fieldnames
         
-        #print(f"Bindings & Fields of {self.__class__.__name__}", bindings, fields)
-        #print(f"Fields of {self.__class__.__name__}", fields)
+        # add to component instance registry if it is has an id
+        if component_id:=self_element.getAttribute('id'):
+            Component._instance_registry[component_id] = self
+            
+            if component_id in Component._pending_subscriptions:
+                
+                for subscribing_component_instance, attr_name in Component._pending_subscriptions.pop(component_id):
+                    self.subscribe(subscribing_component_instance, attr_name)
+                    
+                    subscribed_field = f"#{component_id}.{attr_name}"
+                    with subscribing_component_instance.refrain() as refrained:
+                        setattr(refrained, subscribed_field, self)
+
         self.__dict__['__bindings__'] = bindings
-        self.__dict__['__fields__'] = fields
-
-    def has_slots(self):
-        for binding in self.__bindings__:
-            if isinstance(binding, SlotBinding):
-                return True
-        return False
-
-    def fill_slots_old(self, light_dom_source):
-        """Distribute light-DOM children from `light_dom_source` into <slot> elements
-        inside this component's rendered template.
-
-        Works like Shadow DOM slot assignment but entirely in Python/PyScript since
-        Basis uses light DOM (no shadow root attached).
-
-        Algorithm:
-          1. Collect all SlotBindings.
-          2. Snapshot all childNodes from light_dom_source into typed buckets
-             (named children by slot attribute, default children with no slot attr).
-          3. For each <slot> node:
-               - Named slot  → insert children whose slot="<name>"
-               - Default slot → insert children with no slot attribute
-          4. Remove the <slot> placeholder after filling (whether filled or not).
-        """
-        slot_bindings = [sb for sb in self.__bindings__ if isinstance(sb, SlotBinding)]
-        non_default_slot_bindings = [sb for sb in slot_bindings if not sb.is_default]
-        default_slot_bindings = [sb for sb in slot_bindings if sb not in non_default_slot_bindings]
-
-        #print("LEN SLOT BINDINGS:" , len(slot_bindings), type(self))
-
-        if not slot_bindings:
-            return
-
-        # Snapshot childNodes now (live NodeList changes as we move nodes)
-        light_children = list(light_dom_source.childNodes)
-
-        # Partition by slot attribute value
-        named_children: dict = {}
-        default_children: list = []
-
-        for child in light_children:
-            slot_attr = None
-            try:
-                slot_attr = child.getAttribute('slot')
-            except Exception:
-                pass  # Text nodes don't have getAttribute
-
-            if slot_attr:
-                if slot_attr not in named_children:
-                    named_children[slot_attr] = []
-                named_children[slot_attr].append(child)
-            else:
-                default_children.append(child)
-        
-        print("default_children", default_children)
-        print("named_children", named_children)
-        
-        # Fill each <slot> in order
-        for binding in slot_bindings:
-            slot_node = binding.node
-            parent = slot_node.parentNode
-            if parent is None:
-                continue
-
-            if binding.is_default:
-                children_to_insert = default_children
-            else:
-                children_to_insert = named_children.get(binding.name, [])
-
-            # Move each child before the <slot> placeholder
-            for child in children_to_insert:
-                #print(child.textContent)
-                parent.insertBefore(child, slot_node)
-
-            # Remove the <slot> placeholder regardless of whether it was filled
-            slot_node.remove()
+        self.__dict__['__fields__'] = list(set(fields))
     
+
     def __init_fields__(self):
         cls = self.__class__
+
+        print(f"__init_fields__ : {cls} fields:, ", self.__fields__)
         
         fields_on_class = [attr for attr in self.__fields__ \
                                 if (not attr in self.__dict__) and \
@@ -674,10 +666,40 @@ class Component(object):
         if fields_on_class:
             with self.refrain() as refrained:
                 for field in fields_on_class:
-                    print(f"setting attr from class {self.__class__.__name__} on the instance: {field}, with value {cls.__dict__[field]}")
+                    #print(f"setting attr from class {self.__class__.__name__} on the instance: {field}, with value {cls.__dict__[field]}")
                     setattr(refrained, field, cls.__dict__[field])
+        
+        for field in self.__fields__:
+            if field.startswith("$"):
+                
+                store_name, attr_name = field.strip("$").split(".")
+                store_instance = Store._registry[store_name]
+                
+                with self.refrain() as refrained:
+                    setattr(refrained, field, store_instance)
+                
+                store_instance.subscribe(self, attr_name)
+            
+            elif field.startswith("#"):
+                component_name, attr_name = field.strip("#").split(".")
+                
+                if component_name in Component._instance_registry:
+                    component_instance = Component._instance_registry[component_name]
 
+                    with self.refrain() as refrained:
+                        setattr(refrained, field, component_instance)
+                    
+                    component_instance.subscribe(self, attr_name)
 
+                else:
+
+                    if component_name in Component._pending_subscriptions:
+                        #print(f"{component_name} found in _pending_subscriptions")
+                        Component._pending_subscriptions[component_name].append((self, attr_name))
+                    else:
+                        #print(f"{component_name} NOT FOUND in _pending_subscriptions")
+                        Component._pending_subscriptions[component_name] = [(self, attr_name)]
+                        
     @classmethod
     def mount_app(cls, container, replace=False):
         
@@ -727,7 +749,7 @@ class Component(object):
         self_element = new_template.firstElementChild
         
 
-        child_bindings = [eb for eb in new_instance.__bindings__ if isinstance(eb, ChildBinding)]
+        #child_bindings = [eb for eb in new_instance.__bindings__ if isinstance(eb, ChildBinding)]
 
 
         # PRE-SNAPSHOT: capture each child binding's authored light-DOM content and
@@ -847,6 +869,13 @@ class Component(object):
         return template
     
 
+    def has_slots(self):
+        for binding in self.__bindings__:
+            if isinstance(binding, SlotBinding):
+                return True
+        return False
+    
+
     @classmethod
     def is_static(cls):
         return (len(cls.__bindings__) == 0)
@@ -879,6 +908,18 @@ class Component(object):
                    
         else:
             return []
+        
+
+    def subscribe(self, component_instance, attr_name:str):
+        if (component_instance, attr_name) not in self._subscriptions:
+            self.__dict__['_subscriptions'].append((component_instance, attr_name))
+
+        print(f"_subscriptions of {self.__class__}: ", self.__dict__['_subscriptions'])
+
+    def unsubscribe(self, component_instance, attr_name:str):
+        self.__dict__['_subscriptions'] = [
+            sub for sub in self._subscriptions if sub != (component_instance, attr_name)
+        ]
 
     def __getattribute__(self, name):
         return super().__getattribute__(name)
@@ -890,6 +931,9 @@ class Component(object):
             old_value = None
 
         super().__setattr__(name, value)
+
+        if not name.startswith("$") or name.startswith("#"):
+            super().__setattr__(name, value)
 
         #check for change
         if value != old_value:
@@ -1158,7 +1202,8 @@ class Component(object):
                 pass
 
         for tb in text_bindings_to_update:
-            tb.node.textContent = safe_format(tb.content, tb.component_instance.__dict__, ALLOWED_BUILTINS)
+            print("text_bindings_to_update", text_bindings_to_update)
+            tb.node.textContent = safe_format_with_stores(tb.content, tb.component_instance.__dict__, ALLOWED_BUILTINS, Store._registry, Component._instance_registry)
 
         for mb in model_bindings_to_update:
             if mb.node not in looped_nodes:
@@ -1170,10 +1215,11 @@ class Component(object):
                     mb.node.value = str(val) if val is not None else ""
 
         for ab in attr_bindings_to_update:
-            if ab.node not in looped_nodes:
-                if not ab.attr in ["in"]:
-                    final_val = safe_format(ab.content, self.__dict__, ALLOWED_BUILTINS)
-
+            print("attr_bindings_to_update", attr_bindings_to_update)
+            if ab.node not in looped_nodes:                    
+                if ab.attr not in ["in"]:
+                    final_val = safe_format_with_stores(ab.content, self.__dict__, ALLOWED_BUILTINS, Store._registry, Component._instance_registry)
+                    print("final_val", final_val)
                     if ab.is_boolean:
                         ab.node.toggleAttribute(ab.attr, bool(final_val))
                     else:

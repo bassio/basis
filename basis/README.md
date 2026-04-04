@@ -45,3 +45,4 @@ Bindings: The framework maintains a registry of various Binding types, for examp
 
 Reactivity Triggers (react): Modifying a property triggers the overridden setattr.
 This invokes the react(names) method which cross-references the modified field names with the dependencies listed in __bindings__. The update mechanism surgically targets bound nodes: updating node.textContent for texts, node.setAttribute for properties, and intelligently re-rendering specific items inside loop iterations. State changes are batched efficiently over a browser EventLoop microtask queue using window.queueMicrotask().
+

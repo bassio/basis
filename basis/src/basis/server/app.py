@@ -26,6 +26,9 @@ async def pyscript_json(request:Request):
     files_dict["{DOMAIN}/basis/components/component.py"] = "./basis/components/component.py"
     files_dict["{DOMAIN}/basis/components/component.js"] = "./basis/components/component.js"
 
+    #add store
+    files_dict["{DOMAIN}/basis/shared/store.py"] = "./basis/shared/store.py"
+    
     for i, m in enumerate(request.app._component_routes, 1):
         #print(f"* Mount Point: '{m.path}' (Name: '{m.name}')")
         # The directory path is stored in route.app.directory
@@ -78,15 +81,21 @@ class Basis(FastAPI):
     def include_components_dir(self, mount_path:str, dir_path:str, name:str):
 
         static_route = None
+        shared_route = None
 
         for r in self.routes:
-            if r.name == 'basis_static':
+            if r.name == 'basis_components':
                 static_route = r
+            elif r.name == 'basis_shared':
+                shared_route = r
 
         if not static_route:
-            static_mount = Mount("/basis/components", StaticFiles(packages=[('basis', 'components')]), name='basis_static')
-
+            static_mount = Mount("/basis/components", StaticFiles(packages=[('basis', 'components')]), name='basis_components')
             self.routes.append(static_mount)
+
+        if not shared_route:
+            shared_mount = Mount("/basis/shared", StaticFiles(packages=[('basis', 'shared')]), name='basis_shared')
+            self.routes.append(shared_mount)
 
         m = Mount(mount_path, StaticFiles(directory=dir_path), name=name)
         

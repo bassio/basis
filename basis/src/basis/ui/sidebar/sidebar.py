@@ -2,7 +2,7 @@ import basis.components.component as component
 
 class Sidebar(component.Component):
     __tag__ = "ui-sidebar"
-    __shadow__ = True
+    #__shadow__ = True
     side = "left"
     collapsible = "offcanvas" # or "icon"
     
@@ -51,7 +51,7 @@ class Sidebar(component.Component):
 
 class SidebarHeader(component.Component):
     __tag__ = "ui-sidebar-header"
-    __shadow__ = True
+    #__shadow__ = True
 
     def style(self):
         """
@@ -74,7 +74,7 @@ class SidebarHeader(component.Component):
 
 class SidebarContent(component.Component):
     __tag__ = "ui-sidebar-content"
-    __shadow__ = True
+    #__shadow__ = True
 
     def style(self):
         """
@@ -109,7 +109,7 @@ class SidebarContent(component.Component):
 
 class SidebarGroup(component.Component):
     __tag__ = "ui-sidebar-group"
-    __shadow__ = True
+    #__shadow__ = True
 
     def style(self):
         """
@@ -131,7 +131,7 @@ class SidebarGroup(component.Component):
 
 class SidebarGroupLabel(component.Component):
     __tag__ = "ui-sidebar-group-label"
-    __shadow__ = True
+    #__shadow__ = True
 
     def style(self):
         """
@@ -160,7 +160,7 @@ class SidebarGroupLabel(component.Component):
 
 class SidebarGroupContent(component.Component):
     __tag__ = "ui-sidebar-group-content"
-    __shadow__ = True
+    #__shadow__ = True
 
     def style(self):
         """
@@ -181,7 +181,7 @@ class SidebarGroupContent(component.Component):
 
 class SidebarMenu(component.Component):
     __tag__ = "ui-sidebar-menu"
-    __shadow__ = True
+    #__shadow__ = True
     
     def style(self):
         """
@@ -204,7 +204,7 @@ class SidebarMenu(component.Component):
 
 class SidebarMenuButton(component.Component):
     __tag__ = "ui-sidebar-menu-button"
-    __shadow__ = True
+    #__shadow__ = True
     active = "false"
     
     def style(self):
@@ -253,7 +253,7 @@ class SidebarMenuButton(component.Component):
 
 class SidebarFooter(component.Component):
     __tag__ = "ui-sidebar-footer"
-    __shadow__ = True
+    #__shadow__ = True
 
     def style(self):
         """
