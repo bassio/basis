@@ -1,5 +1,5 @@
 from pathlib import Path
-from fastapi import FastAPI, APIRouter, Request
+from fastapi import FastAPI, APIRouter, Request, WebSocket, WebSocketDisconnect
 from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
@@ -69,6 +69,22 @@ async def pyscript_json(request:Request):
     })
 
 
+class StoreManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        for connection in self.active_connections:
+            await connection.send_json(message)
+
 class Basis(FastAPI):
     
     _component_dirs = []
@@ -104,6 +120,29 @@ class Basis(FastAPI):
 
 
         self.add_route("/pyscript.json", pyscript_json, methods=['get'])
+
+
+        # Store sync mechanism over WebSockets
+        '''
+        self.store_manager = StoreManager()
+        
+        @self.websocket("/ws/store")
+        async def store_websocket_endpoint(websocket: WebSocket):
+            await self.store_manager.connect(websocket)
+            try:
+                while True:
+                    data = await websocket.receive_json()
+                    
+                    # You could validate with schemas here:
+                    # from basis.shared.schemas import StoreAction
+                    # action = StoreAction(**data)
+                    
+                    # For demonstration, broadcast directly
+                    await self.store_manager.broadcast(data)
+            except WebSocketDisconnect:
+                self.store_manager.disconnect(websocket)
+        '''
+
 
     def include_ui_components(self):
 

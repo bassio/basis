@@ -35,15 +35,7 @@ class Tabs(component.Component):
             
         if not container:
             container = self.__element__
-            
-        child_content_for_selected_tab = container.querySelector(f'[content-for][content-for="{selected_value}"]')
-        child_content_for_unselected_tabs = container.querySelectorAll(f'[content-for]:not([content-for="{selected_value}"])')
 
-        #if child_content_for_selected_tab:
-        #    child_content_for_selected_tab.style.display = 'block'
-        #for unselected_content in list(child_content_for_unselected_tabs):
-        #    unselected_content.style.display = 'none'
-            
 
     def style(self):
         """
