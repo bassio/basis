@@ -2,7 +2,7 @@ from pathlib import Path
 from fastapi import FastAPI, APIRouter, Request, WebSocket, WebSocketDisconnect
 from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from urllib.parse import urljoin
 import logging
 import itertools
@@ -23,12 +23,15 @@ async def pyscript_json(request:Request):
     files_dict["{DOMAIN}"] = base_url.removesuffix("/")
 
     #add main component.py
-    files_dict["{DOMAIN}/basis/components/component.py"] = "./basis/components/component.py"
+    #files_dict["{DOMAIN}/basis/components/component.py"] = "./basis/components/component.py"
+    files_dict["{DOMAIN}/basis/components/new_component.py"] = "./basis/components/component.py"
     files_dict["{DOMAIN}/basis/components/component.js"] = "./basis/components/component.js"
 
-    #add store
+    #add shared
     files_dict["{DOMAIN}/basis/shared/store.py"] = "./basis/shared/store.py"
-    
+    files_dict["{DOMAIN}/basis/shared/bindings.py"] = "./basis/shared/bindings.py"
+    files_dict["{DOMAIN}/basis/shared/base_component.py"] = "./basis/shared/base_component.py"
+
     for i, m in enumerate(request.app._component_routes, 1):
         #print(f"* Mount Point: '{m.path}' (Name: '{m.name}')")
         # The directory path is stored in route.app.directory
@@ -154,6 +157,48 @@ class Basis(FastAPI):
 
         self.routes.append(ui_mount)
         self._component_routes.append(ui_mount)
+
+    def include_ssr_page(
+        self,
+        path: str,
+        component_cls,
+        entry_module: str = "/main.py",
+        title: str = "Basis App",
+        stores: dict | None = None,
+        name: str | None = None,
+    ):
+        """
+        Register a GET route that returns a fully server-rendered HTML page.
+
+        Parameters
+        ----------
+        path:
+            The URL path, e.g. "/" or "/home".
+        component_cls:
+            A ServerComponent subclass to render for this route.
+        entry_module:
+            URL path for the PyScript entry .py file.
+        title:
+            HTML <title> for the page.
+        stores:
+            Dict of {name: Store instance} to embed as initial-state JSON.
+        name:
+            Optional route name.
+        """
+        from basis.server.ssr import render_page
+
+        async def _ssr_handler(request: Request):
+            html = render_page(
+                component_cls,
+                title=title,
+                stores=stores or {},
+                entry_module=entry_module,
+                pyscript_src=str(request.url_for('pyscript', path='core.js')),
+                pyscript_json_url=str(request.url_for('pyscript_json')),
+            )
+            return HTMLResponse(html)
+
+        self.add_route(path, _ssr_handler, methods=['GET'], name=name)
 
 
 class BasisAPIRouter(APIRouter):

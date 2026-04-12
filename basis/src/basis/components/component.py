@@ -16,241 +16,14 @@ except ImportError:
 
     PYSCRIPT = False
 
+from basis.shared.bindings import Binding, SelfBinding, TextBinding, \
+    AttributeBinding, ModelBinding, EventBinding, IfBinding, \
+    ChildBinding, LoopBinding, KeyedLoopBinding, SlotBinding, \
+    safe_eval, safe_format, safe_format_with_stores, \
+    extract_dependencies, ALLOWED_BUILTINS
 
 from basis.shared.store import Store
 
-
-ALLOWED_BUILTINS = {'False': False,
-                    'True': True,
-                    'None': None,
-                    'divmod': divmod,
-                    'enumerate': enumerate,
-                    'filter': filter,
-                    'float': float,
-                    'format': format,
-                    'hex': hex,
-                    'int': int,
-                    'iter': iter,
-                    'len': len,
-                    'list': list,
-                    'map': map,
-                    'max': max,
-                    'min': min,
-                    'oct': oct,
-                    'ord': ord,
-                    'pow': pow,
-                    'range': range,
-                    'repr': repr,
-                    'reversed': reversed,
-                    'round': round,
-                    'set': set,
-                    'slice': slice,
-                    'sorted': sorted,
-                    'str': str,
-                    'sum': sum,
-                    'tuple': tuple,
-                    'zip': zip}
-
-
-def safe_eval(expr_str, context, allowed_builtins):
-    try:
-        tree = ast.parse(expr_str, mode='eval')
-    except Exception as e:
-        print(f"Failed to parse {expr_str}: {e}")
-        return f"[Error: {expr_str}]"
-    
-    def _eval(node):
-        if isinstance(node, ast.Expression):
-            return _eval(node.body)
-
-        elif isinstance(node, ast.Name):
-            if node.id in context:
-                return context[node.id]
-            elif node.id in allowed_builtins:
-                return allowed_builtins[node.id]
-            raise NameError(f"Name {node.id} is not defined")
-
-        elif isinstance(node, ast.Attribute):
-            val = _eval(node.value)
-            return getattr(val, node.attr)
-
-        elif isinstance(node, ast.Subscript):
-            val = _eval(node.value)
-            if hasattr(ast, 'Index') and isinstance(node.slice, ast.Index):
-                key = _eval(node.slice.value)
-            else:
-                key = _eval(node.slice)
-            return val[key]
-
-        elif isinstance(node, ast.Call):
-            func = _eval(node.func)
-            args = [_eval(arg) for arg in node.args]
-            kwargs = {kw.arg: _eval(kw.value) for kw in node.keywords}
-            return func(*args, **kwargs)
-
-        elif isinstance(node, ast.Constant):
-            return node.value
-
-        elif isinstance(node, ast.Str):
-            return node.s
-
-        elif isinstance(node, ast.Num):
-            return node.n
-
-        elif isinstance(node, ast.NameConstant):
-            return node.value
-
-        elif isinstance(node, ast.BinOp):
-            left = _eval(node.left)
-            right = _eval(node.right)
-            op_type = type(node.op)
-            ops = {
-                ast.Add: operator.add,
-                ast.Sub: operator.sub,
-                ast.Mult: operator.mul,
-                ast.Div: operator.truediv,
-                ast.Mod: operator.mod,
-                ast.Pow: operator.pow,
-                ast.FloorDiv: operator.floordiv,
-            }
-            if op_type in ops:
-                return ops[op_type](left, right)
-            raise ValueError(f"Unsupported binop {op_type}")
-
-        elif isinstance(node, ast.Compare):
-            left = _eval(node.left)
-            for op, comparator in zip(node.ops, node.comparators):
-                right = _eval(comparator)
-                op_type = type(op)
-                ops = {
-                    ast.Eq: operator.eq,
-                    ast.NotEq: operator.ne,
-                    ast.Lt: operator.lt,
-                    ast.LtE: operator.le,
-                    ast.Gt: operator.gt,
-                    ast.GtE: operator.ge,
-                    ast.Is: operator.is_,
-                    ast.IsNot: operator.is_not,
-                    ast.In: operator.contains,
-                }
-                if op_type == ast.NotIn:
-                    res = not operator.contains(right, left)
-                elif op_type in ops:
-                    if op_type == ast.In:
-                        res = ops[op_type](right, left)
-                    else:
-                        res = ops[op_type](left, right)
-                else:
-                    raise ValueError(f"Unsupported cmp {op_type}")
-                if not res: return False
-                left = right
-            return True
-
-        elif isinstance(node, ast.UnaryOp):
-            operand = _eval(node.operand)
-            if isinstance(node.op, ast.Not): return not operand
-            elif isinstance(node.op, ast.USub): return -operand
-            elif isinstance(node.op, ast.UAdd): return +operand
-            raise ValueError(f"Unsupported unary {type(node.op)}")
-
-        elif isinstance(node, ast.BoolOp):
-            if isinstance(node.op, ast.And):
-                for val in node.values:
-                    if not _eval(val): return False
-                return True
-            elif isinstance(node.op, ast.Or):
-                for val in node.values:
-                    if _eval(val): return True
-                return False
-
-        else:
-            raise ValueError(f"Unsupported AST node type: {type(node).__name__}")
-            
-    try:
-        return _eval(tree.body)
-    except Exception as e:
-        print(f"Error evaluating '{expr_str}': {e}")
-        return f"[Error: {expr_str}]"
-
-def safe_format(template_str, context, allowed_builtins):
-    
-    result = ""
-    formatter = Formatter()
-    for literal_text, fname, format_spec, conversion in formatter.parse(template_str):
-        result += literal_text
-        if fname is not None:
-            val = safe_eval(fname, context, allowed_builtins)
-            if format_spec:
-                result += format(val, format_spec)
-            else:
-                result += str(val)
-    return result
-
-def safe_format_with_stores(template_str, context, allowed_builtins, store_registry, component_instance_registry):
-    
-    result = ""
-    formatter = Formatter()
-    for literal_text, fname, format_spec, conversion in formatter.parse(template_str):
-        result += literal_text
-        if fname is not None:
-            if fname.startswith("$"):
-                store_name, attr_name = fname.strip("$").split(".")
-                val = getattr(store_registry[store_name], attr_name)
-            elif fname.startswith("#"):
-                component_name, attr_name = fname.strip("#").split(".")
-                if component_name in component_instance_registry:
-                    #print("FOUND COMPONENT INSTANCE IN REGISTRY: ")
-                    val = getattr(component_instance_registry[component_name], attr_name)
-                else:
-                    #print("COULD NOT FIND COMPONENT INSTANCE IN THE REGISTRY: ", component_name)
-                    val = ""
-            else:
-                val = safe_eval(fname, context, allowed_builtins)
-            
-            if format_spec:
-                result += format(val, format_spec)
-            else:
-                result += str(val)
-    
-    return result
-
-def extract_dependencies(template_str, allowed_builtins):
-    
-    formatter = Formatter()
-    deps = set()
-    for _, fname, _, _ in formatter.parse(template_str):
-        if fname is not None:
-            if (dollar_or_hash_sign:=fname[0]) in ['$', '#']:
-                fname_no_sign = fname.strip("$#")
-                try:
-                    tree = ast.parse(fname_no_sign, mode='eval')
-
-                    store_name = None
-                    attr_name = None
-
-                    for node in ast.walk(tree):
-                        if isinstance(node, ast.Name): # extract store_name
-                            if node.id not in allowed_builtins and isinstance(getattr(node, 'ctx', None), ast.Load):
-                                store_name = node.id
-                        if isinstance(node, ast.Attribute): # extract the attr in the Store
-                            attr_name = node.attr
-                            
-                    if store_name and attr_name:
-                        deps.add(f"{dollar_or_hash_sign}{store_name}.{attr_name}")
-                        
-                except SyntaxError:
-                    pass
-            else:
-                try:
-                    tree = ast.parse(fname, mode='eval')
-                    for node in ast.walk(tree):
-                        if isinstance(node, ast.Name):
-                            if node.id not in allowed_builtins and isinstance(getattr(node, 'ctx', None), ast.Load):
-                                deps.add(node.id)
-                except SyntaxError:
-                    pass
-        
-    return list(deps)
 
 def client(func):
 
@@ -261,97 +34,6 @@ def client(func):
 
     return wrapper
 
-@dataclass
-class Field(object):
-    name:str
-
-class StoreField(object):
-    name:str
-    store:str
-
-@dataclass
-class Binding(object):
-    component_instance:"Component"
-    node:object
-
-    @property
-    def component_class(self):
-        return self.component_instance.__class__
-
-@dataclass
-class SelfBinding(Binding):
-    ...
-
-@dataclass
-class TextBinding(Binding):
-    content:str
-    fields:list[str]
-
-
-@dataclass
-class AttributeBinding(Binding):
-    attr:str
-    content:str
-    fields:list[str]
-    is_boolean:bool = False
-    
-@dataclass
-class ModelBinding(Binding):
-    field: str
-
-    @property
-    def fields(self):
-        return [self.field]
-
-@dataclass
-class EventBinding(Binding):
-    event:str
-    target_fn:str
-
-    @property
-    def element(self):
-        return self.node
-
-    @property
-    def fields(self):
-        return [self.target_fn]
-    
-
-@dataclass
-class IfBinding(Binding):
-    expr: str
-    anchor: object
-    is_visible: bool
-    fields: list
-
-@dataclass
-class ChildBinding(Binding):
-    childclass:str
-    childinstance:object=None
-
-@dataclass
-class LoopBinding(Binding):
-    item:str
-    collection:str
-    clone:object
-    parent:object
-
-@dataclass
-class KeyedLoopBinding(Binding):
-    item:str
-    collection:str
-    clone:object
-    parent:object
-    key:str
-
-@dataclass
-class SlotBinding(Binding):
-    name: str | None = None
-    is_default: bool = True
-    
-    @property
-    def fields(self):
-        return []
 
 class Refrain:
     def __init__(self, component):
@@ -478,7 +160,7 @@ class Component(object):
 
 
     @client
-    def __init_bindings__(self):
+    def __init_bindings_old__(self):
         walker = document.createTreeWalker(self.__template__,
         window.NodeFilter.SHOW_ELEMENT | window.NodeFilter.SHOW_TEXT);
 
@@ -523,16 +205,20 @@ class Component(object):
                     dom_child_node_attrs = {c.name: c.value for c in node.attributes}
 
                     #child_instance = childcomponent_py()
+                    if not getattr(node, '__basis_mounted__', False):
+                        child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
+                        node.__basis_mounted__ = True
+                        node.appendChild(child_instance.__template__)
 
-                    child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
+                    #child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
+                    #node.appendChild(child_instance.__template__)
 
-                    print(f"Child ATTRS in __init_bindings__ of {self.__class__} from dom of child component {childcomponent_py}", dom_child_node_attrs)
+                    #print(f"Child ATTRS in __init_bindings__ of {self.__class__} from dom of child component {childcomponent_py}", dom_child_node_attrs)
 
                     if child_instance.has_slots():
                         pass
                         #child_instance.fill_slots(child_instance.__template__, node)
 
-                    node.appendChild(child_instance.__template__)
                     
                 if str.lower(element.tagName) == 'slot':
                     slot_name = element.getAttribute('name')
@@ -674,7 +360,7 @@ class Component(object):
         
         # add to component instance registry if it is has an id
         if component_id:=self_element.getAttribute('id'):
-            Component._instance_registry[component_id] = self
+            self.__class__._instance_registry[component_id] = self
             
             if component_id in Component._pending_subscriptions:
                 
@@ -689,8 +375,159 @@ class Component(object):
             print("bindings of RouterDemo", bindings)
 
         self.__dict__['__bindings__'] += bindings
-        self.__dict__['__fields__'] = list(set(fields))
-    
+        self.__dict__['__fields__'] += list(set(fields))
+
+    @client
+    def __init_bindings__(self):
+        self.__init_bindings_old__()
+        return
+        walker = document.createTreeWalker(self.__template__, window.NodeFilter.SHOW_ELEMENT | window.NodeFilter.SHOW_TEXT)
+        nodes = []
+        current_node = walker.nextNode()
+        while current_node:
+            nodes.append(current_node)
+            current_node = walker.nextNode()
+
+        self.bind_nodes(nodes)
+        
+        # add to component instance registry if it is has an id
+        self_element = self.__element__
+        if component_id:=self_element.getAttribute('id'):
+            Component._instance_registry[component_id] = self
+            
+            if component_id in Component._pending_subscriptions:
+                for subscribing_component_instance, attr_name in Component._pending_subscriptions.pop(component_id):
+                    self.subscribe(subscribing_component_instance, attr_name)
+                    subscribed_field = f"#{component_id}.{attr_name}"
+                    with subscribing_component_instance.refrain() as refrained:
+                        setattr(refrained, subscribed_field, self)
+
+
+    def bind_nodes(self, nodes):
+        for node in nodes:
+            self._bind_node(node)
+        
+    def _bind_node(self, node):
+
+        formatter = Formatter()
+        bindings=[]
+        fields=[]
+
+        if hasattr(node, 'getAttributeNames'): #confirm it is an ELEMENT not a TEXT node
+            element = node
+            if '-' in element.tagName:
+                tag = str.lower(element.tagName)
+                childcomponent_py = Component._registry[tag]
+                dom_child_node_attrs = {c.name: c.value for c in node.attributes}
+
+                if not getattr(node, '__basis_mounted__', False):
+                    child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
+                    node.__basis_mounted__ = True
+                    node.appendChild(child_instance.__template__)
+                
+            if str.lower(element.tagName) == 'slot':
+                slot_name = element.getAttribute('name')
+                if not slot_name:
+                    slot_is_default = True
+                    slot_name = None
+                else:
+                    slot_is_default = False
+                bindings.append(SlotBinding(component_instance=self, node=element, name=slot_name, is_default=slot_is_default))
+
+            element_attrs = [a for a in element.getAttributeNames()]
+            event_attrs = [a for a in element_attrs if a.startswith("on")]
+            other_attrs = [a for a in element_attrs if not a.startswith("on")]
+            
+            for event_attr in event_attrs:
+                event_attr_value = element.getAttribute(event_attr)
+                if event_attr_value.startswith("{") and event_attr_value.endswith("}"):
+                    event_attr_value = event_attr_value.strip("{}")
+                    bindings.append(EventBinding(component_instance=self, node=element, event=event_attr, target_fn=event_attr_value))
+                    fields.append(event_attr_value)
+
+            for other_attr in other_attrs:
+                other_attr_value = element.getAttribute(other_attr)
+                if other_attr.startswith("{") and other_attr.endswith("}"):
+                    other_attr_no_braces = other_attr.strip("{}")
+                    if other_attr_value == "":
+                        other_attr_value = other_attr
+                    other_attr_isboolean = True
+                    element.removeAttribute(other_attr)
+                else:
+                    other_attr_no_braces = other_attr
+                    other_attr_isboolean = False
+                
+                fnames = [fname for _, fname, _, _ in formatter.parse(other_attr_value) if fname is not None]
+                has_expr = any(fnames)
+                if has_expr:
+                    fieldnames = extract_dependencies(other_attr_value, ALLOWED_BUILTINS)
+                    bindings.append(AttributeBinding(component_instance=self, node=element, attr=other_attr_no_braces, content=other_attr_value, fields=fieldnames, is_boolean=other_attr_isboolean))
+                    fields += fieldnames
+
+            if 'if' in other_attrs:
+                if_expr = element.getAttribute('if')
+                if_expr_clean = if_expr.removeprefix("{").removesuffix("}")
+                fieldnames = extract_dependencies(if_expr, ALLOWED_BUILTINS) 
+                anchor = document.createComment(f"if: {if_expr_clean}")
+                element.parentNode.insertBefore(anchor, element)
+                bindings.append(IfBinding(
+                    component_instance=self, node=element, expr=if_expr_clean, anchor=anchor, is_visible=True, fields=fieldnames
+                ))
+                fields += fieldnames
+
+            if 'bind' in other_attrs:
+                bind_attr_value = element.getAttribute('bind')
+                fieldnames = extract_dependencies(bind_attr_value, ALLOWED_BUILTINS)
+                if len(fieldnames) == 1:
+                    field = fieldnames[0]
+                    bindings.append(ModelBinding(component_instance=self, node=element, field=field))
+                    fields.append(field)
+                    tag_name = str.lower(element.tagName)
+                    def create_update_handler(f, input_type):
+                        def update_state(event):
+                            if input_type == 'checkbox':
+                                setattr(self, f, event.target.checked)
+                            else:
+                                setattr(self, f, event.target.value)
+                        return ffi.create_proxy(update_state)
+                    input_type = element.getAttribute('type') if element.hasAttribute('type') else 'text'
+                    handler = create_update_handler(field, input_type)
+                    if tag_name == 'input' and input_type in ['checkbox', 'radio']:
+                        bound_event = 'change'
+                    elif tag_name == 'select':
+                        bound_event = 'change'
+                    else:
+                        bound_event = 'input'
+                    element.addEventListener(bound_event, handler)
+                    bindings.append(EventBinding(component_instance=self, node=element, event=f"{bound_event}", target_fn=handler))
+
+            if 'for' in other_attrs:
+                inlist_attr_value = element.getAttribute('in').strip("{}")
+                for_attr_value = element.getAttribute('for')
+                element_clone = element.cloneNode(True)
+                if element.hasAttribute('key'):
+                    bindings.append(KeyedLoopBinding(component_instance=self, node=element, clone=element_clone, parent=element.parentElement, collection=inlist_attr_value, item=for_attr_value, key=element.getAttribute('key')))
+                else:
+                    bindings.append(LoopBinding(component_instance=self, node=element, clone=element_clone, parent=element.parentElement, collection=inlist_attr_value, item=for_attr_value))
+
+        elif hasattr(node, 'wholeText'):
+            if node.parentElement and str.lower(node.parentElement.tagName) == 'style':
+                return
+            text_content = node.textContent
+            fnames = [fname for _, fname, _, _ in formatter.parse(text_content) if fname is not None]
+            has_expr = any(fnames)
+            if has_expr:
+                fieldnames = extract_dependencies(text_content, ALLOWED_BUILTINS)
+                bindings.append(TextBinding(component_instance=self, node=node, content=text_content, fields=fieldnames))
+                fields += fieldnames
+
+
+        self.__bindings__.extend(bindings)
+
+        for f in fields:
+            if f not in self.__fields__:
+                self.__fields__.append(f)
+
 
     def __init_fields__(self):
         cls = self.__class__
@@ -916,6 +753,23 @@ class Component(object):
                 new_fragment.appendChild(child)
 
             slot_node.replaceWith(new_fragment)
+
+        all_slotted_nodes = [*named_children.values(), *default_children]
+
+        nodes_to_bind = []
+        for child in all_slotted_nodes:
+            if hasattr(child, 'getAttributeNames'):
+                nodes_to_bind.append(child)
+                walker = document.createTreeWalker(child, window.NodeFilter.SHOW_ELEMENT | window.NodeFilter.SHOW_TEXT)
+                n = walker.nextNode()
+                while n:
+                    nodes_to_bind.append(n)
+                    n = walker.nextNode()
+            elif hasattr(child, 'wholeText'):
+                nodes_to_bind.append(child)
+
+        if nodes_to_bind:
+            self.bind_nodes(nodes_to_bind)
 
         return self.__element__
 

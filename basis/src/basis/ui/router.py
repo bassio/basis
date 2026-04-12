@@ -36,6 +36,15 @@ class Route(Component):
     _route_registry = {}
     path: str = ""
     is_match: bool = False
+    exact: bool = True
+    fallback: bool = False
+
+    def __init__(self):
+        super().__init__()
+
+        # Ensure we subscribe to router.current_path
+        Component.S['router'].subscribe(self, "current_path")
+        self.__dict__['router'] = Component.S['router']
 
     @classmethod
     def initialize(cls, container, **kwargs):
@@ -53,24 +62,48 @@ class Route(Component):
     @client
     def __init_bindings__(self):
         super().__init_bindings__()
-        # Ensure we subscribe to router.current_path
-        self.router = Component.S['router']
-        self.router.subscribe(self, "current_path")
         # Trigger an initial check
         self.check_match()
-        if self.is_match:
-            matched_dict = self.path_matched_groups()
-            print(self.__element__.innerHTML)
+
+    @client
+    def __init_fields__(self):
+        super().__init_fields__()
+        # Trigger an initial check
+        if "path" in self.__fields__:
+            self.__fields__.pop("path")
+
+        #print("FALLBACK", type(self.fallback), self.fallback)
+
+    def is_path_matching(self, current_path):
+        if self.path == "*":
+            return True
+            
+        regex_pattern = re.sub(r'\{(\w+)\}', r'(?P<\1>[^/]+)', self.path)
+        regex_pattern = f"^{regex_pattern}"
+        
+        is_exact = self.exact
+        if isinstance(is_exact, str):
+            is_exact = is_exact.lower() != 'false'
+            
+        if is_exact:
+            regex_pattern += "$"
+            
+        return bool(re.match(regex_pattern, current_path))
 
     def path_matched_groups(self):
-        # Convert the {url_id} syntax to a named regex group (?P<name>...)
-        # [^/]+ matches any character except a forward slash
+        if self.path == "*":
+            return {}
+            
         regex_pattern = re.sub(r'\{(\w+)\}', r'(?P<\1>[^/]+)', self.path)
+        regex_pattern = f"^{regex_pattern}"
         
-        # Add anchors to ensure we match the full string, not just a substring
-        regex_pattern = f"^{regex_pattern}$"
+        is_exact = self.exact
+        if isinstance(is_exact, str):
+            is_exact = is_exact.lower() != 'false'
+            
+        if is_exact:
+            regex_pattern += "$"
 
-        # 3. Attempt the match
         match = re.match(regex_pattern, self.router.current_path)
 
         if match:
@@ -79,53 +112,55 @@ class Route(Component):
             return {}
         
     def check_match(self):
-        # Convert the {url_id} syntax to a named regex group (?P<name>...)
-        # [^/]+ matches any character except a forward slash
-        regex_pattern = re.sub(r'\{(\w+)\}', r'(?P<\1>[^/]+)', self.path)
-        
-        # Add anchors to ensure we match the full string, not just a substring
-        regex_pattern = f"^{regex_pattern}$"
 
-        # 3. Attempt the match
-        match = re.match(regex_pattern, self.router.current_path)
-        
-        if match:
-            matched_groups = match.groupdict()
-            print("YES MATCHED!!!", matched_groups, self.__bindings__, self.__fields__)
-            print(self.__element__.innerHTML)
+        is_fallback = self.fallback
 
-            with self.refrain() as refrained:
-                for k, v in matched_groups.items():
-                    if k not in self.__fields__:
-                        self.__fields__.append(k)
-                    setattr(self, k, v)
+        if isinstance(is_fallback, str):
+            is_fallback = is_fallback.lower() == 'true'
+
+        if self.path == "*":
+            match = True  # Used to denote a structural match
+        else:
+            regex_pattern = re.sub(r'\{(\w+)\}', r'(?P<\1>[^/]+)', self.path)
+            regex_pattern = f"^{regex_pattern}"
             
-            self.is_match = True
+            is_exact = self.exact
+            if isinstance(is_exact, str):
+                is_exact = is_exact.lower() != 'false'
+                
+            if is_exact:
+                regex_pattern += "$"
+                
+            match = re.match(regex_pattern, self.router.current_path)
+
+        if match:
+            # If this is a fallback route, we must check if any standard route matches
+            if is_fallback:
+                for path, route in Route._route_registry.items():
+                    print("path, route", path, route)
+                    if route is self:
+                        continue
                     
+                    route_fallback = route.fallback
+                    if isinstance(route_fallback, str):
+                        route_fallback = route_fallback.lower() == 'true'
+                        
+                    if not route_fallback and route.is_path_matching(self.router.current_path):
+                        self.is_match = False
+                        return
+
+            if self.path != "*":
+                matched_groups = match.groupdict()
+                with self.refrain() as refrained:
+                    for k, v in matched_groups.items():
+                        if k not in self.__fields__:
+                            self.__fields__.append(k)
+                        setattr(self, k, v)
+        
+            self.is_match = True
+            
         else:
             self.is_match = False
-
-        '''
-        regex_pattern = ""
-        keys = []
-        for literal_text, fname, format_spec, conversion in Formatter().parse(self.path):
-            regex_pattern += re.escape(literal_text)
-            if fname is not None:
-                regex_pattern += r"(?P<" + fname + r">[^/]+)"
-                keys.append(fname)
-        
-        regex_pattern = "^" + regex_pattern + "$"
-        match = re.match(regex_pattern, self.router.current_path)
-        
-        new_match = bool(match)
-        if getattr(self, 'is_match', None) != new_match:
-            self.is_match = new_match
-            
-        if new_match:
-            for k, v in match.groupdict().items():
-                if getattr(self, k, None) != v:
-                    setattr(self, k, v)
-        '''
 
     def react(self, names):
         if "$router.current_path" in names or "path" in names:
@@ -136,10 +171,44 @@ class Route(Component):
 class Link(Component):
     __tag__ = "basis-link"
     href: str = ""
-    
+    exact: bool = True
+    active_class: str = ""
+    active: bool = False
+
+    def __init__(self):
+        super().__init__()
+        Component.S['router'].subscribe(self, "current_path")
+        self.__dict__['router'] = Component.S['router']
+
+    @client
+    def __init_bindings__(self):
+        super().__init_bindings__()
+        self.check_active()
+
+    def check_active(self):
+        # Allow string 'false' from html attribute
+        is_exact = self.exact
+        if isinstance(is_exact, str):
+            is_exact = is_exact.lower() != 'false'
+            
+        if is_exact:
+            is_active = self.href == self.router.current_path
+        else:
+            is_active = bool(self.href) and self.router.current_path.startswith(self.href)
+            
+        if self.active != is_active:
+            self.active = is_active
+        
+            self.active_class = "active" if self.active else ""
+
+    def react(self, names):
+        if "$router.current_path" in names or "href" in names:
+            self.check_active()
+        super().react(names)
+
     def template(self):
         """
-        <a href="{href}" onclick="{handle_click}">
+        <a href="{href}" onclick="{handle_click}" class="{active_class}">
             <slot></slot>
         </a>
         """
@@ -147,5 +216,5 @@ class Link(Component):
     @client
     def handle_click(self, event):
         event.preventDefault()
-        router = Component.S['router']
-        router.navigate(self.href)
+        self.router.navigate(self.href)
+        self.check_active()

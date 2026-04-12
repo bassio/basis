@@ -44,7 +44,7 @@ class Tab(component.Component):
             background: rgba(255,255,255,0.03);
         }
 
-        .ui-tab-input:checked {
+        ui-tab .ui-tab-input:checked {
             background-color: var(--bg-primary, #1e1e1e);
             border-color: var(--border-color, #495057);
             border-bottom: 1px solid var(--bg-primary, #1e1e1e); 
