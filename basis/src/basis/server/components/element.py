@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 
 voids = {'area', 'base', 'br', 'col', 'command', 'embed', 'hr', 'img', 'input', 'keygen', 'link', 'meta', 'param', 'source', 'track', 'wbr', '!doctype'}
 
+@dataclass
 class Comment(object):
     data:str
     parent:Element|None = None
@@ -10,6 +11,18 @@ class Comment(object):
     
     def __html__(self):
         return """<!--{self.data}-->"""
+    
+    @property
+    def parentElement(self):
+        return self.parent
+        
+    @property
+    def descendants(self):
+        return []
+
+    def cloneNode(self, deep:bool=True):
+        new_node = Comment(value=self.value, parent=self.parent)
+        return new_node
 
 @dataclass
 class ElementString(object):
@@ -28,6 +41,9 @@ class ElementString(object):
 
     textContent = property(get_value, set_value)
     
+    def __html__(self):
+        return self.value
+
     def __str__(self):
         return self.value
     
@@ -41,6 +57,10 @@ class ElementString(object):
     @property
     def descendants(self):
         return []
+    
+    def cloneNode(self, deep:bool=True):
+        new_node = ElementString(value=self.value, parent=self.parent)
+        return new_node
 
 @dataclass
 class Element(object):
@@ -178,19 +198,43 @@ class Element(object):
         self.void_ = other_element.void_
 
     def replaceWith(self, *elements):
-        #print("parent:::: ", self.parentElement, self.parent)
+        print("parent:::: ", self.parentElement)
         index = self.parentElement.children.index(self)
         self.parentElement.children[index+1:index+1] = elements
         self.parentElement.children.pop(index)
+        print("children::::", self.parentElement.children)
 
     def appendChild(self, child):
+        print(f"ELEMENT: appendChild of {self.__tag__}:", child)
         self.children.append(child)
 
     def prepend(self, child):
         self.children.insert(0, child)
 
+    def insertBefore(self, new_node, reference_node):
+        self.children.insert(self.children.index(reference_node)
+                             , new_node)
+ 
     def replaceChildren(self, children):
         self.children = children
+
+    def cloneNode(self, deep:bool=True):
+
+        new_node = Element(tag=self.tag, attrs=self.attrs, children=self.children, void_=self.void_)
+        new_node.tag = self.tag
+        new_node.attrs = self.attrs
+        new_node.children = self.children
+        new_node.void_ = self.void_
+
+        if deep:
+            new_children = []
+
+            for c in self.children:
+                new_children.append(c.cloneNode(deep=True))
+            
+            new_node.children = new_children
+        
+        return new_node
 
     def contains(self, element):
         ...

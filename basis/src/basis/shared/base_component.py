@@ -1,6 +1,15 @@
 import inspect
 from pathlib import Path
-from basis.shared.bindings import SelfBinding, SlotBinding, Refrain
+from string import Formatter
+
+from basis.shared.bindings import Binding, SelfBinding, TextBinding, \
+    AttributeBinding, SelfAttributeBinding, ModelBinding, EventBinding, IfBinding, \
+    ChildBinding, LoopBinding, KeyedLoopBinding, SlotBinding, \
+    safe_eval, safe_format, safe_format_with_stores, \
+    extract_dependencies, ALLOWED_BUILTINS, Refrain, \
+    _process_event_attr_bindings, _process_standard_attr_bindings, \
+    _process_text_bindings, _process_self_attr_bindings
+
 from basis.shared.store import Store
 
 class BaseComponent(object):
@@ -93,16 +102,58 @@ class BaseComponent(object):
     def __init_selfbinding__(self):
         raise NotImplementedError()
     
+    #
+    def __init_slot_bindings__(self):
+        nodes = self._get_nodes()
+
+        bindings = []
+
+        for node in nodes:
+            if hasattr(node, 'getAttributeNames') \
+            and str.lower(node.tagName) == 'slot':
+                slot_name = node.getAttribute('name')
+
+                if not slot_name:
+                    slot_is_default = True
+                    slot_name = None
+                else:
+                    slot_is_default = False
+
+                bindings.append(SlotBinding(component_instance=self, node=node, name=slot_name, is_default=slot_is_default))
+
+        self.__bindings__.extend(bindings)
+    
+    #
+    def __init_self_attr_bindings__(self, **attrs_dict):
+        for k, v in attrs_dict.items():
+            self.__dict__[k] = v
+            #self.__element__.setAttribute(k, v)
+
+        attr_names = [k for k in attrs_dict.keys()]
+
+        print("attrs_dict", attrs_dict, self.__class__)
+
+        attr_bindings, fields = _process_self_attr_bindings(self, attrs_dict)
+        
+        print("self attr bindings:", attr_bindings)
+
+        self.__bindings__.extend(attr_bindings)
+        self.__fields__.extend(fields)
+
     @classmethod
     def initialize(cls, container, **kwargs):
         new_instance = cls()
 
-        if len(kwargs):
-            new_instance.__dict__.update(**kwargs)
-        
-        new_instance.__init_bindings__()
+        #if len(kwargs):
+        #    new_instance.__dict__.update(**kwargs)
 
-        new_instance.fill_slots_aware(container)
+        new_instance.__init_self_attr_bindings__(**kwargs)
+        
+        new_instance.__init_slot_bindings__()
+
+        new_instance.fill_slots(container)
+
+        new_instance.__init_bindings__()
 
         new_instance.__init_fields__()
 
@@ -112,14 +163,30 @@ class BaseComponent(object):
 
         return new_instance
     
+    #@server
+    def _create_update_handler(self, f, input_type):
+
+        def update_state(event):
+            if input_type == 'checkbox':
+                setattr(self, f, event.target.checked)
+            else:
+                setattr(self, f, event.target.value)
+
+        return update_state
+
     def bind_nodes(self, nodes):
         for node in nodes:
             self._bind_node(node)
 
     def __init_bindings__(self):
+
+        print(f"__init_bindings__ of {self.__class__}")
+
         nodes = self._get_nodes()
 
         self.bind_nodes(nodes)
+
+        print(f"Bindings of {self.__class__}:", self.__bindings__)
         
         # add to component instance registry if it is has an id
         self_element = self.__element__
@@ -133,15 +200,20 @@ class BaseComponent(object):
                     subscribed_field = f"#{component_id}.{attr_name}"
                     with subscribing_component_instance.refrain() as refrained:
                         setattr(refrained, subscribed_field, self)
-    
+
+
     def __init_fields__(self):
         cls = self.__class__
         
+        print(f"__init_fields__ : {cls} fields: ", self.__fields__)
+
         fields_on_class = [attr for attr in self.__fields__ \
-                                if (not attr in self.__dict__) and \
+                                if (attr not in self.__dict__) and \
                                 (attr in cls.__dict__) \
                                 and (not inspect.isfunction(getattr(cls, attr)))]
         
+        print(f"fields_on_class of {cls} : ", fields_on_class)
+
         if fields_on_class:
             with self.refrain() as refrained:
                 for field in fields_on_class:
@@ -174,10 +246,8 @@ class BaseComponent(object):
                     else:
 
                         if component_name in self.__class__._pending_subscriptions:
-                            #print(f"{component_name} found in _pending_subscriptions")
                             self.__class__._pending_subscriptions[component_name].append((self, attr_name))
                         else:
-                            #print(f"{component_name} NOT FOUND in _pending_subscriptions")
                             self.__class__._pending_subscriptions[component_name] = [(self, attr_name)]
                 else:
                     self.react([field])
@@ -189,6 +259,83 @@ class BaseComponent(object):
                 case SelfBinding:
                     return binding.node
         return None
+
+    def fill_slots(self, container):
+        
+        if not self.has_slots():
+            pass
+            return
+
+        slot_bindings:list[SlotBinding] = [b for b in self.__bindings__ if isinstance(b, SlotBinding)]
+        named_slot_bindings = [nb for nb in slot_bindings if not nb.is_default]
+        default_slot_bindings = [db for db in slot_bindings if db.is_default]
+        
+        # Snapshot childNodes now (live NodeList changes as we move nodes)
+        
+        #client
+        light_children = list(container.childNodes)
+
+        # Partition by slot attribute value
+        named_children: dict = {}
+        default_children: list = []
+
+        for child in light_children:
+            slot_attr = None
+            try:
+                slot_attr = child.getAttribute('slot')
+            except Exception:
+                pass  # Text nodes don't have getAttribute
+
+            if slot_attr:
+                if slot_attr not in named_children:
+                    named_children[slot_attr] = []
+                named_children[slot_attr].append(child)
+            else:
+                default_children.append(child)
+        
+        print("Filling slots: default_children", default_children)
+        print("Filling slots: named_children", named_children)
+
+        for sb in named_slot_bindings:
+            slot_node = sb.node
+            slot_name = sb.name
+
+            children_to_insert = named_children.get(slot_name, [])
+
+            slot_node.replaceWith(*children_to_insert)
+
+        # Fill each <slot> in order
+        for sb in default_slot_bindings:
+            slot_node = sb.node
+
+            children_to_insert = default_children
+            
+            slot_node.replaceWith(*children_to_insert)
+
+        #below not required since we fills slots prior to init bindings
+
+        '''
+        all_slotted_nodes = [*named_children.values(), *default_children]
+
+        nodes_to_bind = []
+        for child in all_slotted_nodes:
+            if hasattr(child, 'getAttributeNames'):
+                nodes_to_bind.append(child)
+                #client
+                walker = document.createTreeWalker(child, window.NodeFilter.SHOW_ELEMENT | window.NodeFilter.SHOW_TEXT)
+                n = walker.nextNode()
+                while n:
+                    nodes_to_bind.append(n)
+                    n = walker.nextNode()
+            elif hasattr(child, 'wholeText'):
+                nodes_to_bind.append(child)
+
+        if nodes_to_bind:
+            #self.bind_nodes(nodes_to_bind)
+            pass
+        '''
+
+        return self.__element__
 
     def react(self, names):
         pass

@@ -1,5 +1,5 @@
 import ast
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import operator
 from string import Formatter
 from typing import Any
@@ -40,6 +40,10 @@ class AttributeBinding(Binding):
     is_boolean:bool = False
     
 @dataclass
+class SelfAttributeBinding(AttributeBinding):
+    ...
+
+@dataclass
 class ModelBinding(Binding):
     field: str
 
@@ -72,6 +76,7 @@ class IfBinding(Binding):
 class ChildBinding(Binding):
     childclass:str
     childinstance:object=None
+    attr_bindings:list[AttributeBinding] = field(default_factory=list)
 
 @dataclass
 class LoopBinding(Binding):
@@ -331,6 +336,112 @@ def extract_dependencies(template_str, allowed_builtins):
     return list(deps)
 
 
+def _process_standard_attr_bindings(component_instance, element, attribute_names):
+
+    formatter = Formatter()
+
+    bindings = []
+    fields = []
+
+    for other_attr in attribute_names:
+        if other_attr.startswith("{") and other_attr.endswith("}"):
+            other_attr_no_braces = other_attr.strip("{}")
+            other_attr_value = element.getAttribute(other_attr)
+            other_attr_isboolean = True
+            
+            if other_attr_value == "":
+                other_attr_value = other_attr
+            
+            element.removeAttribute(other_attr)
+
+        else:
+            other_attr_no_braces = other_attr
+            other_attr_value = element.getAttribute(other_attr)
+            other_attr_isboolean = False
+
+        print(other_attr, other_attr_value)
+        fnames = [fname for _, fname, _, _ in formatter.parse(other_attr_value) if fname is not None]
+        has_expr = any(fnames)
+        if has_expr:
+            fieldnames = extract_dependencies(other_attr_value, ALLOWED_BUILTINS)
+            bindings.append(AttributeBinding(component_instance=component_instance, node=element, attr=other_attr_no_braces, content=other_attr_value, fields=fieldnames, is_boolean=other_attr_isboolean))
+            fields += fieldnames
+            
+    return bindings, fields
+
+
+def _process_self_attr_bindings(component_instance, attrs_dict:dict):
+
+    formatter = Formatter()
+
+    bindings = []
+    fields = []
+
+    for other_attr, other_attr_value in attrs_dict.items():
+        if other_attr.startswith("{") and other_attr.endswith("}"):
+            other_attr_no_braces = other_attr.strip("{}")
+            other_attr_isboolean = True
+            
+            if other_attr_value == "":
+                other_attr_value = other_attr
+            
+            #element.removeAttribute(other_attr)
+
+        else:
+            other_attr_no_braces = other_attr
+            other_attr_isboolean = False
+
+        try:
+            fnames = [fname for _, fname, _, _ in formatter.parse(other_attr_value) if fname is not None]
+            has_expr = any(fnames)
+            if has_expr:
+                fieldnames = extract_dependencies(other_attr_value, ALLOWED_BUILTINS)
+                if len(fieldnames):
+                    bindings.append(SelfAttributeBinding(component_instance=component_instance, node=component_instance.__element__, attr=other_attr_no_braces, content=other_attr_value, fields=fieldnames, is_boolean=other_attr_isboolean))
+                    fields += fieldnames
+        except:
+            continue
+
+    return bindings, fields
+
+
+def _process_event_attr_bindings(component_instance, element, attribute_names):
+
+    bindings = []
+    fields = []
+
+    for event_attr in attribute_names:
+        event_attr_value = element.getAttribute(event_attr)
+        if event_attr_value.startswith("{") and event_attr_value.endswith("}"):
+            event_attr_value = event_attr_value.strip("{}")
+            bindings.append(EventBinding(component_instance=component_instance, node=element, event=event_attr, target_fn=event_attr_value))
+            fields.append(event_attr_value)
+            
+    return bindings, fields
+
+
+def _process_text_bindings(component_instance, textnode):
+    
+    node = textnode
+
+    formatter = Formatter()
+
+    bindings = []
+    fields = []
+
+    if node.parentElement and str.lower(node.parentElement.tagName) == 'style':
+        return [], []
+    
+    text_content = node.textContent
+    fnames = [fname for _, fname, _, _ in formatter.parse(text_content) if fname is not None]
+    has_expr = any(fnames)
+    if has_expr:
+        fieldnames = extract_dependencies(text_content, ALLOWED_BUILTINS)
+        bindings.append(TextBinding(component_instance=component_instance, node=node, content=text_content, fields=fieldnames))
+        fields += fieldnames
+
+    return bindings, fields
+
 class Refrain:
     def __init__(self, component):
         self.__dict__['inner_dict'] = {}
@@ -354,7 +465,9 @@ class Refrain:
 
 
 __all__ = ['Binding', 'SelfBinding', 'TextBinding', 'AttributeBinding', \
-    'ModelBinding', 'EventBinding', 'IfBinding', 'ChildBinding', \
-        'LoopBinding', 'KeyedLoopBinding', 'SlotBinding', \
+            'ModelBinding', 'EventBinding', 'IfBinding', 'ChildBinding', \
+            'LoopBinding', 'KeyedLoopBinding', 'SlotBinding', \
             'safe_eval', 'safe_format', 'safe_format_with_stores', \
-                'extract_dependencies', 'Refrain']
+            'extract_dependencies', 'Refrain', \
+            '_process_standard_attr_bindings', '_process_event_attr_bindings', \
+            '_process_text_bindings']
