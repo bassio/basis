@@ -410,13 +410,10 @@ class BaseComponent(object):
                 setattr(binding.element, binding.event, event_method_final)
                 
             else:
-                if binding.target_fn.__class__.__name__ == "JsProxy":
-                    self_event_method = binding.target_fn
-                    binding.node.removeAttribute(binding.event)
-                    setattr(binding.element, binding.event, self_event_method)
-                else:
-                    raise Exception("C target_fn error:", binding)
-
+                self_event_method = binding.target_fn
+                binding.node.removeAttribute(binding.event)
+                setattr(binding.element, binding.event, self_event_method)
+                
 
         for nested_child in cls.get_nested_children():
             nested_child.mount(self_element, replace=False) #appendChild

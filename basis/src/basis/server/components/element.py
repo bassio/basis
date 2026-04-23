@@ -23,7 +23,15 @@ class Node(object):
             # (e.g. an IfBinding node that was removed); append at the end.
             print(f"after(): {self!r} not found in parent.children — appending at end")
             index = len(parent.children) - 1
-        parent.children[index+1:index+1] = list(nodes)
+            
+        expanded = []
+        for n in nodes:
+            if type(n).__name__ == 'ServerFragment':
+                expanded.extend(n._consume())
+            else:
+                expanded.append(n)
+                
+        parent.children[index+1:index+1] = expanded
         # Update parent references for inserted elements
         for n in nodes:
             if hasattr(n, 'parent'):
@@ -139,7 +147,7 @@ class Element(Node):
     
     @property
     def parentElement(self):
-        self.parentNode
+        return self.parentNode
 
     @property
     def childNodes(self):
@@ -288,10 +296,18 @@ class Element(Node):
         parent = self.parentNode
         print("parent:::: ", parent)
         index = parent.children.index(self)
-        parent.children[index+1:index+1] = list(elements)
+        
+        expanded = []
+        for el in elements:
+            if type(el).__name__ == 'ServerFragment':
+                expanded.extend(el._consume())
+            else:
+                expanded.append(el)
+                
+        parent.children[index+1:index+1] = expanded
         parent.children.pop(index)
         # Update parent references for inserted elements
-        for el in elements:
+        for el in expanded:
             if hasattr(el, 'parent'):
                 el.parent = parent
         print("children::::", parent.children)
@@ -299,12 +315,13 @@ class Element(Node):
 
     def appendChild(self, child):
         print(f"ELEMENT: appendChild of {self.__tag__}:", child)
-        if isinstance(child, ServerFragment):
+        if type(child).__name__ == 'ServerFragment':
             # Mirror DOM DocumentFragment: move its root element in and empty the fragment
-            root = child._consume()
-            if root is not None:
-                self.children.append(root)
-                root.parent = self
+            children_to_move = child._consume()
+            for c in children_to_move:
+                self.children.append(c)
+                if hasattr(c, 'parent'):
+                    c.parent = self
         else:
             self.children.append(child)
             if hasattr(child, 'parent'):
@@ -315,13 +332,31 @@ class Element(Node):
 
     def insertBefore(self, new_node, reference_node):
         print("in insertBefore", self.children)
-        self.children.insert(self.children.index(reference_node)
-                             , new_node)
+        idx = self.children.index(reference_node)
+        
+        if type(new_node).__name__ == 'ServerFragment':
+            children_to_move = new_node._consume()
+            for c in reversed(children_to_move):
+                self.children.insert(idx, c)
+                if hasattr(c, 'parent'):
+                    c.parent = self
+        else:
+            self.children.insert(idx, new_node)
+            if hasattr(new_node, 'parent'):
+                new_node.parent = self
         print(self.children)
-        new_node.parent = self  # self is the parent element, not self.parent
  
-    def replaceChildren(self, children):
-        self.children = children
+    def replaceChildren(self, *children):
+        expanded = []
+        for c in children:
+            if type(c).__name__ == 'ServerFragment':
+                expanded.extend(c._consume())
+            else:
+                expanded.append(c)
+        self.children = expanded
+        for c in self.children:
+            if hasattr(c, 'parent'):
+                c.parent = self
 
     def cloneNode(self, deep:bool=True):
 
@@ -497,62 +532,80 @@ def html_to_element(html_string):
     return tree_root['component']
 
 
-class ServerFragment:
+class ServerFragment(Node):
     """
     Server-side equivalent of the browser's DocumentFragment.
 
-    On the client, __template__ is the .content (DocumentFragment) of the
-    cloned <template> element.  Appending a DocumentFragment moves all its
+    Inherits from Node. On the client, __template__ is the .content (DocumentFragment) of the
+    cloned <template> element. Appending a DocumentFragment moves all its
     children into the target and empties it, so a subsequent append is a
-    silent no-op.  _bind_node() on the client relies on this:
-
-        child_instance = childcomponent_py.mount(node, ...)
-        # mount() already appended __template__ to node above
-        node.appendChild(child_instance.__template__)  # no-op — fragment empty
+    silent no-op. _bind_node() on the client relies on this.
 
     ServerFragment reproduces that contract on the server:
-      - wraps the root Element on construction
-      - Element.appendChild() calls _consume() which moves the root into the
-        target container and sets _root = None  (fragment is now empty)
-      - any subsequent appendChild() finds _root is None → no-op  ✓
-
-    This lets server_component._bind_node keep the same line that
-    component.py uses on the client, with identical semantics.
+      - Can contain multiple children.
+      - Element.appendChild() calls _consume() which moves all children into the
+        target container and empties the fragment.
+      - any subsequent appendChild() finds no children → no-op ✓
     """
 
-    def __init__(self, root: 'Element | None'):
-        self._root = root
+    def __init__(self, root: 'Element | None' = None, children: list = None):
+        if children is not None:
+            self.children = list(children)
+        elif root is not None:
+            self.children = [root]
+        else:
+            self.children = []
+            
+        for c in self.children:
+            if hasattr(c, 'parent'):
+                c.parent = self
+
+    @property
+    def nodeName(self):
+        return "#document-fragment"
 
     @property
     def root(self) -> 'Element | None':
-        return self._root
+        return self.children[0] if self.children else None
 
     @property
     def firstElementChild(self):
-        return self._root
+        return self.children[0] if self.children else None
     
     @property
     def descendants(self):
-        """Delegate to the wrapped root so _get_nodes() works before mount."""
-        if self._root is not None:
-            yield from self._root.descendants
+        """Yield descendants of all children."""
+        for c in self.children:
+            if hasattr(c, 'descendants'):
+                yield from c.descendants
 
-    def _consume(self) -> 'Element | None':
-        """Move the root out and empty this fragment (like browser DOM does)."""
-        root, self._root = self._root, None
-        return root
+    def _consume(self) -> list:
+        """Move all children out and empty this fragment (like browser DOM does)."""
+        children = self.children[:]
+        self.children = []
+        return children
 
     def __repr__(self):
-        return f"ServerFragment(root={self._root!r})"
+        return f"ServerFragment(children={len(self.children)})"
 
     def appendChild(self, child:Node):
-        if isinstance(child, ServerFragment):
-            # Mirror DOM DocumentFragment: move its root element in and empty the fragment
-            root = child._consume()
-            if root is not None:
-                self.children.append(root)
-                root.parent = self
+        if type(child).__name__ == 'ServerFragment':
+            # Mirror DOM DocumentFragment: move its children in and empty the fragment
+            children_to_move = child._consume()
+            for c in children_to_move:
+                self.children.append(c)
+                if hasattr(c, 'parent'):
+                    c.parent = self
         else:
             self.children.append(child)
             if hasattr(child, 'parent'):
                 child.parent = self
+
+    def __html__(self):
+        children_str = ""
+        for c in self.children:
+            if hasattr(c, '__html__'):
+                children_str += c.__html__()
+            else:
+                children_str += str(c)
+        return children_str

@@ -87,10 +87,10 @@ class ServerComponent(BaseComponent):
             if hasattr(self, "_nodes"):
                 return self._nodes
             else:
-                # Unwrap ServerFragment → root Element for traversal
+                # Iterate directly over template.descendants; ServerFragment
+                # correctly yields the descendants of its children.
                 template = self.__template__
-                top_elem = template.root if isinstance(template, ServerFragment) else template
-                for d in top_elem.descendants:
+                for d in template.descendants:
                     nodes.append(d)
         
                 self.__dict__['_nodes'] = nodes
@@ -486,7 +486,7 @@ class ServerComponent(BaseComponent):
                             self.__bindings__.remove(rem)
 
                 #client
-                lb.parent.replaceChildren(*fragment.children)
+                lb.parent.replaceChildren(fragment)
                 lb.instances = new_instances
 
 
@@ -559,7 +559,7 @@ class ServerComponent(BaseComponent):
                         new_cb.childinstance = custom_child_instance
             
             #client
-            lb.parent.replaceChildren(*fragment.children)
+            lb.parent.replaceChildren(fragment)
 
             #delete old child bindings
             for cb in child_bindings:
