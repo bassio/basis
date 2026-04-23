@@ -1,379 +1,636 @@
 from string import Formatter
-import copy
+from dataclasses import dataclass
+from functools import wraps, partial
 import inspect
+import json
+import copy
 
-from basis.shared.bindings import (
-    Binding, SelfBinding, TextBinding, AttributeBinding, ModelBinding,
-    EventBinding, IfBinding, ChildBinding, LoopBinding, KeyedLoopBinding, SlotBinding,
-    safe_eval, safe_format, extract_dependencies, ALLOWED_BUILTINS
-)
-from basis.server.components.element import Element, ElementString, html_to_element_tree
+try:
+    import pyscript
+
+    PYSCRIPT = True
+    
+except ImportError:
+
+    PYSCRIPT = False
+
+from basis.shared.bindings import Binding, SelfBinding, TextBinding, \
+    AttributeBinding, SelfAttributeBinding, ModelBinding, EventBinding, IfBinding, \
+    ChildBinding, LoopBinding, KeyedLoopBinding, SlotBinding, \
+    safe_eval, safe_format, safe_format_with_stores, \
+    extract_dependencies, ALLOWED_BUILTINS, Refrain, \
+    _process_event_attr_bindings, _process_standard_attr_bindings, \
+    _process_text_bindings
+    
+
+from basis.shared.store import Store
 from basis.shared.base_component import BaseComponent
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def deep_clone_element(node):
-    """Recursively deep-copy an Element / ElementString tree."""
-    if isinstance(node, ElementString):
-        return ElementString(value=node.value, parent=None)
-    elif isinstance(node, Element):
-        cloned_children = []
-        cloned = Element(
-            tag=node.tag,
-            attrs=dict(node.attrs),
-            children=cloned_children,
-            void_=node.void_,
-            _detached=node._detached,
-            _if_expr=node._if_expr,
-        )
-        for child in node.children:
-            cloned_child = deep_clone_element(child)
-            if isinstance(cloned_child, ElementString):
-                cloned_child.parent = cloned
-            elif isinstance(cloned_child, Element):
-                cloned_child.parent = cloned
-            cloned_children.append(cloned_child)
-        return cloned
-    else:
-        # Fallback: plain string or unknown
-        return node
+from basis.server.components.element import Element, ElementString, Comment, html_to_element_tree, ServerFragment
 
 
-# ---------------------------------------------------------------------------
-# ServerComponent
-# ---------------------------------------------------------------------------
 
 class ServerComponent(BaseComponent):
-    _registry = {}
-    tag: str
 
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
+    # _registry = {} defined on BaseComponent
+    _instance_registry = {}
+    _pending_subscriptions = {}
 
-        if hasattr(cls, 'template'):
-            if inspect.isfunction(cls.template):
-                templatestr = cls.template.__doc__
-            elif isinstance(cls.template, str):
-                templatestr = cls.template
-            else:
-                return
-        elif cls.__doc__:
-            templatestr = cls.__doc__
-        else:
-            return
+    S = Store._registry
+    C = _instance_registry
 
-        setattr(cls, "__templatestr__", templatestr)
-
-        blueprint_tree = html_to_element_tree(templatestr)
+    #@server
+    @classmethod
+    def _initialize_blueprint(cls):
+        ###Server
+        blueprint_tree = html_to_element_tree(cls.__templatestr__)
         setattr(cls, "__blueprint__", blueprint_tree)
-
-        if hasattr(cls, 'tag') and "-" in cls.tag:
-            tag = cls.tag
-        else:
-            tag = cls.__name__
-
-        cls._registry[tag] = cls
-
+    
+    #@server
     @classmethod
     def clone_blueprint(cls):
-        """Return a fresh deep-copy of the root Element from the blueprint."""
         raw = cls.__blueprint__
         # blueprint is the builder dict; 'component' key holds the root Element
         root_element = raw['component']
-        return deep_clone_element(root_element)
+        return copy.deepcopy(root_element)
 
+    #@server
     @property
-    def __template__(self):
-        """Return the cached cloned Element tree for this instance."""
+    def __template__(self) -> ServerFragment:
+        """Return a ServerFragment wrapping the root Element.
+
+        Mirrors the client where __template__ is the DocumentFragment (.content)
+        of the cloned <template> element.  The fragment is consumed (emptied) by
+        the first Element.appendChild() call in mount(), so any later call (e.g.
+        from _bind_node) is a silent no-op — identical to client behaviour.
+        """
         if '_template' not in self.__dict__:
-            self.__dict__['_template'] = self.__class__.clone_blueprint()
+            root = self.__class__.clone_blueprint()
+            self.__dict__['_template'] = ServerFragment(root)
         return self.__dict__['_template']
-
-    @property
-    def __element__(self):
-        """Return the root Element node (equivalent to firstElementChild on client)."""
-        for binding in self.__dict__.get('__bindings__', []):
-            if isinstance(binding, SelfBinding):
-                return binding.node
-        return None
-
+    
     def __init__(self):
         super().__init__()
-        self.__init_bindings__()
-        self.__init_fields__()
 
-    def __init_bindings__(self):
-        bindings = []
-        fields = []
+    #@server
+    def _get_nodes(self, element=None):
+        
+        nodes = []
+        
+        if element:
+            for d in element.descendants:
+                nodes.append(d)
 
-        root_element = self.__template__
+            return nodes
 
-        # Register a SelfBinding for the root element
-        bindings.append(SelfBinding(component_instance=self, node=root_element))
+        else:
+            if hasattr(self, "_nodes"):
+                return self._nodes
+            else:
+                # Unwrap ServerFragment → root Element for traversal
+                template = self.__template__
+                top_elem = template.root if isinstance(template, ServerFragment) else template
+                for d in top_elem.descendants:
+                    nodes.append(d)
+        
+                self.__dict__['_nodes'] = nodes
+
+                return nodes
+    
+    #@server
+    def _create_comment(self, comment_text, parent=None):
+        return Comment(data=comment_text, parent=parent)
+    
+    #@server
+    def _create_document_fragment(self):
+        return ServerFragment(root=None)
+
+    #@server
+    @classmethod
+    def _create_element(cls, tag):
+        element = Element(tag, attrs={}, children=[])
+        return element
+
+    def _bind_node(self, node):
+
+        formatter = Formatter()
+        bindings=[]
+        fields=[]
+
+        if hasattr(node, 'getAttributeNames'): #confirm it is an ELEMENT not a TEXT node
+            element = node
+            if '-' in element.tagName:
+                tag = str.lower(element.tagName)
+                childcomponent_py = self.__class__._registry[tag]
+                dom_child_node_attrs = {a: element.getAttribute(a) for a in element.getAttributeNames()}
+
+                if not getattr(node, '__basis_mounted__', False):
+                    print("appending child..")
+                    child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
+                    node.__basis_mounted__ = True
+                    node.appendChild(child_instance.__template__)  # no-op: fragment already consumed by mount()
+
+                    child_attr_bindings = [sab for sab in child_instance.__bindings__ \
+                                        if isinstance(sab, SelfAttributeBinding)]
+                    bindings.append(ChildBinding(component_instance=self, node=element, childclass=childcomponent_py, childinstance=child_instance, attr_bindings=child_attr_bindings))
+                else:
+                    raise Exception("excepted here __basis_mounted__")
+                
+            if str.lower(element.tagName) == 'slot':
+                return
+
+                
+            element_attrs = [a for a in element.getAttributeNames()]
+            event_attrs = [a for a in element_attrs if a.startswith("on")]
+            other_attrs = [a for a in element_attrs if not a.startswith("on")]
+
+            special_attrs = ["if", "for", "in", "key", "bind"]
+
+            non_standard_attrs = [a for a in other_attrs if not a.startswith("on") and a in special_attrs]
+            standard_attrs = [a for a in other_attrs if a not in non_standard_attrs]
+                        
+            #event
+            event_bindings, event_fields = _process_event_attr_bindings(self, element, event_attrs)
+            bindings += event_bindings
+            fields += event_fields
+            
+            #standard
+            std_bindings, std_fields = _process_standard_attr_bindings(self, element, standard_attrs)
+            bindings += std_bindings
+            fields += std_fields
+
+
+            #'if' attr
+            if 'if' in non_standard_attrs:
+                if_expr = element.getAttribute('if')
+                if_expr_clean = if_expr.removeprefix("{").removesuffix("}")
+                print("if_expr",element.parentNode)
+                fieldnames = extract_dependencies(if_expr, ALLOWED_BUILTINS) 
+                anchor = self._create_comment(f"if: {if_expr_clean}", parent=element.parentNode)
+                
+                #client
+                element.parentNode.insertBefore(anchor, element)
+                bindings.append(IfBinding(
+                    component_instance=self, node=element, expr=if_expr_clean, anchor=anchor, is_visible=True, fields=fieldnames
+                ))
+                fields += fieldnames
+
+            #'bind' attr
+            if 'bind' in non_standard_attrs:
+                bind_attr_value = element.getAttribute('bind')
+                fieldnames = extract_dependencies(bind_attr_value, ALLOWED_BUILTINS)
+                if len(fieldnames) == 1:
+                    field = fieldnames[0]
+                    bindings.append(ModelBinding(component_instance=self, node=element, field=field))
+                    fields.append(field)
+                    tag_name = str.lower(element.tagName)
+                    input_type = element.getAttribute('type') if element.hasAttribute('type') else 'text'
+
+
+                    handler = self._create_update_handler(field, input_type)
+
+                    if tag_name == 'input' and input_type in ['checkbox', 'radio']:
+                        bound_event = 'change'
+                    elif tag_name == 'select':
+                        bound_event = 'change'
+                    else:
+                        bound_event = 'input'
+                    
+                    #client
+                    element.addEventListener(bound_event, handler)
+                    bindings.append(EventBinding(component_instance=self, node=element, event=f"{bound_event}", target_fn=handler))
+
+            if 'for' in non_standard_attrs:
+                inlist_attr_value = element.getAttribute('in').strip("{}")
+                for_attr_value = element.getAttribute('for')
+
+                #client
+                element_clone = element.cloneNode(True)
+                if element.hasAttribute('key'):
+                    bindings.append(KeyedLoopBinding(component_instance=self, node=element, clone=element_clone, parent=element.parentElement, collection=inlist_attr_value, item=for_attr_value, key=element.getAttribute('key')))
+                else:
+                    bindings.append(LoopBinding(component_instance=self, node=element, clone=element_clone, parent=element.parentElement, collection=inlist_attr_value, item=for_attr_value))
+
+        elif node.nodeName == '#text':
+            text_bindings, text_fields = _process_text_bindings(self, node)
+            bindings += text_bindings
+            fields += text_fields
+
+        elif node.nodeName == '#comment':
+            pass
+
+        self.__bindings__.extend(bindings)
+
+        for f in fields:
+            if f not in self.__fields__:
+                self.__fields__.append(f)
+
+    
+    @classmethod
+    def mount_app_ssr(cls, container, replace=False):
+        """
+        Entry point for SSR pages.
+
+        Checks whether the container already holds server-rendered content
+        (identified by data-basis-component markers). If so, calls .hydrate()
+        on the matching Component subclass; otherwise falls back to .mount_app().
+
+        Also registers a document-level listener for 'basis:hydrate' events
+        fired by CustomElementFactory when custom elements with SSR content
+        are upgraded by the browser.
+        """
+        # Register the global SSR hydration event listener so that nested
+        # custom elements deferred by the browser emit their hydrate events
+        # and get picked up here.
+        @client
+        def _register_hydration_listener():
+            def _on_hydrate(event):
+                py_class_name = event.detail.pyClassName
+                element = event.detail.element
+                for tag, component_cls in self.__class__._registry.items():
+                    if component_cls.__name__ == py_class_name:
+                        print(f"Hydrating {py_class_name} via basis:hydrate event")
+                        component_cls.hydrate(element)
+                        return
+                print(f"Warning: No Component found for '{py_class_name}' during hydration")
+            
+            #client
+            document.addEventListener('basis:hydrate', ffi.create_proxy(_on_hydrate))
+
+        _register_hydration_listener()
+
+        # Check if the container's first data-basis-component element matches cls
+        ssr_root = None
+        try:
+            ssr_root = container.querySelector('[data-basis-component]')
+        except Exception:
+            pass
+
+        if ssr_root is not None:
+            py_class_name = ssr_root.getAttribute('data-basis-component')
+            if py_class_name == cls.__name__:
+                new_instance = cls.hydrate(ssr_root.parentElement or ssr_root)
+                return new_instance
+
+        # Fallback: regular SPA mount
+        return cls.mount_app(container, replace)
+
+    @classmethod
+    def hydrate(cls, container, **attributes):
+
+        """
+        Attach Basis reactivity to an existing server-rendered DOM node.
+
+        Unlike mount(), this method does NOT insert any new nodes — it binds
+        against what is already in the live DOM (placed there by SSR).
+
+        Parameters
+        ----------
+        container:
+            The custom-element host node (e.g. <my-sidebar>) whose
+            firstElementChild is the pre-rendered component root.
+        attributes:
+            Initial attribute values to set before building bindings.
+        """
+        print(f"hydrate: starting hydration of {cls} against existing DOM")
+        new_instance = cls.__new__(cls)
+        # Manually call super() __init__ to set up __bindings__ / __fields__
+        super(cls, new_instance).__init__()
+        new_instance.__dict__['_subscriptions'] = []
+
+        if attributes:
+            new_instance.__dict__.update(attributes)
+
+        # Point _template at the existing live DOM root (firstElementChild of
+        # the custom-element host, which is the server-rendered component root).
+        live_root = container.firstElementChild or container
+        new_instance.__dict__['_template'] = cls._create_element('template')
+        new_instance.__dict__['_template'].content.appendChild(live_root)
+
+        # Bootstrap SelfBinding from the live root
+        new_instance.__dict__['__bindings__'].append(
+            SelfBinding(component_instance=new_instance, node=live_root)
+        )
+
+        @client
+        def _finish_hydration(inst):
+            inst.__init_bindings__()
+            inst.__init_fields__()
+            with inst.refrain() as refrained:
+                for k, v in attributes.items():
+                    setattr(refrained, k, v)
+
+        _finish_hydration(new_instance)
+
+        print(f"hydrate: finished hydration of {cls}")
+        return new_instance
+        
+
+    def react(self, names):
+
+        print(f"In react({names}) of {self.__class__}")
+        
+        text_bindings:list[TextBinding] = [tb for tb in self.__bindings__ if isinstance(tb, TextBinding)]
+        attr_bindings:list[AttributeBinding] = [ab for ab in self.__bindings__ if isinstance(ab, AttributeBinding)]
+        model_bindings:list[ModelBinding] = [mb for mb in self.__bindings__ if isinstance(mb, ModelBinding)]
+        if_bindings:list[IfBinding] = [ib for ib in self.__bindings__ if isinstance(ib, IfBinding)]
+        loop_bindings:list[LoopBinding] = [lb for lb in self.__bindings__ if isinstance(lb, LoopBinding)]
+        keyed_loop_bindings:list[KeyedLoopBinding] = [lb for lb in self.__bindings__ if isinstance(lb, KeyedLoopBinding)]
+        child_bindings:list[ChildBinding] = [cb for cb in self.__bindings__ if isinstance(cb, ChildBinding)]
+
+        child_attr_bindings:list[SelfAttributeBinding] = []
+        for cb in child_bindings:
+            child_attr_bindings.extend(cb.attr_bindings)
+
+        looped_nodes = [lb.node for lb in loop_bindings] + [lb.node for lb in keyed_loop_bindings]
+        
+
+        text_bindings_to_update = []
+        attr_bindings_to_update = []
+        model_bindings_to_update = []
+        if_bindings_to_update = []
+
+        for tb in text_bindings:
+            if len(set(tb.fields).intersection(names)):
+                if tb not in text_bindings_to_update:
+                    text_bindings_to_update.append(tb)
+
+        for ab in attr_bindings:
+            if len(set(ab.fields).intersection(names)):
+                if ab not in attr_bindings_to_update:
+                    attr_bindings_to_update.append(ab)
+       ###
+        for cab in child_attr_bindings:
+            if len(set(cab.fields).intersection(names)):
+                if cab not in attr_bindings_to_update:
+                    attr_bindings_to_update.append(cab)
+
+        for mb in model_bindings:
+            if len(set(mb.fields).intersection(names)):
+                if mb not in model_bindings_to_update:
+                    model_bindings_to_update.append(mb)
+
+        #print("in react", "if bindings:", if_bindings)
+        for ib in if_bindings:
+            print("ib fields:", ib.fields)
+            if len(set(ib.fields).intersection(names)):
+                if ib not in if_bindings_to_update:
+                    if_bindings_to_update.append(ib)
+
+        attr_bindings_to_pop = []
+        text_bindings_to_pop = []
+        new_child_bindings = []
 
         formatter = Formatter()
 
-        for node in root_element.descendants:
-            if node is root_element:
-                # Still process root element's attributes below
+        ### antigravity generated
+
+        for lb in keyed_loop_bindings:
+
+            if lb.collection in names:
+                collection_value = getattr(self, lb.collection, [])
+                
+                if not hasattr(lb, 'instances'):
+                    lb.instances = {}
+
+                new_instances = {}
+
+                #client
+                fragment = self._create_document_fragment()
+                
+                # Pop parent components initial bindings on this loop placeholder
+                for tb in text_bindings:
+                    #client: contains
+                    if lb.node.contains(tb.node) and lb.item in tb.fields:
+                        text_bindings_to_pop.append(tb)
+                for ab in attr_bindings:
+                    if ab.node == lb.node and lb.item in ab.fields:
+                        attr_bindings_to_pop.append(ab)
+
+                for i in collection_value:
+                    if isinstance(i, dict):
+                        k_val = i.get(lb.key)
+                    else:
+                        try:
+                            k_val = getattr(i, lb.key)
+                        except AttributeError:
+                            k_val = getattr(i, 'get', lambda k: None)(lb.key)
+                    
+                    if k_val in lb.instances:
+                        # Reuse
+                        child_instance = lb.instances[k_val]
+                        
+                        updated_child_node_attrs = {lb.item: i}
+                        rest_of_fields = [f for f in self.__fields__ if (f != lb.item) and (not inspect.isfunction(getattr(self, f)))]
+                        for field in rest_of_fields:
+                            updated_child_node_attrs[field] = getattr(self, field)
+                            
+                        if '-' in (tag:=str.lower(lb.clone.tagName)):
+                            for c_attr in lb.clone.getAttributeNames():
+                                c_attr_value = lb.clone.getAttribute(c_attr)
+                                if c_attr not in updated_child_node_attrs:
+                                    
+                                    has_expr = any(fname is not None for _, fname, _, _ in formatter.parse(c_attr_value))
+                                    if has_expr:
+                                        val = safe_format(c_attr_value, updated_child_node_attrs, ALLOWED_BUILTINS)
+                                        updated_child_node_attrs[c_attr] = val
+                                    else:
+                                        updated_child_node_attrs[c_attr] = c_attr_value
+                            
+                        # Update props and component reacts
+                        for k, v in updated_child_node_attrs.items():
+                            setattr(child_instance, k, v)
+                            
+                        fragment.appendChild(child_instance.__element__)
+                        new_instances[k_val] = child_instance
+                    else:
+                        # New creation
+                        cloned_element = lb.node.cloneNode(True)
+                        cloned_element.removeAttribute('for')
+                        cloned_element.removeAttribute('in')
+                        cloned_element.removeAttribute('key')
+
+
+                        updated_child_node_attrs = {lb.item: i}
+                        rest_of_fields = [f for f in self.__fields__ if (f != lb.item) and (not inspect.isfunction(getattr(self, f)))]
+                        for field in rest_of_fields:
+                            updated_child_node_attrs[field] = getattr(self, field)
+                        
+                        if '-' in (tag:=str.lower(lb.clone.tagName)):
+                            childcomponent_py = self.__class__._registry[tag]
+                            for c_attr in cloned_element.getAttributeNames():
+                                if c_attr not in updated_child_node_attrs:
+                                    c_attr_value = cloned_element.getAttribute(c_attr)
+                                    has_expr = any(fname is not None for _, fname, _, _ in formatter.parse(c_attr_value))
+                                    if has_expr:
+                                        val = safe_format(c_attr_value, updated_child_node_attrs, ALLOWED_BUILTINS)
+                                        updated_child_node_attrs[c_attr] = val
+                                    else:
+                                        updated_child_node_attrs[c_attr] = c_attr_value
+                        else:
+                            quick_component = self.__class__.from_template(cloned_element.outerHTML)
+                            childcomponent_py = quick_component
+                                
+                        new_cb = ChildBinding(component_instance=self, node=cloned_element, childclass=childcomponent_py)
+                        self.__bindings__.append(new_cb)
+                        
+                        custom_child_instance = new_cb.childclass.mount(fragment, replace=False, **updated_child_node_attrs)
+                        new_cb.childinstance = custom_child_instance
+                        new_instances[k_val] = custom_child_instance
+
+                # Cleanup old child bindings that are removed
+                for k_val, old_instance in lb.instances.items():
+                    if k_val not in new_instances:
+                        bindings_to_rem = [cb for cb in self.__bindings__ if isinstance(cb, ChildBinding) and getattr(cb, 'childinstance', None) == old_instance]
+                        for rem in bindings_to_rem:
+                            self.__bindings__.remove(rem)
+
+                #client
+                lb.parent.replaceChildren(*fragment.children)
+                lb.instances = new_instances
+
+
+        ### end antigravity
+
+        for lb in loop_bindings:
+
+            if lb.collection in names:
+                collection_value = self.__dict__[lb.collection]
+
+                cloned_elements = []
+
+                #client
+                fragment = self._create_document_fragment()
+
+                for i in collection_value: #iterate through the collection
+
+                    cloned_element = lb.node.cloneNode(True)
+                    cloned_element.removeAttribute('for')
+                    cloned_element.removeAttribute('in')
+
+                    
+                    if '-' in (tag:=str.lower(lb.clone.tagName)):
+                        childcomponent_py = self.__class__._registry[tag]
+                    else:
+                        quick_component = self.__class__.from_template(cloned_element.outerHTML)
+                        childcomponent_py = quick_component
+
+                    new_cb = ChildBinding(component_instance=self, node=cloned_element, childclass=childcomponent_py)
+                    new_child_bindings.append(new_cb)
+                    self.__bindings__.append(new_cb)
+                    
+                    new_cb = ChildBinding(component_instance=self, node=cloned_element, childclass=childcomponent_py)
+                    new_child_bindings.append(new_cb)
+                    self.__bindings__.append(new_cb)
+                    
+
+                    for tb in text_bindings:
+                        #client
+                        if lb.node.contains(tb.node) \
+                        and lb.item in tb.fields:
+                            new_text_binding = TextBinding(self, node=cloned_element, content=tb.content, fields=tb.fields)
+                            self.__bindings__.append(new_text_binding)
+                            text_bindings_to_pop.append(tb)
+
+                    for ab in attr_bindings:
+                        if ab.node == lb.node \
+                        and lb.item in ab.fields:
+                            new_attr_binding = AttributeBinding(self, node=cloned_element, attr=ab.attr, content=ab.content, fields=ab.fields)
+                            self.__bindings__.append(new_attr_binding)
+                            attr_bindings_to_pop.append(ab)
+
+                    
+                    if '-' in (tag:=str.lower(lb.clone.tagName)):
+                        updated_child_node_attrs = {c: new_cb.node.getAttribute(c) for c in new_cb.node.getAttributeNames()}
+                        custom_child_instance = new_cb.childclass.mount(fragment, replace=False, **updated_child_node_attrs)
+                        new_cb.childinstance = custom_child_instance
+
+                    else:
+                        updated_child_node_attrs = {}
+                        updated_child_node_attrs[lb.item] = i
+
+                        rest_of_fields = [f for f in self.__fields__ if (f != lb.item) and (not inspect.isfunction(getattr(self, f)))]
+
+                        for field in rest_of_fields:
+                            updated_child_node_attrs[field] = getattr(self,field)
+
+                        custom_child_instance = new_cb.childclass.mount(fragment, replace=False, **updated_child_node_attrs)
+
+                        new_cb.childinstance = custom_child_instance
+            
+            #client
+            lb.parent.replaceChildren(*fragment.children)
+
+            #delete old child bindings
+            for cb in child_bindings:
+                if cb.node == lb.node:
+                    self.__bindings__.remove(cb)
+                elif '-' in (tag:=str.lower(lb.clone.tagName)):
+                    childcomponent_py = self.__class__._registry[tag]
+                    if cb.childclass == childcomponent_py:
+                        self.__bindings__.remove(cb)
+                
+        #print("text_bindings_to_update before popping", text_bindings_to_update)
+        for tb in text_bindings_to_pop:
+            try:
+                text_bindings_to_update.remove(tb) #pop
+            except ValueError:
                 pass
 
-            if isinstance(node, Element):
-                element = node
-                element_attrs = list(element.attrs.keys())
-                event_attrs = [a for a in element_attrs if a.startswith("on")]
-                other_attrs = [a for a in element_attrs if not a.startswith("on")]
+        for ab in attr_bindings_to_pop:
+            try:
+                attr_bindings_to_update.remove(ab) #pop
+            except ValueError:
+                pass
 
-                # ── child components ───────────────────────────────────────
-                if '-' in element.tag:
-                    tag = element.tag.lower()
-                    if tag in self.__class__._registry:
-                        childcomponent_py = self.__class__._registry[tag]
-                        bindings.append(ChildBinding(
-                            component_instance=self,
-                            node=element,
-                            childclass=childcomponent_py,
-                        ))
+        for tb in text_bindings_to_update:
+            #print("text_bindings_to_update", text_bindings_to_update)
+            tb.node.textContent = safe_format_with_stores(tb.content, tb.component_instance.__dict__, ALLOWED_BUILTINS, Store._registry, self.__class__._instance_registry)
 
-                # ── slot ──────────────────────────────────────────────────
-                if element.tag.lower() == 'slot':
-                    slot_name = element.attrs.get('name')
-                    is_default = not slot_name
-                    bindings.append(SlotBinding(
-                        component_instance=self,
-                        node=element,
-                        name=slot_name,
-                        is_default=is_default,
-                    ))
+        for mb in model_bindings_to_update:
+            #print("model_bindings_to_update (in {self.__class__}):", model_bindings_to_update)
+            if mb.node not in looped_nodes:
+                val = getattr(self, mb.field)
+                input_type = mb.node.getAttribute('type') if mb.node.hasAttribute('type') else 'text'
+                #print(f"model final_val (in {self.__class__}):", val, "input_type", )
+                if input_type == 'checkbox':
+                    mb.node.checked = bool(val)
+                else:
+                    mb.node.value = str(val) if val is not None else ""
 
-                # ── event bindings ────────────────────────────────────────
-                for event_attr in event_attrs:
-                    event_attr_value = element.attrs[event_attr]
-                    if event_attr_value.startswith("{") and event_attr_value.endswith("}"):
-                        event_attr_value = event_attr_value.strip("{}")
-                        bindings.append(EventBinding(
-                            component_instance=self,
-                            node=element,
-                            event=event_attr,
-                            target_fn=event_attr_value,
-                        ))
-                        fields.append(event_attr_value)
-
-                # ── if binding ────────────────────────────────────────────
-                if 'if' in other_attrs:
-                    if_expr = element.attrs['if']
-                    if_expr_clean = if_expr.removeprefix("{").removesuffix("}")
-                    fieldnames = extract_dependencies(if_expr, ALLOWED_BUILTINS)
-                    bindings.append(IfBinding(
-                        component_instance=self,
-                        node=element,
-                        expr=if_expr_clean,
-                        anchor=None,   # no JS anchor on server
-                        is_visible=True,
-                        fields=fieldnames,
-                    ))
-                    fields += fieldnames
-
-                # ── model (bind) binding ──────────────────────────────────
-                if 'bind' in other_attrs:
-                    bind_attr_value = element.attrs['bind']
-                    fieldnames = [
-                        fname for _, fname, _, _ in formatter.parse(bind_attr_value)
-                        if fname is not None
-                    ]
-                    if len(fieldnames) == 1:
-                        field = fieldnames[0]
-                        bindings.append(ModelBinding(
-                            component_instance=self,
-                            node=element,
-                            field=field,
-                        ))
-                        fields.append(field)
-
-                # ── loop binding ──────────────────────────────────────────
-                if 'for' in other_attrs:
-                    for_attr_value = element.attrs.get('for', '')
-                    in_attr_value = element.attrs.get('in', '').strip("{}")
-                    has_expr = any(
-                        fname is not None
-                        for _, fname, _, _ in formatter.parse(for_attr_value)
-                    )
-                    if has_expr:
-                        fieldnames = extract_dependencies(for_attr_value, ALLOWED_BUILTINS)
-                        bindings.append(LoopBinding(
-                            component_instance=self,
-                            node=element,
-                            clone=deep_clone_element(element),
-                            parent=getattr(element, 'parent', None),
-                            collection=in_attr_value,
-                            item=for_attr_value,
-                        ))
-                        fields += fieldnames
-
-                # ── attribute bindings ────────────────────────────────────
-                for other_attr in other_attrs:
-                    other_attr_value = element.attrs[other_attr]
-
-                    # Handle boolean {attr} style
-                    if other_attr.startswith("{") and other_attr.endswith("}"):
-                        other_attr_no_braces = other_attr.strip("{}")
-                        other_attr_isboolean = True
-                        # Rename in the attrs dict
-                        del element.attrs[other_attr]
-                        element.attrs[other_attr_no_braces] = other_attr_value
-                    else:
-                        other_attr_no_braces = other_attr
-                        other_attr_isboolean = False
-
-                    has_expr = any(
-                        fname is not None
-                        for _, fname, _, _ in formatter.parse(str(other_attr_value))
-                    )
-                    if has_expr:
-                        fieldnames = extract_dependencies(str(other_attr_value), ALLOWED_BUILTINS)
-                        bindings.append(AttributeBinding(
-                            component_instance=self,
-                            node=element,
-                            attr=other_attr_no_braces,
-                            content=str(other_attr_value),
-                            fields=fieldnames,
-                            is_boolean=other_attr_isboolean,
-                        ))
-                        fields += fieldnames
-
-            elif isinstance(node, ElementString):
-                # Skip text inside <style> blocks
-                if node.parent and node.parent.tag.lower() == 'style':
-                    continue
-
-                text_content = str(node)
-                has_expr = any(
-                    fname is not None
-                    for _, fname, _, _ in formatter.parse(text_content)
-                )
-                if has_expr:
-                    fieldnames = extract_dependencies(text_content, ALLOWED_BUILTINS)
-                    bindings.append(TextBinding(
-                        component_instance=self,
-                        node=node,
-                        content=text_content,
-                        fields=fieldnames,
-                    ))
-                    fields += fieldnames
-
-        self.__dict__['__bindings__'] = bindings
-        self.__dict__['__fields__'] = list(set(fields))
-
-    def __init_fields__(self):
-        cls = self.__class__
-
-        fields_on_class = [
-            attr for attr in self.__fields__
-            if attr not in self.__dict__
-            and attr in cls.__dict__
-            and not inspect.isfunction(getattr(cls, attr))
-        ]
-
-        for field in fields_on_class:
-            self.__dict__[field] = cls.__dict__[field]
-
-        if fields_on_class:
-            self.react(fields_on_class)
-
-    def react(self, names):
-        text_bindings = [tb for tb in self.__bindings__ if isinstance(tb, TextBinding)]
-        attr_bindings = [ab for ab in self.__bindings__ if isinstance(ab, AttributeBinding)]
-        model_bindings = [mb for mb in self.__bindings__ if isinstance(mb, ModelBinding)]
-        if_bindings = [ib for ib in self.__bindings__ if isinstance(ib, IfBinding)]
-
-        for name in names:
-            # ── model bindings ─────────────────────────────────────────────
-            for mb in model_bindings:
-                if mb.field == name:
-                    val = safe_eval(name, self.__dict__, ALLOWED_BUILTINS)
-                    input_type = mb.node.attrs.get('type', 'text')
-                    if input_type == 'checkbox':
-                        if val:
-                            mb.node.attrs['checked'] = 'checked'
-                        else:
-                            mb.node.attrs.pop('checked', None)
-                    else:
-                        mb.node.attrs['value'] = str(val) if val is not None else ""
-
-            # ── text bindings ──────────────────────────────────────────────
-            for tb in text_bindings:
-                if name in tb.fields:
-                    tb.node.value = safe_format(tb.content, self.__dict__, ALLOWED_BUILTINS)
-
-            # ── attribute bindings ─────────────────────────────────────────
-            for ab in attr_bindings:
-                if name in ab.fields:
-                    final_val = safe_format(ab.content, self.__dict__, ALLOWED_BUILTINS)
+        for ab in attr_bindings_to_update:
+            print("attr_bindings_to_update", attr_bindings_to_update)
+            if ab.node not in looped_nodes:                    
+                if ab.attr not in ["in"]:
+                    final_val = safe_format_with_stores(ab.content, self.__dict__, ALLOWED_BUILTINS, Store._registry, self.__class__._instance_registry)
+                    print("final_val", final_val)
                     if ab.is_boolean:
-                        if final_val:
-                            ab.node.attrs[ab.attr] = ab.attr
-                        else:
-                            ab.node.attrs.pop(ab.attr, None)
+                        bool_val = str(final_val).lower() == 'true'
+                        if isinstance(ab, SelfAttributeBinding):
+                            setattr(ab.component_instance, ab.attr, bool_val)
+                        else: #just an AttributeBinding
+                            ab.node.toggleAttribute(ab.attr, bool_val)
                     else:
-                        ab.node.attrs[ab.attr] = final_val
+                        if isinstance(ab, SelfAttributeBinding):
+                            setattr(ab.component_instance, ab.attr, final_val)
+                        else: #just an AttributeBinding
+                            ab.node.setAttribute(ab.attr, final_val)
 
-            # ── if bindings ────────────────────────────────────────────────
-            for ib in if_bindings:
-                if name in ib.fields:
-                    expr_eval = bool(safe_eval(ib.expr, self.__dict__, ALLOWED_BUILTINS))
-                    ib.is_visible = expr_eval
-                    # Mark the Element node so __html__() emits a comment
-                    ib.node._detached = not expr_eval
-                    ib.node._if_expr = ib.expr
+                else:
+                    _, fname, _, _ = next(iter(formatter.parse(ab.content)))
+                    evaluated_val = safe_eval(fname, self.__dict__, ALLOWED_BUILTINS)
+                    final_val = json.dumps(evaluated_val)
+                    ab.node.setAttribute(ab.attr, final_val)
+                    
+        for ib in if_bindings_to_update:
+            expr_eval = bool(safe_eval(ib.expr, self.__dict__, ALLOWED_BUILTINS))
+            if expr_eval == ib.is_visible:
+                continue  # visibility unchanged — skip DOM mutation
+            if expr_eval == False:
+                #print("REMOVING node from DOM based on IfBinding")
+                ib.node.remove() #client
+            else:
+                #print("INSERTING node into DOM based on IfBinding")
+                ib.anchor.after(ib.node) #client
+            ib.is_visible = expr_eval
 
-    @classmethod
-    def render(cls, **kwargs):
-        """
-        Server-side render: create an instance, apply kwargs (triggering react()),
-        inject the `data-basis-component` hydration marker, and return an HTML string.
-        """
-        instance = cls()
-
-        if kwargs:
-            for k, v in kwargs.items():
-                setattr(instance, k, v)
-
-        root = instance.__element__
-        if root is not None:
-            root.attrs['data-basis-component'] = cls.__name__
-
-        return root.__html__() if root is not None else ""
-
-    @classmethod
-    def mount(cls, container, replace=False, **attributes):
-        """Server-side mount: attach the rendered component tree into a container Element."""
-        new_instance = cls()
-
-        if attributes:
-            for k, v in attributes.items():
-                setattr(new_instance, k, v)
-
-        self_element = new_instance.__element__
-
-        print("*******************", self_element)
-
-        if replace:
-            container.replace_with(self_element)
-        else:
-            container.children.append(self_element)
-            self_element.parent = container
-
-        # Mount child components
-        child_bindings = [b for b in new_instance.__bindings__ if isinstance(b, ChildBinding)]
-        for binding in child_bindings:
-            updated_attrs = dict(binding.node.attrs)
-            binding.childclass.mount(binding.node, replace=True, **updated_attrs)
-
-        # Mount statically declared nested children
-        for nested_child in cls.get_nested_children():
-            nested_child.mount(self_element, replace=False)
-
-        return new_instance

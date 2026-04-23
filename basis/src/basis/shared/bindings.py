@@ -174,14 +174,14 @@ def safe_eval(expr_str, context, allowed_builtins):
         elif isinstance(node, ast.Constant):
             return node.value
 
-        elif isinstance(node, ast.Str):
-            return node.s
+        #elif isinstance(node, ast.Str):
+        #    return node.s
 
-        elif isinstance(node, ast.Num):
-            return node.n
+        #elif isinstance(node, ast.Num):
+        #    return node.n
 
-        elif isinstance(node, ast.NameConstant):
-            return node.value
+        #elif isinstance(node, ast.NameConstant):
+        #    return node.value
 
         elif isinstance(node, ast.BinOp):
             left = _eval(node.left)
@@ -381,7 +381,7 @@ def _process_self_attr_bindings(component_instance, attrs_dict:dict):
         if other_attr.startswith("{") and other_attr.endswith("}"):
             other_attr_no_braces = other_attr.strip("{}")
             other_attr_isboolean = True
-            
+            z
             if other_attr_value == "":
                 other_attr_value = other_attr
             

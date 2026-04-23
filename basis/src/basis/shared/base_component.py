@@ -12,6 +12,15 @@ from basis.shared.bindings import Binding, SelfBinding, TextBinding, \
 
 from basis.shared.store import Store
 
+try:
+    from basis.server.components.element import Element as _ServerElement
+
+    PYSCRIPT = False
+    
+except ImportError:
+
+    PYSCRIPT = True
+
 class BaseComponent(object):
     _registry = {}
 
@@ -96,12 +105,15 @@ class BaseComponent(object):
         self.__dict__['_subscriptions'] = []
         self.__init_selfbinding__()
     
+    def __init_selfbinding__(self):
+        #template is ServerFragment on server and DocumentFragment on client
+        template = self.__template__
+        self_element = template.firstElementChild
+        self.__dict__['__bindings__'].append(SelfBinding(component_instance=self, node=self_element))
+    
     def _get_nodes(self, element=None):
         return NotImplementedError
-    
-    def __init_selfbinding__(self):
-        raise NotImplementedError()
-    
+
     #
     def __init_slot_bindings__(self):
         nodes = self._get_nodes()
@@ -162,7 +174,10 @@ class BaseComponent(object):
                 setattr(refrained, k, v)
 
         return new_instance
-    
+
+    def _create_function_proxy(self, f):
+        return f
+
     #@server
     def _create_update_handler(self, f, input_type):
 
@@ -303,7 +318,7 @@ class BaseComponent(object):
             children_to_insert = named_children.get(slot_name, [])
 
             slot_node.replaceWith(*children_to_insert)
-
+            
         # Fill each <slot> in order
         for sb in default_slot_bindings:
             slot_node = sb.node
@@ -312,28 +327,19 @@ class BaseComponent(object):
             
             slot_node.replaceWith(*children_to_insert)
 
-        #below not required since we fills slots prior to init bindings
-
-        '''
-        all_slotted_nodes = [*named_children.values(), *default_children]
-
-        nodes_to_bind = []
-        for child in all_slotted_nodes:
-            if hasattr(child, 'getAttributeNames'):
-                nodes_to_bind.append(child)
-                #client
-                walker = document.createTreeWalker(child, window.NodeFilter.SHOW_ELEMENT | window.NodeFilter.SHOW_TEXT)
-                n = walker.nextNode()
-                while n:
-                    nodes_to_bind.append(n)
-                    n = walker.nextNode()
-            elif hasattr(child, 'wholeText'):
-                nodes_to_bind.append(child)
-
-        if nodes_to_bind:
-            #self.bind_nodes(nodes_to_bind)
+        # Server-side only: after all children have been moved into their
+        # slot positions inside the component's own template, clear the
+        # container's children list so they are not rendered a second time
+        # as direct children of the host element (e.g. <sign-component>).
+        # On the client, the browser DOM does this automatically when nodes
+        # are moved via replaceWith / insertBefore.
+        try:
+            if not PYSCRIPT:
+                from basis.server.components.element import Element as _ServerElement
+                if isinstance(container, _ServerElement):
+                    container.children = []
+        except ImportError:
             pass
-        '''
 
         return self.__element__
 
@@ -373,6 +379,84 @@ class BaseComponent(object):
                 print(f"__setattr__ on {self.__class__} called for {name}, old value {old_value}, new value {value}")
                 #print("reacting")
                 self.react([name])
+
+    @classmethod
+    def mount(cls, container, replace=False, **attributes):
+        
+        print(f"mount: starting mounting {cls}, with attributes: {attributes}")
+
+        new_instance = cls.initialize(container, **attributes)
+        new_template = new_instance.__template__
+        self_element = new_instance.__element__
+        
+        #child_bindings = [eb for eb in new_instance.__bindings__ if isinstance(eb, ChildBinding)]
+        
+        if replace:
+            container.replaceWith(new_template)
+            for k, v in attributes.items():
+                self_element.setAttribute(k, v)
+
+        else:
+            container.appendChild(new_template)
+
+
+        event_bindings = [eb for eb in new_instance.__bindings__ if isinstance(eb, EventBinding)]
+
+        for binding in event_bindings:
+            if isinstance(binding.target_fn, str):
+                event_method = getattr(new_instance, binding.target_fn)
+                binding.node.removeAttribute(binding.event)
+                event_method_final = new_instance._create_function_proxy(event_method)
+                setattr(binding.element, binding.event, event_method_final)
+                
+            else:
+                if binding.target_fn.__class__.__name__ == "JsProxy":
+                    self_event_method = binding.target_fn
+                    binding.node.removeAttribute(binding.event)
+                    setattr(binding.element, binding.event, self_event_method)
+                else:
+                    raise Exception("C target_fn error:", binding)
+
+
+        for nested_child in cls.get_nested_children():
+            nested_child.mount(self_element, replace=False) #appendChild
+
+ 
+        print(f"mount: finished mounting {cls}")
+
+        return new_instance
+
+
+    @classmethod
+    def mount_app(cls, container, replace=False):
+        
+        new_instance = cls.mount(container, replace)
+
+        #fix styles
+        styles = set()
+
+        #client
+        style_elem = cls._create_element("style")
+
+        for c in cls._registry.values():
+            if hasattr(c, 'style'):
+                if isinstance(c.style, str):
+                    styles.add(c.style)
+                elif inspect.isfunction(c.style):
+                    if c.style.__doc__ is not None:
+                        styles.add(c.style.__doc__)
+                else:
+                    raise
+        
+        #client
+        style_elem.textContent = "\n".join(styles)
+        
+        #client
+        container.prepend(style_elem)
+
+
+        return new_instance
+
 
     @classmethod
     def get_nested_children(cls):

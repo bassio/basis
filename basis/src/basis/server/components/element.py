@@ -3,33 +3,73 @@ from dataclasses import dataclass, field
 
 voids = {'area', 'base', 'br', 'col', 'command', 'embed', 'hr', 'img', 'input', 'keygen', 'link', 'meta', 'param', 'source', 'track', 'wbr', '!doctype'}
 
+class Node(object):
+    parent:Node|None = None
+
+    @property
+    def parentNode(self):
+        if isinstance(self.parent, dict):
+            return self.parent['component']
+        print("parentNode", self, ":::", self.parent)
+        return self.parent
+
+    def after(self, *nodes):
+        parent = self.parentNode
+        print("inside after::", self, parent, parent.children)
+        try:
+            index = parent.children.index(self)
+        except ValueError:
+            # self is not currently in the parent's children list
+            # (e.g. an IfBinding node that was removed); append at the end.
+            print(f"after(): {self!r} not found in parent.children — appending at end")
+            index = len(parent.children) - 1
+        parent.children[index+1:index+1] = list(nodes)
+        # Update parent references for inserted elements
+        for n in nodes:
+            if hasattr(n, 'parent'):
+                n.parent = parent
+
+    def remove(self):
+        """Detach this node from its parent, mirroring browser node.remove()."""
+        parent = self.parentNode
+        if parent is None:
+            return  # already detached — no-op, same as browser behaviour
+        try:
+            parent.children.remove(self)
+        except ValueError:
+            pass  # not in the list — treat as a no-op
+        self.parent = None
+
 @dataclass
-class Comment(object):
-    data:str
+class Comment(Node):
     parent:Element|None = None
     nodeName:str = field(default= "#comment", init=False, repr=False)
+    data:str = field(default="")
     
     def __html__(self):
-        return """<!--{self.data}-->"""
-    
+        return f"""<!--{self.data}-->"""
+
+    def __str__(self):
+        return self.__html__()
+
     @property
     def parentElement(self):
-        return self.parent
+        return self.parentNode
         
     @property
     def descendants(self):
         return []
 
     def cloneNode(self, deep:bool=True):
-        new_node = Comment(value=self.value, parent=self.parent)
+        new_node = Comment(data=self.data, parent=self.parent)
         return new_node
 
 @dataclass
-class ElementString(object):
+class ElementString(Node):
     value:str
-    parent:Element|None = None
     nodeName:str = field(default= "#text", init=False, repr=False)
-
+    parent:Element|None = None
+    
     def wholeText(self):
         return self.value
 
@@ -52,7 +92,7 @@ class ElementString(object):
         
     @property
     def parentElement(self):
-        return self.parent
+        return self.parentNode
     
     @property
     def descendants(self):
@@ -63,14 +103,18 @@ class ElementString(object):
         return new_node
 
 @dataclass
-class Element(object):
+class Element(Node):
     tag:str
     attrs:dict
     children:list
     void_:bool|None = field(default=None, repr=False)
     _detached:bool = field(default=False, repr=False)
     _if_expr:str|None = field(default=None, repr=False)
-
+    
+    @property
+    def nodeName(self):
+        return self.tag
+    
     def __repr__(self):
         return f"{self.__class__.__name__}(tag={self.tag}, attrs={self.attrs}, children={len(self.children)} children)"
 
@@ -95,7 +139,7 @@ class Element(object):
     
     @property
     def parentElement(self):
-        return self.parent['component']
+        self.parentNode
 
     @property
     def childNodes(self):
@@ -134,6 +178,49 @@ class Element(object):
         else:
             #force == False
             del self.attrs[attr]
+
+    # ------------------------------------------------------------------
+    # EventTarget surface (server-side passive registry)
+    #
+    # On the client these are native browser methods.  On the server no
+    # user interaction ever occurs, so handlers are simply recorded in
+    # _listeners for potential introspection (e.g. testing, future
+    # hydration hints).  They are NEVER invoked server-side.
+    # ------------------------------------------------------------------
+
+    def addEventListener(self, event: str, handler, options=None):
+        """
+        Record an event listener in the passive server-side registry.
+
+        Mirrors the browser EventTarget.addEventListener signature;
+        `options` is accepted for API compatibility but ignored.
+        Handlers are stored but never called during SSR.
+        """
+        if '_listeners' not in self.__dict__:
+            self.__dict__['_listeners'] = {}
+        self._listeners.setdefault(event, []).append(handler)
+
+    def removeEventListener(self, event: str, handler, options=None):
+        """
+        Remove a previously-registered listener from the passive registry.
+
+        Mirrors browser EventTarget.removeEventListener; `options` ignored.
+        """
+        listeners = self.__dict__.get('_listeners', {}).get(event, [])
+        try:
+            listeners.remove(handler)
+        except ValueError:
+            pass  # not registered — same no-op as browser behaviour
+
+    def dispatchEvent(self, event_name: str, detail=None):
+        """
+        Server-side stub for EventTarget.dispatchEvent.
+
+        Events are never dispatched during SSR; this exists purely for
+        API surface parity so shared code paths don't raise AttributeError.
+        Always returns True (as if the event was not cancelled).
+        """
+        return True
 
     def __html__(self):
         if getattr(self, '_detached', False):
@@ -198,22 +285,40 @@ class Element(object):
         self.void_ = other_element.void_
 
     def replaceWith(self, *elements):
-        print("parent:::: ", self.parentElement)
-        index = self.parentElement.children.index(self)
-        self.parentElement.children[index+1:index+1] = elements
-        self.parentElement.children.pop(index)
-        print("children::::", self.parentElement.children)
+        parent = self.parentNode
+        print("parent:::: ", parent)
+        index = parent.children.index(self)
+        parent.children[index+1:index+1] = list(elements)
+        parent.children.pop(index)
+        # Update parent references for inserted elements
+        for el in elements:
+            if hasattr(el, 'parent'):
+                el.parent = parent
+        print("children::::", parent.children)
+    
 
     def appendChild(self, child):
         print(f"ELEMENT: appendChild of {self.__tag__}:", child)
-        self.children.append(child)
+        if isinstance(child, ServerFragment):
+            # Mirror DOM DocumentFragment: move its root element in and empty the fragment
+            root = child._consume()
+            if root is not None:
+                self.children.append(root)
+                root.parent = self
+        else:
+            self.children.append(child)
+            if hasattr(child, 'parent'):
+                child.parent = self
 
     def prepend(self, child):
         self.children.insert(0, child)
 
     def insertBefore(self, new_node, reference_node):
+        print("in insertBefore", self.children)
         self.children.insert(self.children.index(reference_node)
                              , new_node)
+        print(self.children)
+        new_node.parent = self  # self is the parent element, not self.parent
  
     def replaceChildren(self, children):
         self.children = children
@@ -238,6 +343,14 @@ class Element(object):
 
     def contains(self, element):
         ...
+    def set_text_content(self, value):
+        txt = ElementString(value, parent=self)
+        for c in self.children:
+            c.parent = None
+
+        self.children = [txt]
+
+    textContent = property(None, set_text_content)
 
 def element_fn(tag, *c, void_=None, **kwargs):
     return Element(tag=tag.lower(), children=list(c), attrs=kwargs, void_=void_)
@@ -382,3 +495,64 @@ def html_to_element(html_string):
     builder.feed(html_string)
     tree_root = builder.get_result()
     return tree_root['component']
+
+
+class ServerFragment:
+    """
+    Server-side equivalent of the browser's DocumentFragment.
+
+    On the client, __template__ is the .content (DocumentFragment) of the
+    cloned <template> element.  Appending a DocumentFragment moves all its
+    children into the target and empties it, so a subsequent append is a
+    silent no-op.  _bind_node() on the client relies on this:
+
+        child_instance = childcomponent_py.mount(node, ...)
+        # mount() already appended __template__ to node above
+        node.appendChild(child_instance.__template__)  # no-op — fragment empty
+
+    ServerFragment reproduces that contract on the server:
+      - wraps the root Element on construction
+      - Element.appendChild() calls _consume() which moves the root into the
+        target container and sets _root = None  (fragment is now empty)
+      - any subsequent appendChild() finds _root is None → no-op  ✓
+
+    This lets server_component._bind_node keep the same line that
+    component.py uses on the client, with identical semantics.
+    """
+
+    def __init__(self, root: 'Element | None'):
+        self._root = root
+
+    @property
+    def root(self) -> 'Element | None':
+        return self._root
+
+    @property
+    def firstElementChild(self):
+        return self._root
+    
+    @property
+    def descendants(self):
+        """Delegate to the wrapped root so _get_nodes() works before mount."""
+        if self._root is not None:
+            yield from self._root.descendants
+
+    def _consume(self) -> 'Element | None':
+        """Move the root out and empty this fragment (like browser DOM does)."""
+        root, self._root = self._root, None
+        return root
+
+    def __repr__(self):
+        return f"ServerFragment(root={self._root!r})"
+
+    def appendChild(self, child:Node):
+        if isinstance(child, ServerFragment):
+            # Mirror DOM DocumentFragment: move its root element in and empty the fragment
+            root = child._consume()
+            if root is not None:
+                self.children.append(root)
+                root.parent = self
+        else:
+            self.children.append(child)
+            if hasattr(child, 'parent'):
+                child.parent = self

@@ -23,8 +23,7 @@ async def pyscript_json(request:Request):
     files_dict["{DOMAIN}"] = base_url.removesuffix("/")
 
     #add main component.py
-    #files_dict["{DOMAIN}/basis/components/component.py"] = "./basis/components/component.py"
-    files_dict["{DOMAIN}/basis/components/new_component.py"] = "./basis/components/component.py"
+    files_dict["{DOMAIN}/basis/components/component.py"] = "./basis/components/component.py"
     files_dict["{DOMAIN}/basis/components/component.js"] = "./basis/components/component.js"
 
     #add shared
