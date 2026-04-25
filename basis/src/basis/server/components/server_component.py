@@ -25,8 +25,9 @@ from basis.shared.bindings import Binding, SelfBinding, TextBinding, \
 
 from basis.shared.store import Store
 from basis.shared.base_component import BaseComponent
+from basis.shared.element import Element, ElementString, Comment, ServerFragment
 
-from basis.server.components.element import Element, ElementString, Comment, html_to_element_tree, ServerFragment
+from basis.server.components.tree_builder import html_to_element_tree
 
 
 
@@ -111,121 +112,7 @@ class ServerComponent(BaseComponent):
         element = Element(tag, attrs={}, children=[])
         return element
 
-    def _bind_node(self, node):
 
-        formatter = Formatter()
-        bindings=[]
-        fields=[]
-
-        if hasattr(node, 'getAttributeNames'): #confirm it is an ELEMENT not a TEXT node
-            element = node
-            if '-' in element.tagName:
-                tag = str.lower(element.tagName)
-                childcomponent_py = self.__class__._registry[tag]
-                dom_child_node_attrs = {a: element.getAttribute(a) for a in element.getAttributeNames()}
-
-                if not getattr(node, '__basis_mounted__', False):
-                    print("appending child..")
-                    child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
-                    node.__basis_mounted__ = True
-                    node.appendChild(child_instance.__template__)  # no-op: fragment already consumed by mount()
-
-                    child_attr_bindings = [sab for sab in child_instance.__bindings__ \
-                                        if isinstance(sab, SelfAttributeBinding)]
-                    bindings.append(ChildBinding(component_instance=self, node=element, childclass=childcomponent_py, childinstance=child_instance, attr_bindings=child_attr_bindings))
-                else:
-                    raise Exception("excepted here __basis_mounted__")
-                
-            if str.lower(element.tagName) == 'slot':
-                return
-
-                
-            element_attrs = [a for a in element.getAttributeNames()]
-            event_attrs = [a for a in element_attrs if a.startswith("on")]
-            other_attrs = [a for a in element_attrs if not a.startswith("on")]
-
-            special_attrs = ["if", "for", "in", "key", "bind"]
-
-            non_standard_attrs = [a for a in other_attrs if not a.startswith("on") and a in special_attrs]
-            standard_attrs = [a for a in other_attrs if a not in non_standard_attrs]
-                        
-            #event
-            event_bindings, event_fields = _process_event_attr_bindings(self, element, event_attrs)
-            bindings += event_bindings
-            fields += event_fields
-            
-            #standard
-            std_bindings, std_fields = _process_standard_attr_bindings(self, element, standard_attrs)
-            bindings += std_bindings
-            fields += std_fields
-
-
-            #'if' attr
-            if 'if' in non_standard_attrs:
-                if_expr = element.getAttribute('if')
-                if_expr_clean = if_expr.removeprefix("{").removesuffix("}")
-                print("if_expr",element.parentNode)
-                fieldnames = extract_dependencies(if_expr, ALLOWED_BUILTINS) 
-                anchor = self._create_comment(f"if: {if_expr_clean}", parent=element.parentNode)
-                
-                #client
-                element.parentNode.insertBefore(anchor, element)
-                bindings.append(IfBinding(
-                    component_instance=self, node=element, expr=if_expr_clean, anchor=anchor, is_visible=True, fields=fieldnames
-                ))
-                fields += fieldnames
-
-            #'bind' attr
-            if 'bind' in non_standard_attrs:
-                bind_attr_value = element.getAttribute('bind')
-                fieldnames = extract_dependencies(bind_attr_value, ALLOWED_BUILTINS)
-                if len(fieldnames) == 1:
-                    field = fieldnames[0]
-                    bindings.append(ModelBinding(component_instance=self, node=element, field=field))
-                    fields.append(field)
-                    tag_name = str.lower(element.tagName)
-                    input_type = element.getAttribute('type') if element.hasAttribute('type') else 'text'
-
-
-                    handler = self._create_update_handler(field, input_type)
-
-                    if tag_name == 'input' and input_type in ['checkbox', 'radio']:
-                        bound_event = 'change'
-                    elif tag_name == 'select':
-                        bound_event = 'change'
-                    else:
-                        bound_event = 'input'
-                    
-                    #client
-                    element.addEventListener(bound_event, handler)
-                    bindings.append(EventBinding(component_instance=self, node=element, event=f"{bound_event}", target_fn=handler))
-
-            if 'for' in non_standard_attrs:
-                inlist_attr_value = element.getAttribute('in').strip("{}")
-                for_attr_value = element.getAttribute('for')
-
-                #client
-                element_clone = element.cloneNode(True)
-                if element.hasAttribute('key'):
-                    bindings.append(KeyedLoopBinding(component_instance=self, node=element, clone=element_clone, parent=element.parentElement, collection=inlist_attr_value, item=for_attr_value, key=element.getAttribute('key')))
-                else:
-                    bindings.append(LoopBinding(component_instance=self, node=element, clone=element_clone, parent=element.parentElement, collection=inlist_attr_value, item=for_attr_value))
-
-        elif node.nodeName == '#text':
-            text_bindings, text_fields = _process_text_bindings(self, node)
-            bindings += text_bindings
-            fields += text_fields
-
-        elif node.nodeName == '#comment':
-            pass
-
-        self.__bindings__.extend(bindings)
-
-        for f in fields:
-            if f not in self.__fields__:
-                self.__fields__.append(f)
-
-    
     @classmethod
     def mount_app_ssr(cls, container, replace=False):
         """

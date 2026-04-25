@@ -30,6 +30,8 @@ async def pyscript_json(request:Request):
     files_dict["{DOMAIN}/basis/shared/store.py"] = "./basis/shared/store.py"
     files_dict["{DOMAIN}/basis/shared/bindings.py"] = "./basis/shared/bindings.py"
     files_dict["{DOMAIN}/basis/shared/base_component.py"] = "./basis/shared/base_component.py"
+    files_dict["{DOMAIN}/basis/shared/element.py"] = "./basis/shared/element.py"
+
 
     for i, m in enumerate(request.app._component_routes, 1):
         #print(f"* Mount Point: '{m.path}' (Name: '{m.name}')")
