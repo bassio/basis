@@ -1,5 +1,6 @@
 import ast
 from dataclasses import dataclass, field
+import inspect
 import json
 import operator
 from string import Formatter
@@ -53,6 +54,10 @@ class Binding(object):
     def component_class(self):
         return self.component_instance.__class__
 
+    def marked_for_hydration(self):
+        return [self.node]
+
+            
 @dataclass
 class SelfBinding(Binding):
     ...
@@ -61,6 +66,7 @@ class SelfBinding(Binding):
 class TextBinding(Binding):
     content:str
     fields:list[str]
+    parent:object
 
     def update(self):
 
@@ -75,7 +81,9 @@ class TextBinding(Binding):
             component_instance_registry=self.component_instance.__class__._instance_registry
         )
 
-
+    def marked_for_hydration(self):
+        return [self.parent]
+    
 @dataclass
 class AttributeBinding(Binding):
     attr:str
@@ -102,8 +110,9 @@ class AttributeBinding(Binding):
 @dataclass
 class SelfAttributeBinding(AttributeBinding):
     def update(self):
+        context = self.component_instance.__dict__
         if self.attr not in ["in"]:
-            final_val = safe_format_with_stores(self.content, self.component_instance.__dict__, ALLOWED_BUILTINS, Store._registry, self.component_instance.__class__._instance_registry)
+            final_val = safe_format_with_stores(self.content, context, ALLOWED_BUILTINS, Store._registry, self.component_instance.__class__._instance_registry)
             if self.is_boolean:
                 bool_val = str(final_val).lower() == 'true'
                 setattr(self.component_instance, self.attr, bool_val)
@@ -112,7 +121,7 @@ class SelfAttributeBinding(AttributeBinding):
         else:
             formatter = Formatter()
             _, fname, _, _ = next(iter(formatter.parse(self.content)))
-            evaluated_val = safe_eval(fname, self.component_instance.__dict__, ALLOWED_BUILTINS)
+            evaluated_val = safe_eval(fname, context, ALLOWED_BUILTINS)
             final_val = json.dumps(evaluated_val)
             setattr(self.component_instance, self.attr, final_val)
 
@@ -163,11 +172,16 @@ class IfBinding(Binding):
             self.anchor.after(self.node)
         self.is_visible = expr_eval
 
+    def marked_for_hydration(self):
+        return [self.node, self.anchor]
+
+
 @dataclass
 class ChildBinding(Binding):
     childclass:str
     childinstance:object=None
-    attr_bindings:list[AttributeBinding] = field(default_factory=list)
+    attr_bindings:list[SelfAttributeBinding] = field(default_factory=list)
+    loop_binding:"LoopBinding|KeyedLoopBinding|None"=None
 
 @dataclass
 class LoopBinding(Binding):
@@ -179,41 +193,82 @@ class LoopBinding(Binding):
     @property
     def fields(self):
         return [self.collection]
+    
+    def _new_clone(self):
+        # New creation
+        cloned_element = self.clone.cloneNode(True)
+        cloned_element.removeAttribute('for')
+        cloned_element.removeAttribute('in')
+
+        return cloned_element
+    
+    def _child_node_attrs_dict(self, item):
+        
+        item_attr_name = self.item # the "for={single_item}"
+        
+        updated_child_node_attrs = {item_attr_name: item}
+                
+
+        if '-' in (tag:=str.lower(self.clone.tagName)):
+            updated_child_node_attrs = {c: self.clone.getAttribute(c) for c in self.clone.getAttributeNames()}
+
+        else:
+            rest_of_fields = [f for f in self.component_instance.__fields__ \
+                              if (f != item_attr_name) \
+                                and (not inspect.isfunction(getattr(self.component_instance, f))) \
+                                and (not f in ["for", "in", "key"])]
+            
+            for field in rest_of_fields:
+                updated_child_node_attrs[field] = getattr(self.component_instance, field)
+
+        updated_child_node_attrs.pop('for', None)
+        updated_child_node_attrs.pop('in', None)
+        updated_child_node_attrs.pop('key', None)
+
+        return updated_child_node_attrs
 
     def update(self):
-        import inspect
+
+        # keep a reference to child bindings for this loop binding
+        bindings_to_delete = [cb for cb in self.component_instance.__bindings__ \
+                              if isinstance(cb, ChildBinding) \
+                                and cb.loop_binding == self]
 
         collection_value = getattr(self.component_instance, self.collection, [])
         fragment = self.component_instance._create_document_fragment()
 
         for i in collection_value:
-            cloned_element = self.clone.cloneNode(True)
-            cloned_element.removeAttribute('for')
-            cloned_element.removeAttribute('in')
+            cloned_element = self._new_clone()
+            
+            updated_child_node_attrs = self._child_node_attrs_dict()
             
             if '-' in (tag:=str.lower(self.clone.tagName)):
                 childcomponent_py = self.component_instance.__class__._registry[tag]
-                updated_child_node_attrs = {c: cloned_element.getAttribute(c) for c in cloned_element.getAttributeNames()}
             else:
                 quick_component = self.component_instance.__class__.from_template(cloned_element.outerHTML)
                 childcomponent_py = quick_component
-                updated_child_node_attrs = {self.item: i}
-                rest_of_fields = [f for f in self.component_instance.__fields__ if (f != self.item) and (not inspect.isfunction(getattr(self.component_instance, f)))]
-                for field in rest_of_fields:
-                    updated_child_node_attrs[field] = getattr(self.component_instance, field)
                     
-            new_cb = ChildBinding(component_instance=self.component_instance, node=cloned_element, childclass=childcomponent_py)
+            new_cb = ChildBinding(component_instance=self.component_instance,
+                                  node=cloned_element,
+                                  childclass=childcomponent_py,
+                                  loop_binding=self)
             self.component_instance.add_binding(new_cb)
 
             custom_child_instance = childcomponent_py.mount(fragment, replace=False, **updated_child_node_attrs)
             new_cb.childinstance = custom_child_instance
         
+
         # delete old child bindings for this loop
-        bindings_to_rem = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.node == self.node]
-        for rem in bindings_to_rem:
+        # we essentially delete all the bindings non-selectively as we have rebuilt new ones
+        for rem in bindings_to_delete:
             self.component_instance.remove_binding(rem)
-            
+        
+        #do the replace
         self.parent.replaceChildren(fragment)
+
+    def marked_for_hydration(self):
+        return [self.node, self.parent]
+
 
 @dataclass
 class KeyedLoopBinding(Binding):
@@ -222,102 +277,157 @@ class KeyedLoopBinding(Binding):
     clone:object
     parent:object
     key:str
+    instances:dict = field(default_factory=dict)
 
     @property
     def fields(self):
         return [self.collection]
 
-    def update(self):
-        import inspect
-        from string import Formatter
-        
-        formatter = Formatter()
-        collection_value = getattr(self.component_instance, self.collection, [])
-        
-        if not hasattr(self, 'instances'):
-            self.instances = {}
+    def _new_clone(self):
+        # New creation
+        cloned_element = self.clone.cloneNode(True)
+        cloned_element.removeAttribute('for')
+        cloned_element.removeAttribute('in')
+        cloned_element.removeAttribute('key')
 
-        new_instances = {}
-        fragment = self.component_instance._create_document_fragment()
+        return cloned_element
+
+    def _child_node_attrs_dict(self, item):
         
+        item_attr_name = self.item # the "for={single_item}"
+        
+        updated_child_node_attrs = {item_attr_name: item}
+        
+        rest_of_fields = [f for f in self.component_instance.__fields__ \
+                          if (f != item_attr_name) \
+                            and (not inspect.isfunction(getattr(self.component_instance, f))) \
+                            and (not f in ["for", "in", "key"])]
+        
+        for field in rest_of_fields:
+            updated_child_node_attrs[field] = getattr(self.component_instance, field)
+
+
+        if '-' in (tag:=str.lower(self.clone.tagName)):
+
+            formatter = Formatter()
+
+            for c_attr in self.clone.getAttributeNames():
+                if c_attr not in updated_child_node_attrs:
+                    c_attr_value = self.clone.getAttribute(c_attr)
+                    has_expr = any(fname is not None for _, fname, _, _ in formatter.parse(c_attr_value))
+                    if has_expr:
+                        val = safe_format(c_attr_value, updated_child_node_attrs, ALLOWED_BUILTINS)
+                        updated_child_node_attrs[c_attr] = val
+                    else:
+                        updated_child_node_attrs[c_attr] = c_attr_value
+
+            updated_child_node_attrs.pop('for', None)
+            updated_child_node_attrs.pop('in', None)
+            updated_child_node_attrs.pop('key', None)
+
+        return updated_child_node_attrs
+
+    def _child_component_class(self):
+        cloned_element = self._new_clone()
+        if '-' in (tag:=str.lower(cloned_element.tagName)):
+            childcomponent_py = self.component_instance.__class__._registry[tag]
+        else:
+            quick_component = self.component_instance.__class__.from_template(cloned_element.outerHTML)
+            childcomponent_py = quick_component
+
+        return childcomponent_py
+
+    def get_collection_keys(self):
+        collection_value = getattr(self.component_instance, self.collection, [])
+
+        keys = []
+
         for i in collection_value:
-            if isinstance(i, dict):
+            if isinstance(i, dict): #i.e. list of dicts
                 k_val = i.get(self.key)
             else:
                 try:
-                    k_val = getattr(i, self.key)
+                    k_val = getattr(i, self.key) #i.e. list of objects that has "key" as attribute
                 except AttributeError:
                     k_val = getattr(i, 'get', lambda k: None)(self.key)
             
-            if k_val in self.instances:
+
+            keys.append(k_val)
+
+        return keys
+    
+    def get_collection_items(self):
+        collection_value = getattr(self.component_instance, self.collection, [])
+
+        return [i for i in collection_value]
+    
+
+    def update(self):
+
+        # keep a reference to child bindings for this loop binding
+        related_child_bindings = [cb for cb in self.component_instance.__bindings__ \
+                                if isinstance(cb, ChildBinding) \
+                                and cb.loop_binding == self]
+
+        
+        new_instances = {}
+        fragment = self.component_instance._create_document_fragment()
+        
+        keys = self.get_collection_keys()
+        items = self.get_collection_items()
+
+        existing_instances_keys = [ik for ik in self.instances.keys()]
+        
+        for k_val, i in zip(keys, items):            
+            if k_val in existing_instances_keys:
                 # Reuse
                 child_instance = self.instances[k_val]
                 
-                updated_child_node_attrs = {self.item: i}
-                rest_of_fields = [f for f in self.component_instance.__fields__ if (f != self.item) and (not inspect.isfunction(getattr(self.component_instance, f)))]
-                for field in rest_of_fields:
-                    updated_child_node_attrs[field] = getattr(self.component_instance, field)
-                    
-                if '-' in (tag:=str.lower(self.clone.tagName)):
-                    for c_attr in self.clone.getAttributeNames():
-                        c_attr_value = self.clone.getAttribute(c_attr)
-                        if c_attr not in updated_child_node_attrs:
-                            has_expr = any(fname is not None for _, fname, _, _ in formatter.parse(c_attr_value))
-                            if has_expr:
-                                val = safe_format(c_attr_value, updated_child_node_attrs, ALLOWED_BUILTINS)
-                                updated_child_node_attrs[c_attr] = val
-                            else:
-                                updated_child_node_attrs[c_attr] = c_attr_value
-                    
+                updated_child_node_attrs = self._child_node_attrs_dict(i)
+                
                 # Update props and component reacts
                 for k, v in updated_child_node_attrs.items():
-                    setattr(child_instance, k, v)
-                    
-                fragment.appendChild(child_instance.__element__)
+                    with child_instance.refrain() as refrained:
+                        setattr(refrained, k, v)
+
+                child_instance.__element__.setAttribute('data-item-key', k_val)
                 new_instances[k_val] = child_instance
+
+                fragment.appendChild(child_instance.__element__)
+
             else:
                 # New creation
-                cloned_element = self.clone.cloneNode(True)
-                cloned_element.removeAttribute('for')
-                cloned_element.removeAttribute('in')
-                cloned_element.removeAttribute('key')
+                cloned_element = self._new_clone()
+                updated_child_node_attrs = self._child_node_attrs_dict(i)
+                
 
-                updated_child_node_attrs = {self.item: i}
-                rest_of_fields = [f for f in self.component_instance.__fields__ if (f != self.item) and (not inspect.isfunction(getattr(self.component_instance, f)))]
-                for field in rest_of_fields:
-                    updated_child_node_attrs[field] = getattr(self.component_instance, field)
+                childcomponent_py = self._child_component_class()
                 
-                if '-' in (tag:=str.lower(self.clone.tagName)):
-                    childcomponent_py = self.component_instance.__class__._registry[tag]
-                    for c_attr in cloned_element.getAttributeNames():
-                        if c_attr not in updated_child_node_attrs:
-                            c_attr_value = cloned_element.getAttribute(c_attr)
-                            has_expr = any(fname is not None for _, fname, _, _ in formatter.parse(c_attr_value))
-                            if has_expr:
-                                val = safe_format(c_attr_value, updated_child_node_attrs, ALLOWED_BUILTINS)
-                                updated_child_node_attrs[c_attr] = val
-                            else:
-                                updated_child_node_attrs[c_attr] = c_attr_value
-                else:
-                    quick_component = self.component_instance.__class__.from_template(cloned_element.outerHTML)
-                    childcomponent_py = quick_component
-                
-                new_cb = ChildBinding(component_instance=self.component_instance, node=cloned_element, childclass=childcomponent_py)
+                child_instance = childcomponent_py.mount(fragment, replace=False, **updated_child_node_attrs)
+                child_instance.__element__.setAttribute('data-item-key', k_val)
+                new_instances[k_val] = child_instance
+
+
+                new_cb = ChildBinding(component_instance=self.component_instance,
+                        node=child_instance.__element__,
+                        childclass=childcomponent_py,
+                        childinstance=child_instance,
+                        loop_binding=self)
                 self.component_instance.add_binding(new_cb)
-
-                custom_child_instance = childcomponent_py.mount(fragment, replace=False, **updated_child_node_attrs)
-                new_cb.childinstance = custom_child_instance
-                new_instances[k_val] = custom_child_instance
+                
 
         # Cleanup old child bindings that are removed
         for k_val, old_instance in self.instances.items():
             if k_val not in new_instances:
-                bindings_to_rem = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and getattr(cb, 'childinstance', None) == old_instance]
+                bindings_to_rem = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.childinstance == old_instance]
                 for rem in bindings_to_rem:
                     self.component_instance.remove_binding(rem)
 
         self.parent.replaceChildren(fragment)
         self.instances = new_instances
+
+    def marked_for_hydration(self):
+        return [self.node, self.parent]
 
 @dataclass
 class SlotBinding(Binding):
@@ -447,7 +557,7 @@ def safe_eval(expr_str, context, allowed_builtins):
     try:
         return _eval(tree.body)
     except Exception as e:
-        print(f"Error evaluating '{expr_str}': {e}")
+        print(f"Error evaluating '{expr_str}': {e}", context)
         return f"[Error: {expr_str}]"
 
 def safe_format(template_str, context, allowed_builtins):
@@ -537,6 +647,7 @@ def _process_standard_attr_bindings(component_instance, element, attribute_names
 
     bindings = []
     fields = []
+    #print("_process_standard_attr_bindings", component_instance, element, attribute_names)
 
     for other_attr in attribute_names:
         if other_attr.startswith("{") and other_attr.endswith("}"):
@@ -544,7 +655,7 @@ def _process_standard_attr_bindings(component_instance, element, attribute_names
             other_attr_value = element.getAttribute(other_attr)
             other_attr_isboolean = True
             
-            if other_attr_value == "":
+            if (other_attr_value == "") or (other_attr_value == None):
                 other_attr_value = other_attr
             
             element.removeAttribute(other_attr)
@@ -554,7 +665,6 @@ def _process_standard_attr_bindings(component_instance, element, attribute_names
             other_attr_value = element.getAttribute(other_attr)
             other_attr_isboolean = False
 
-        print(other_attr, other_attr_value)
         fnames = [fname for _, fname, _, _ in formatter.parse(other_attr_value) if fname is not None]
         has_expr = any(fnames)
         if has_expr:
@@ -576,11 +686,11 @@ def _process_self_attr_bindings(component_instance, attrs_dict:dict):
         if other_attr.startswith("{") and other_attr.endswith("}"):
             other_attr_no_braces = other_attr.strip("{}")
             other_attr_isboolean = True
-            z
-            if other_attr_value == "":
+
+            if (other_attr_value == "") or (other_attr_value == None):
                 other_attr_value = other_attr
             
-            #element.removeAttribute(other_attr)
+            component_instance.__element__.removeAttribute(other_attr)
 
         else:
             other_attr_no_braces = other_attr
@@ -632,7 +742,11 @@ def _process_text_bindings(component_instance, textnode):
     has_expr = any(fnames)
     if has_expr:
         fieldnames = extract_dependencies(text_content, ALLOWED_BUILTINS)
-        bindings.append(TextBinding(component_instance=component_instance, node=node, content=text_content, fields=fieldnames))
+        bindings.append(TextBinding(component_instance=component_instance, \
+                                    node=node, \
+                                    content=text_content, \
+                                    fields=fieldnames, \
+                                    parent=node.parentNode))
         fields += fieldnames
 
     return bindings, fields

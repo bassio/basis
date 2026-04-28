@@ -11,15 +11,22 @@ class ElementTreeBuilder(TreeBuilder):
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.current_element = None
-        self.element_stack = []
-        self.root = None
+        self.reset()
     
     def reset(self):
         """Reset the builder state."""
         self.current_element = None
         self.element_stack = []
         self.root = None
+        # --- Tree ID State ---
+        self.path_stack = ["r"]  # Root prefix
+        self.index_stack = [0]   # Current index at each depth
+
+    def _generate_current_id(self):
+        """Combines the current path and the current index at this depth."""
+        parent_path = ":".join(self.path_stack)
+        current_idx = self.index_stack[-1]
+        return f"{parent_path}:{current_idx}"
     
     def feed(self, markup):
         """Parse the markup and build an Element tree."""
@@ -55,7 +62,8 @@ class ElementTreeBuilder(TreeBuilder):
         
         for key, value in attrs.items():
             if key == 'class':
-                fasthtml_attrs['cls'] = value
+                #fasthtml_attrs['cls'] = value
+                fasthtml_attrs['class'] = value
             elif key.startswith('data-'):
                 # Convert data-foo to data_foo
                 fasthtml_attrs[key.replace('_', '-')] = value
@@ -63,7 +71,11 @@ class ElementTreeBuilder(TreeBuilder):
                 fasthtml_attrs[key] = value
         
         tag_func = element_fn
-        
+
+        #commented for now
+        #element_id = self._generate_current_id()
+        #fasthtml_attrs['data-hydration-id'] = element_id
+
         # Create element (children will be added later)
         element = {'tag': name, 'func': tag_func, 'attrs': fasthtml_attrs, 'children': []}
         
@@ -74,7 +86,15 @@ class ElementTreeBuilder(TreeBuilder):
         
         if self.root is None:
             self.root = element
-    
+
+        # --- Descend Tree Logic ---
+        # We push the current ID (without index) into path stack for children
+        # We use the index as part of the path name for the next level
+        this_level_id_fragment = str(self.index_stack[-1])
+        self.path_stack.append(this_level_id_fragment)
+        # Push a fresh counter for this element's children
+        self.index_stack.append(0)
+        
     def handle_endtag(self, name):
         """Handle closing tags."""
         if self.current_element and self.current_element['tag'] == name:
@@ -83,6 +103,12 @@ class ElementTreeBuilder(TreeBuilder):
             children = self.current_element['children']
             tag_func = self.current_element['func']
             
+            # Finished processing children, so go back up
+            self.index_stack.pop()
+            self.path_stack.pop()
+            # Increment the index of the PARENT so the next sibling gets +1
+            self.index_stack[-1] += 1
+
             # Create the component with children and attributes
             if children:
                 component = element_fn(self.current_element['tag'], *children, **attrs)
@@ -92,6 +118,8 @@ class ElementTreeBuilder(TreeBuilder):
             # set parent for ElementString children
             for string_child in [child for child in children if isinstance(child, ElementString)]:
                 string_child.parent = component
+
+            #component._hydration_id = attrs['data-hydration-id']
 
             self.current_element['component'] = component
 
@@ -110,9 +138,10 @@ class ElementTreeBuilder(TreeBuilder):
     def handle_data(self, data):
         """Handle text content."""
         data = data.strip()
-        data = ElementString(value=data, parent=self.current_element)
-        if data and self.current_element is not None:
-            self.current_element['children'].append(data)
+        if data != "": # check for and eliminate empty ElementString("") in the tree
+            data = ElementString(value=data, parent=self.current_element)
+            if data and self.current_element is not None:
+                self.current_element['children'].append(data)
     
     def handle_comment(self, data):
         """Handle comment data."""

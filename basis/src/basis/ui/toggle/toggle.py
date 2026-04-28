@@ -1,7 +1,6 @@
-import basis.components.component as component
-from pyscript import window
+from basis.shared.component import Component
 
-class Toggle(component.Component):
+class Toggle(Component):
     __tag__ = "ui-toggle"
     first = ""
     second = ""

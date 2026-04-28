@@ -1,8 +1,7 @@
-import basis.components.component as component
+from basis.shared.component import Component
 
-class Sidebar(component.Component):
+class Sidebar(Component):
     __tag__ = "ui-sidebar"
-    #__shadow__ = True
     side = "left"
     collapsible = "offcanvas" # or "icon"
     
@@ -49,9 +48,8 @@ class Sidebar(component.Component):
         </div>
         """
 
-class SidebarHeader(component.Component):
+class SidebarHeader(Component):
     __tag__ = "ui-sidebar-header"
-    #__shadow__ = True
 
     def style(self):
         """
@@ -72,9 +70,8 @@ class SidebarHeader(component.Component):
         </div>
         """
 
-class SidebarContent(component.Component):
+class SidebarContent(Component):
     __tag__ = "ui-sidebar-content"
-    #__shadow__ = True
 
     def style(self):
         """
@@ -107,9 +104,8 @@ class SidebarContent(component.Component):
         </div>
         """
 
-class SidebarGroup(component.Component):
+class SidebarGroup(Component):
     __tag__ = "ui-sidebar-group"
-    #__shadow__ = True
 
     def style(self):
         """
@@ -129,9 +125,8 @@ class SidebarGroup(component.Component):
         </div>
         """
 
-class SidebarGroupLabel(component.Component):
+class SidebarGroupLabel(Component):
     __tag__ = "ui-sidebar-group-label"
-    #__shadow__ = True
 
     def style(self):
         """
@@ -158,9 +153,8 @@ class SidebarGroupLabel(component.Component):
         </div>
         """
 
-class SidebarGroupContent(component.Component):
+class SidebarGroupContent(Component):
     __tag__ = "ui-sidebar-group-content"
-    #__shadow__ = True
 
     def style(self):
         """
@@ -179,9 +173,8 @@ class SidebarGroupContent(component.Component):
         </div>
         """
 
-class SidebarMenu(component.Component):
+class SidebarMenu(Component):
     __tag__ = "ui-sidebar-menu"
-    #__shadow__ = True
     
     def style(self):
         """
@@ -202,9 +195,8 @@ class SidebarMenu(component.Component):
         </div>
         """
 
-class SidebarMenuButton(component.Component):
+class SidebarMenuButton(Component):
     __tag__ = "ui-sidebar-menu-button"
-    #__shadow__ = True
     active = "false"
     
     def style(self):
@@ -251,9 +243,8 @@ class SidebarMenuButton(component.Component):
         </button>
         """
 
-class SidebarFooter(component.Component):
+class SidebarFooter(Component):
     __tag__ = "ui-sidebar-footer"
-    #__shadow__ = True
 
     def style(self):
         """
@@ -274,7 +265,7 @@ class SidebarFooter(component.Component):
         </div>
         """
 
-class SidebarTrigger(component.Component):
+class SidebarTrigger(Component):
     __tag__ = "ui-sidebar-trigger"
     target = ""
     

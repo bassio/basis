@@ -1,33 +1,11 @@
-from string import Formatter
-from dataclasses import dataclass
-from functools import wraps, partial
-import inspect
-import json
 import copy
 
-try:
-    import pyscript
-
-    PYSCRIPT = True
-    
-except ImportError:
-
-    PYSCRIPT = False
-
-from basis.shared.bindings import Binding, SelfBinding, TextBinding, \
-    AttributeBinding, SelfAttributeBinding, ModelBinding, EventBinding, IfBinding, \
-    ChildBinding, LoopBinding, KeyedLoopBinding, SlotBinding, \
-    safe_eval, safe_format, safe_format_with_stores, \
-    extract_dependencies, ALLOWED_BUILTINS, Refrain, \
-    _process_event_attr_bindings, _process_standard_attr_bindings, \
-    _process_text_bindings
-    
-
+from basis.shared.bindings import SelfBinding
 from basis.shared.store import Store
 from basis.shared.base_component import BaseComponent
 from basis.shared.element import Element, ElementString, Comment, ServerFragment
 
-from basis.server.components.tree_builder import html_to_element_tree
+from basis.server.tree_builder import html_to_element_tree
 
 
 
@@ -112,9 +90,26 @@ class ServerComponent(BaseComponent):
         element = Element(tag, attrs={}, children=[])
         return element
 
+    def fill_slots(self, container):
+        if not self.has_slots():
+            # No slots in this component — nothing was moved, nothing to clear.
+            return
+
+        super().fill_slots(container)
+
+        # Server-side only: after all light-DOM children have been moved into
+        # their slot positions inside the component's own template, clear the
+        # container's children list so they are not rendered a second time as
+        # direct children of the host element (e.g. <ui-accordion>).
+        #
+        # On the client the browser does this automatically: once slot
+        # distribution runs, the original host children are no longer rendered
+        # at their original position.  We must replicate that here.
+        if isinstance(container, Element):
+            container.children = []
 
     @classmethod
-    def mount_app_ssr(cls, container, replace=False):
+    def mount_app_ssr_old(cls, container, replace=False):
         """
         Entry point for SSR pages.
 

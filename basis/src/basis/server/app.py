@@ -31,6 +31,7 @@ async def pyscript_json(request:Request):
     files_dict["{DOMAIN}/basis/shared/bindings.py"] = "./basis/shared/bindings.py"
     files_dict["{DOMAIN}/basis/shared/base_component.py"] = "./basis/shared/base_component.py"
     files_dict["{DOMAIN}/basis/shared/element.py"] = "./basis/shared/element.py"
+    files_dict["{DOMAIN}/basis/shared/component.py"] = "./basis/shared/component.py"
 
 
     for i, m in enumerate(request.app._component_routes, 1):

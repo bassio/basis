@@ -1,5 +1,4 @@
 import inspect
-import json
 from pathlib import Path
 from pathlib import Path
 from string import Formatter
@@ -14,16 +13,6 @@ from basis.shared.bindings import Binding, SelfBinding, TextBinding, \
 
 from basis.shared.store import Store
 
-try:
-    import pyscript
-
-    PYSCRIPT = True
-    
-except ImportError:
-
-    PYSCRIPT = False
-
-from basis.shared.element import Element
 
 class BaseComponent(object):
     _registry = {}
@@ -108,13 +97,10 @@ class BaseComponent(object):
         self.__dict__['_deps'] = {}
         self.__dict__['__fields__'] = []
         self.__dict__['_subscriptions'] = []
-        self.__init_selfbinding__()
         
     def add_binding(self, binding):
 
         self.__dict__['__bindings__'].append(binding)
-
-        print(binding)
 
         if hasattr(binding, 'fields'):
             for field in binding.fields:
@@ -153,7 +139,27 @@ class BaseComponent(object):
         template = self.__template__
         self_element = template.firstElementChild
         self.add_binding(SelfBinding(component_instance=self, node=self_element))
+        
+    def __init_selfbinding__(self):
+        #template is ServerFragment on server and DocumentFragment on client
+        template = self.__template__
+        self_element = template.firstElementChild
+        self.add_binding(SelfBinding(component_instance=self, node=self_element))
     
+    def set_selfbinding(self, node):
+        #template is ServerFragment on server and DocumentFragment on client
+        sb = None
+
+        for b in self.__bindings__:
+            if isinstance(b, SelfBinding):
+                sb = b
+                break
+
+        if sb:
+            sb.node = node
+        else:
+            self.__bindings__.append(SelfBinding(component_instance=self, node=node))
+
     def _get_nodes(self, element=None):
         return NotImplementedError
 
@@ -187,11 +193,11 @@ class BaseComponent(object):
 
         attr_names = [k for k in attrs_dict.keys()]
 
-        print("attrs_dict", attrs_dict, self.__class__)
+        #print("attrs_dict", attrs_dict, self.__class__)
 
         attr_bindings, fields = _process_self_attr_bindings(self, attrs_dict)
         
-        print("self attr bindings:", attr_bindings)
+        #print("self attr bindings:", attr_bindings)
 
         for b in attr_bindings:
             self.add_binding(b)
@@ -201,8 +207,7 @@ class BaseComponent(object):
     def initialize(cls, container, **kwargs):
         new_instance = cls()
 
-        #if len(kwargs):
-        #    new_instance.__dict__.update(**kwargs)
+        new_instance.__init_selfbinding__()
 
         new_instance.__init_self_attr_bindings__(**kwargs)
         
@@ -260,7 +265,7 @@ class BaseComponent(object):
                 dom_child_node_attrs = {a: element.getAttribute(a) for a in element.getAttributeNames()}
 
                 if not getattr(node, '__basis_mounted__', False):
-                    print("appending child..")
+                    print("appending child.. with dom attrs:", dom_child_node_attrs)
                     child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
                     node.__basis_mounted__ = True
                     node.appendChild(child_instance.__template__)
@@ -289,7 +294,11 @@ class BaseComponent(object):
                 if_expr = element.getAttribute('if')
                 if_expr_clean = if_expr.removeprefix("{").removesuffix("}")
                 fieldnames = extract_dependencies(if_expr, ALLOWED_BUILTINS) 
-                anchor = self._create_comment(f"if: {if_expr_clean}")
+                
+                #anchor = self._create_element(f"if: {if_expr_clean}")
+                anchor = self._create_element(f"div")
+                anchor.setAttribute("style", "display: contents;")
+                anchor.setAttribute("data-if-expression", "{" + if_expr_clean + "}")
                 
                 #client
                 element.parentNode.insertBefore(anchor, element)
@@ -321,7 +330,7 @@ class BaseComponent(object):
                     
                     #client
                     element.addEventListener(bound_event, handler)
-                    bindings.append(EventBinding(component_instance=self, node=element, event=f"{bound_event}", target_fn='bind_handler'))
+                    bindings.append(EventBinding(component_instance=self, node=element, event=f"on{bound_event}", target_fn='bind_handler'))
 
             if 'for' in non_standard_attrs:
                 inlist_attr_value = element.getAttribute('in').strip("{}")
@@ -353,15 +362,15 @@ class BaseComponent(object):
         for node in nodes:
             self._bind_node(node)
 
-    def __init_bindings__(self):
+    def __init_bindings__(self, root_element=None):
 
         print(f"__init_bindings__ of {self.__class__}")
 
-        nodes = self._get_nodes()
+        nodes = self._get_nodes(element=root_element)
 
         self.bind_nodes(nodes)
 
-        print(f"Bindings of {self.__class__}:", self.__bindings__)
+        #print(f"Bindings of {self.__class__}:", self.__bindings__)
         
         # add to component instance registry if it is has an id
         self_element = self.__element__
@@ -430,24 +439,20 @@ class BaseComponent(object):
     @property
     def __element__(self):
         for binding in self.__bindings__:
-            match binding:
-                case SelfBinding:
-                    return binding.node
+            if isinstance(binding, SelfBinding):
+                return binding.node
         return None
 
     def fill_slots(self, container):
         
-        if not self.has_slots():
-            pass
+        slot_bindings:list[SlotBinding] = [b for b in self.__bindings__ if isinstance(b, SlotBinding)]
+
+        if not len(slot_bindings):
             return
 
-        slot_bindings:list[SlotBinding] = [b for b in self.__bindings__ if isinstance(b, SlotBinding)]
         named_slot_bindings = [nb for nb in slot_bindings if not nb.is_default]
         default_slot_bindings = [db for db in slot_bindings if db.is_default]
         
-        # Snapshot childNodes now (live NodeList changes as we move nodes)
-        
-        #client
         light_children = list(container.childNodes)
 
         # Partition by slot attribute value
@@ -468,40 +473,26 @@ class BaseComponent(object):
             else:
                 default_children.append(child)
         
-        print("Filling slots: default_children", default_children)
-        print("Filling slots: named_children", named_children)
+        #print("Filling slots: default_children", default_children)
+        #print("Filling slots: named_children", named_children)
 
         for sb in named_slot_bindings:
             slot_node = sb.node
             slot_name = sb.name
 
-            children_to_insert = named_children.get(slot_name, [])
+            named_children_to_insert = named_children.get(slot_name, [])
 
-            slot_node.replaceWith(*children_to_insert)
+            slot_node.replaceWith(*named_children_to_insert)
             
         # Fill each <slot> in order
         for sb in default_slot_bindings:
             slot_node = sb.node
 
-            children_to_insert = default_children
+            default_children_to_insert = default_children
             
-            slot_node.replaceWith(*children_to_insert)
+            slot_node.replaceWith(*default_children_to_insert)
 
-        # Server-side only: after all children have been moved into their
-        # slot positions inside the component's own template, clear the
-        # container's children list so they are not rendered a second time
-        # as direct children of the host element (e.g. <sign-component>).
-        # On the client, the browser DOM does this automatically when nodes
-        # are moved via replaceWith / insertBefore.
-        try:
-            if not PYSCRIPT:
-                if isinstance(container, Element):
-                    container.children = []
-        except ImportError:
-            pass
 
-        return self.__element__
-    
     def __getattribute__(self, name):
         try:
             if name.startswith("$"):
@@ -541,6 +532,8 @@ class BaseComponent(object):
         
         print(f"mount: starting mounting {cls}, with attributes: {attributes}")
 
+        container = container
+
         new_instance = cls.initialize(container, **attributes)
         new_template = new_instance.__template__
         self_element = new_instance.__element__
@@ -571,10 +564,23 @@ class BaseComponent(object):
                 setattr(binding.element, binding.event, self_event_method)
                 
 
+        #print("nested:", cls.get_nested_children())
         for nested_child in cls.get_nested_children():
-            nested_child.mount(self_element, replace=False) #appendChild
+            child_instance = nested_child.mount(self_element, replace=False) #appendChild
+            #child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
+            #node.__basis_mounted__ = True
+            #node.appendChild(child_instance.__template__)
 
- 
+            #child_attr_bindings = [sab for sab in child_instance.__bindings__ \
+            #                    if isinstance(sab, SelfAttributeBinding)]
+            child_attr_bindings = []
+
+            new_instance.__bindings__.append(ChildBinding(component_instance=new_instance,
+                                                          node=self_element,
+                                                          childclass=nested_child,
+                                                          childinstance=child_instance,
+                                                          attr_bindings=child_attr_bindings))
+
         print(f"mount: finished mounting {cls}")
 
         return new_instance
@@ -609,8 +615,7 @@ class BaseComponent(object):
 
 
         return new_instance
-
-
+    
     @classmethod
     def get_nested_children(cls):
         nested = []
@@ -620,6 +625,7 @@ class BaseComponent(object):
         if len(cls_attrs_order) > 0:
 
             members = inspect.getmembers_static(cls)
+            #print("members :::", members)
 
             subclass_members = [(k, v) for k, v in members
                                 if inspect.isclass(v) \
@@ -644,7 +650,28 @@ class BaseComponent(object):
             if isinstance(binding, SlotBinding):
                 return True
         return False
-    
+
+    def get_child_bindings(self, recursive=False):
+
+        first_level_bindings = [c for c in self.__bindings__ if isinstance(c, ChildBinding)]
+
+        for cb in first_level_bindings:
+            yield cb
+            if recursive:
+                yield from cb.childinstance.get_child_bindings(recursive=True)
+
+    def get_bindings(self, recursive=False):
+        
+        first_level_bindings = [c for c in self.__bindings__]
+        first_level_child_bindings = [c for c in first_level_bindings if isinstance(c, ChildBinding)]
+
+        for b in first_level_bindings:
+            yield b
+        
+        if recursive:
+            for cb in first_level_child_bindings:
+                yield from cb.childinstance.get_bindings(recursive=True)
+
     def refrain(self):
         ref_context = Refrain(self)
         return ref_context
@@ -665,14 +692,15 @@ class BaseComponent(object):
         print(f"In react({names}) of {self.__class__}")
 
         bindings_to_update = []
+
+        dependencies = set(names).intersection(set(self._deps.keys()))
         
-        for name in names:
-            if name in self._deps:
-                for binding in self._deps[name]:
-                    if binding not in bindings_to_update:
-                        bindings_to_update.append(binding)
+        for name in dependencies:
+            for binding in self._deps[name]:
+                if binding not in bindings_to_update:
+                    bindings_to_update.append(binding)
         
-        print("bindings_to_update: ", bindings_to_update)
+        #print("bindings_to_update: ", bindings_to_update)
         
         for binding in bindings_to_update:
             if hasattr(binding, 'update'):

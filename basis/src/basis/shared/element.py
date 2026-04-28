@@ -8,12 +8,11 @@ class Node(object):
     def parentNode(self):
         if isinstance(self.parent, dict):
             return self.parent['component']
-        print("parentNode", self, ":::", self.parent)
         return self.parent
 
     def after(self, *nodes):
         parent = self.parentNode
-        print("inside after::", self, parent, parent.children)
+        #print("inside after::", self, parent, parent.children)
         try:
             index = parent.children.index(self)
         except ValueError:
@@ -183,7 +182,8 @@ class Element(Node):
             self.attrs[attr] = ""
         else:
             #force == False
-            del self.attrs[attr]
+            if attr in self.attrs:
+                del self.attrs[attr]
 
     # ------------------------------------------------------------------
     # EventTarget surface (server-side passive registry)
@@ -283,7 +283,13 @@ class Element(Node):
                 continue
             else:
                 yield from c.descendants
-    
+
+    def querySelectorAll(self, selectors:str):
+        if selectors == "*":
+            yield from self.descendants
+        else:
+            raise NotImplementedError()
+
     def replace(self, other_element:'Element'):
         self.tag = other_element.tag
         self.attrs = other_element.attrs
@@ -292,7 +298,6 @@ class Element(Node):
 
     def replaceWith(self, *elements):
         parent = self.parentNode
-        print("parent:::: ", parent)
         index = parent.children.index(self)
         
         expanded = []
@@ -308,11 +313,10 @@ class Element(Node):
         for el in expanded:
             if hasattr(el, 'parent'):
                 el.parent = parent
-        print("children::::", parent.children)
     
 
     def appendChild(self, child):
-        print(f"ELEMENT: appendChild of {self.__tag__}:", child)
+        #print(f"ELEMENT: appendChild of {self.__tag__}:", child)
         if type(child).__name__ == 'ServerFragment':
             # Mirror DOM DocumentFragment: move its root element in and empty the fragment
             children_to_move = child._consume()
@@ -329,7 +333,7 @@ class Element(Node):
         self.children.insert(0, child)
 
     def insertBefore(self, new_node, reference_node):
-        print("in insertBefore", self.children)
+        #print("in insertBefore", self.children)
         idx = self.children.index(reference_node)
         
         if type(new_node).__name__ == 'ServerFragment':
@@ -342,7 +346,6 @@ class Element(Node):
             self.children.insert(idx, new_node)
             if hasattr(new_node, 'parent'):
                 new_node.parent = self
-        print(self.children)
  
     def replaceChildren(self, *children):
         expanded = []
@@ -385,8 +388,21 @@ class Element(Node):
 
     textContent = property(None, set_text_content)
 
+
 def element_fn(tag, *c, void_=None, **kwargs):
     return Element(tag=tag.lower(), children=list(c), attrs=kwargs, void_=void_)
+
+
+class DocumentType(Node):
+    parent:None = None
+    name:str = "html"
+
+    def __init__(self, name="html"):
+        self.name = name
+
+    def __html__(self):
+        return f"<!DOCTYPE {self.name}>"
+
 
 class ServerFragment(Node):
     """

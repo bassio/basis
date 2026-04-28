@@ -1,19 +1,16 @@
 import re
-from string import Formatter
 from basis.shared.store import Store
-from basis.components.component import Component, client, AttributeBinding
+from basis.shared.component import Component, IS_CLIENT, client
 
-try:
-    from pyscript import window, ffi, document
-except ImportError:
+if IS_CLIENT:
+    from pyscript import window, ffi
+else:
     window = None
     ffi = None
-    document = None
 
 class RouterStore(Store):
     current_path: str = ""
     
-    @client
     def __init__(self, name):
         super().__init__(name)
         if window:
@@ -24,7 +21,6 @@ class RouterStore(Store):
                 
             window.addEventListener("popstate", ffi.create_proxy(on_popstate))
         
-    @client
     def navigate(self, path: str):
         if window and path != self.current_path:
             window.history.pushState(None, "", path)
@@ -137,7 +133,7 @@ class Route(Component):
             # If this is a fallback route, we must check if any standard route matches
             if is_fallback:
                 for path, route in Route._route_registry.items():
-                    print("path, route", path, route)
+                    #print("path, route", path, route)
                     if route is self:
                         continue
                     
@@ -181,8 +177,8 @@ class Link(Component):
         self.__dict__['router'] = Component.S['router']
 
     @client
-    def __init_bindings__(self):
-        super().__init_bindings__()
+    def __init_bindings__(self, root_element=None):
+        super().__init_bindings__(root_element)
         self.check_active()
 
     def check_active(self):

@@ -10,6 +10,15 @@ except ImportError:
 class Store:
     _registry = {}
 
+    @classmethod
+    def from_dict(cls, name:str, init_dict:dict):
+        new_store = cls(name)
+
+        for k, v in init_dict.items():
+            new_store.__dict__[k] = v
+
+        return new_store
+
     def __init__(self, name: str):
         self.__dict__['_subscriptions'] = []
         self.__dict__['name'] = name

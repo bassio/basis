@@ -1,6 +1,6 @@
-import basis.components.component as component
+from basis.shared.component import Component
 
-class Accordion(component.Component):
+class Accordion(Component):
     __tag__ = "ui-accordion"
     
     def style(self):
@@ -19,7 +19,7 @@ class Accordion(component.Component):
         </div>
         """
 
-class AccordionItem(component.Component):
+class AccordionItem(Component):
     __tag__ = "ui-accordion-item"
     name = "default-group"
     title = ""

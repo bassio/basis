@@ -1,7 +1,6 @@
-from pyscript import document
-import basis.components.component as component
+from basis.shared.component import Component
 
-class Tab(component.Component):
+class Tab(Component):
     __tag__ = "ui-tab"
     label = ""
     value = ""
@@ -68,7 +67,7 @@ class Tab(component.Component):
         """
 
 
-class TabContent(component.Component):
+class TabContent(Component):
     __tag__ = "ui-tab-content"
     
     def style(self):

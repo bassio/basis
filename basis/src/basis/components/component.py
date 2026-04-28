@@ -14,13 +14,7 @@ except ImportError:
 
     PYSCRIPT = False
 
-from basis.shared.bindings import Binding, SelfBinding, TextBinding, \
-    AttributeBinding, SelfAttributeBinding, ModelBinding, EventBinding, IfBinding, \
-    ChildBinding, LoopBinding, KeyedLoopBinding, SlotBinding, \
-    safe_eval, safe_format, safe_format_with_stores, \
-    extract_dependencies, ALLOWED_BUILTINS, Refrain, \
-    _process_event_attr_bindings, _process_standard_attr_bindings, \
-    _process_text_bindings, _process_self_attr_bindings
+from basis.shared.bindings import SelfBinding, ChildBinding, EventBinding, IfBinding, TextBinding, KeyedLoopBinding
 
 from basis.shared.store import Store
 from basis.shared.base_component import BaseComponent
@@ -109,6 +103,8 @@ class Component(BaseComponent):
     def __init__(self):
         super().__init__()
 
+
+
     @client
     def _get_nodes(self, element=None):
 
@@ -117,7 +113,7 @@ class Component(BaseComponent):
         else:
             element_to_walk = element
 
-        walker = document.createTreeWalker(element_to_walk, window.NodeFilter.SHOW_ELEMENT | window.NodeFilter.SHOW_TEXT)
+        walker = document.createTreeWalker(element_to_walk, window.NodeFilter.SHOW_ELEMENT | window.NodeFilter.SHOW_TEXT | window.NodeFilter.SHOW_COMMENT)
 
         nodes = []
         current_node = walker.nextNode()
@@ -148,54 +144,151 @@ class Component(BaseComponent):
         handler = super()._create_update_handler(f, input_type)
         return self._create_function_proxy(handler)
 
+    def initialize_ssr(self, ssr_root, **kwargs):
+        
+        self.set_selfbinding(ssr_root)
+
+        all_bindings = [b for b in self.__bindings__]
+        event_bindings = [eb for eb in all_bindings if isinstance(eb, EventBinding)]
+        if_bindings = [ib for ib in all_bindings if isinstance(ib, IfBinding)]
+        text_bindings = [tb for tb in all_bindings if isinstance(tb, TextBinding)]
+        keyed_loop_bindings = [klb for klb in all_bindings if isinstance(klb, KeyedLoopBinding)]
+        child_bindings = [eb for eb in all_bindings if isinstance(eb, ChildBinding)]
+        other_bindings = [ob for ob in all_bindings if ob not in event_bindings + if_bindings + text_bindings + keyed_loop_bindings + child_bindings]
+
+
+        for eb in event_bindings:
+            
+            eb_node_cid = eb.node.getAttribute("data-client-id")
+            matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{eb_node_cid}']")
+            if matched_ssr_node:
+                eb_node_new = matched_ssr_node
+            else:
+                eb_node_new = self.__element__
+            eb.node = eb_node_new
+
+            if isinstance(eb.target_fn, str):
+                event_method = getattr(self, eb.target_fn)
+                event_method_final = self._create_function_proxy(event_method)
+                eb.node.removeAttribute(eb)
+                setattr(eb.node, eb.event, event_method_final)
+            else:
+                self_event_method = eb.target_fn
+                eb.node.removeAttribute(eb.event)
+                setattr(eb.node, eb.event, self_event_method)
+
+        for ib in if_bindings:
+            ib_node_cid = ib.node.getAttribute("data-client-id")
+            matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{ib_node_cid}']")
+            if matched_ssr_node:
+                ib.node = matched_ssr_node
+            else:
+                pass #no-op : leave the node the one still in the shadow dom
+
+            anchor_cid = ib.anchor.getAttribute("data-client-id")
+            matched_ssr_anchor = ssr_root.querySelector(f"[data-hydration-id='{anchor_cid}']")
+            ib.anchor = matched_ssr_anchor
+
+        for tb in text_bindings:
+            tb_node_parent_cid = tb.node.parentNode.getAttribute("data-client-id")
+            matched_ssr_node_parent = ssr_root.querySelector(f"[data-hydration-id='{tb_node_parent_cid}']")
+            if matched_ssr_node_parent:
+                for childNode in matched_ssr_node_parent.childNodes:
+                    if childNode.nodeType == 3:
+                        if childNode.textContent == tb.node.textContent:
+                            print("YES!!!!!!!!!!!!!!!!!!", tb.node.textContent)
+                            tb.node = childNode
+                        else:
+                            print("No!!!!!!!!!!!!!!!!!!!", childNode.textContent)
+
+        for klb in keyed_loop_bindings:
+            klb.parent
+            klb_child_bindings = [cb for cb in child_bindings if cb.loop_binding is klb]
+            for cb in klb_child_bindings:
+                klb_child_node_cid = cb.node.getAttribute("data-client-id")
+                print("MATCHING KLB", klb_child_node_cid)
+                matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{klb_child_node_cid}']")
+                print(klb.instances)
+                if matched_ssr_node:
+                    cb.node = matched_ssr_node
+                    klb.parent = matched_ssr_node.parentNode
+
+        for ob in other_bindings:
+            ob_node_cid = ob.node.getAttribute("data-client-id")
+            matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{ob_node_cid}']")
+            if matched_ssr_node:
+                ob.node = matched_ssr_node
+
+        with self.refrain() as refrained:
+            for k, v in kwargs.items():
+                setattr(refrained, k, v)
+
+    @property
+    def client_id(self):
+        try:
+            cid = self.__element__.getAttribute('data-client-id')
+            if cid:
+                return cid
+            else:
+                return None
+
+        except:
+            return None
+        
+    def get_descendant_client_ids(self):
+        
+        client_id_node_mapping = {}
+
+        for node in self.__element__.querySelectorAll("[data-client-id]"):
+            cid = node.getAttribute("data-client-id")
+            client_id_node_mapping[cid] = node
+        
+        return client_id_node_mapping
 
     @classmethod
-    def mount_app_ssr(cls, container, replace=False):
-        """
-        Entry point for SSR pages.
+    def mount_app_ssr(cls, container, ssr_root=None, replace=False):
+        
+        shadow_element_div = document.createElement("div")
+        shadow = shadow_element_div.attachShadow({ 'mode': 'open' })
+        shadow = shadow_element_div
 
-        Checks whether the container already holds server-rendered content
-        (identified by data-basis-component markers). If so, calls .hydrate()
-        on the matching Component subclass; otherwise falls back to .mount_app().
+        mounted_app_component = cls.mount_app(shadow, replace)
+        client_id_to_node_map = mounted_app_component._set_nodes_with_client_ids(element=mounted_app_component.__element__)
+        
+        print("client_id_to_node_map", client_id_to_node_map)
+        
+        child_bindings_recursive = [cb for cb  in mounted_app_component.get_child_bindings(recursive=True)]
+        child_component_instances = [cb.childinstance for cb  in child_bindings_recursive]
 
-        Also registers a document-level listener for 'basis:hydrate' events
-        fired by CustomElementFactory when custom elements with SSR content
-        are upgraded by the browser.
-        """
-        # Register the global SSR hydration event listener so that nested
-        # custom elements deferred by the browser emit their hydrate events
-        # and get picked up here.
-        @client
-        def _register_hydration_listener():
-            def _on_hydrate(event):
-                py_class_name = event.detail.pyClassName
-                element = event.detail.element
-                for tag, component_cls in cls._registry.items():
-                    if component_cls.__name__ == py_class_name:
-                        print(f"Hydrating {py_class_name} via basis:hydrate event")
-                        component_cls.hydrate(element)
-                        return
-                print(f"Warning: No Component found for '{py_class_name}' during hydration")
+        root_plus_child_component_instances = [mounted_app_component, *child_component_instances]
 
-            document.addEventListener('basis:hydrate', ffi.create_proxy(_on_hydrate))
+        client_ids_dict = {}
 
-        _register_hydration_listener()
 
-        # Check if the container's first data-basis-component element matches cls
-        ssr_root = None
-        try:
-            ssr_root = container.querySelector('[data-basis-component]')
-        except Exception:
-            pass
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
 
-        if ssr_root is not None:
-            py_class_name = ssr_root.getAttribute('data-basis-component')
-            if py_class_name == cls.__name__:
-                new_instance = cls.hydrate(ssr_root.parentElement or ssr_root)
-                return new_instance
+        for child_instance in root_plus_child_component_instances:
+            child_client_id = child_instance.__element__.getAttribute("data-client-id")
+            client_ids_dict[child_client_id] = child_instance
+            
+        print("client_ids_dict keys:", [k for k in client_ids_dict.keys()])
 
-        # Fallback: regular SPA mount
-        return cls.mount_app(container, replace)
+        if not ssr_root:
+            ssr_root = document.body
+
+        marked_for_hydration = ssr_root.querySelectorAll("[data-hydration-id]")
+        marked_for_hydration_dict = {x.getAttribute("data-hydration-id"):x for x in marked_for_hydration}
+        marked_for_hydration_ids = [k for k in marked_for_hydration_dict.keys()]
+
+        #print("marked_for_hydration", marked_for_hydration_ids)
+        #print("mismatch", [x for x in marked_for_hydration_ids if x not in [k for k in client_ids_dict.keys()]])
+        #print("marked_for_hydration_dict", marked_for_hydration_dict)
+        
+        for child_instance in root_plus_child_component_instances:
+            if child_instance.client_id: # ?mismatched alignment
+                corresponding_ssr_root_node = marked_for_hydration_dict[child_instance.client_id]
+                child_instance.initialize_ssr(corresponding_ssr_root_node)
+            
 
     @classmethod
     def hydrate(cls, container, **attributes):
@@ -246,4 +339,120 @@ class Component(BaseComponent):
 
         print(f"hydrate: finished hydration of {cls}")
         return new_instance
-                
+        
+    
+    @client
+    def _find_elements_marked_for_hydration(self, element=None):
+
+        if not element:
+            element_to_walk = self.__template__
+        else:
+            element_to_walk = element
+
+        walker = document.createTreeWalker(element_to_walk, window.NodeFilter.SHOW_ELEMENT)
+
+        nodes = []
+        current_node = walker.nextNode()
+        while current_node:
+            if current_node.hasAttribute("data-hydration-id"):
+                nodes.append(current_node)
+
+            current_node = walker.nextNode()
+
+        return nodes
+
+    
+    @client
+    def _get_nodes_with_client_ids(self, element=None):
+
+        if not element:
+            element_to_walk = self.__template__
+        else:
+            element_to_walk = element
+
+        walker = document.createTreeWalker(element_to_walk, window.NodeFilter.SHOW_ELEMENT)
+
+        nodes_dict = {}
+        current_node = walker.nextNode()
+        while current_node:
+            if current_node.hasAttribute("data-client-id"):
+                client_id = current_node.getAttribute("data-client-id")
+                nodes_dict[client_id] = current_node
+
+            current_node = walker.nextNode()
+
+        return nodes_dict
+
+    @client
+    def _set_nodes_with_client_ids(self, element=None):
+
+        if not element:
+            element_to_walk = self.__template__
+        else:
+            element_to_walk = element
+        
+        id_to_node_map = {}
+
+        # Initial Root Setup
+        root_id = "r:0"
+        if hasattr(element_to_walk, "setAttribute"):
+            element_to_walk.setAttribute("data-client-id", root_id)
+        id_to_node_map[root_id] = element_to_walk
+
+        walker = document.createTreeWalker(
+            element_to_walk, 
+            window.NodeFilter.SHOW_ELEMENT | window.NodeFilter.SHOW_TEXT | window.NodeFilter.SHOW_COMMENT
+        )
+
+        # Stack stores: [ [node, path_prefix, next_child_index] ]
+        # We start with the root on the stack. 
+        # Server root is r:0, so its children should be r:0:0, r:0:1 etc.
+        stack = [[element_to_walk, root_id, 0]]
+
+        current_node = walker.nextNode()
+        while current_node:
+            parent = current_node.parentNode
+
+            # 1. Ascend: Pop until the top of the stack is the actual parent
+            while stack and stack[-1][0] != parent:
+                stack.pop()
+
+            if not stack:
+                # Fallback for unexpected tree breaks
+                current_node = walker.nextNode()
+                continue
+
+            # 2. Skip nodes that the server-side tree builder ignores (whitespace-only text)
+            # Server-side tree_builder.py handle_data calls data.strip() and ignores if empty.
+            if current_node.nodeType == 3: # TEXT_NODE
+                if not current_node.textContent.strip():
+                    current_node = walker.nextNode()
+                    continue
+            
+            # 3. Get info from the parent (top of stack)
+            parent_info = stack[-1]
+            parent_path = parent_info[1]
+            current_index = parent_info[2]
+
+            # 4. Create ID: prefix : index
+            current_id = f"{parent_path}:{current_index}"
+            
+            # 5. Increment the index for the NEXT sibling
+            parent_info[2] += 1
+
+            # 6. Apply ID and map
+            try:
+                if hasattr(current_node, "setAttribute"):
+                    current_node.setAttribute("data-client-id", current_id)
+                id_to_node_map[current_id] = current_node
+            except:
+                pass
+
+            # 7. Descend: If this node can have children, push it onto the stack
+            # 1 is Node.ELEMENT_NODE. Text/Comments (3/8) can't have children.
+            if current_node.nodeType == 1:
+                stack.append([current_node, current_id, 0])
+
+            current_node = walker.nextNode()
+
+        return id_to_node_map
