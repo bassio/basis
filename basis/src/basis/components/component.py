@@ -1,9 +1,5 @@
-from string import Formatter
 from dataclasses import dataclass
-from functools import wraps, partial
-import inspect
-import json
-from pathlib import Path
+from functools import wraps
 
 try:
     from pyscript import window, document, ffi, fetch
@@ -16,7 +12,6 @@ except ImportError:
 
 from basis.shared.bindings import SelfBinding, ChildBinding, EventBinding, IfBinding, TextBinding, KeyedLoopBinding
 
-from basis.shared.store import Store
 from basis.shared.base_component import BaseComponent
 
 def client(func):
@@ -54,13 +49,6 @@ class Refrain:
 
 
 class Component(BaseComponent):
-
-    # _registry = {} defined on BaseComponent
-    _instance_registry = {}
-    _pending_subscriptions = {}
-
-    S = Store._registry
-    C = _instance_registry
 
     @classmethod
     def _initialize_blueprint(cls):
@@ -264,22 +252,21 @@ class Component(BaseComponent):
 
         client_ids_dict = {}
 
-
         print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
 
         for child_instance in root_plus_child_component_instances:
             child_client_id = child_instance.__element__.getAttribute("data-client-id")
             client_ids_dict[child_client_id] = child_instance
             
-        print("client_ids_dict keys:", [k for k in client_ids_dict.keys()])
+        #print("client_ids_dict keys:", [k for k in client_ids_dict.keys()])
 
         if not ssr_root:
             ssr_root = document.body
 
         marked_for_hydration = ssr_root.querySelectorAll("[data-hydration-id]")
         marked_for_hydration_dict = {x.getAttribute("data-hydration-id"):x for x in marked_for_hydration}
-        marked_for_hydration_ids = [k for k in marked_for_hydration_dict.keys()]
-
+        
+        #marked_for_hydration_ids = [k for k in marked_for_hydration_dict.keys()]
         #print("marked_for_hydration", marked_for_hydration_ids)
         #print("mismatch", [x for x in marked_for_hydration_ids if x not in [k for k in client_ids_dict.keys()]])
         #print("marked_for_hydration_dict", marked_for_hydration_dict)

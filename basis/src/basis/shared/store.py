@@ -7,6 +7,8 @@ except ImportError:
     WebSocket = None
     document = None
 
+from basis.shared.bindings import ComponentSubscription
+
 class Store:
     _registry = {}
 
@@ -29,11 +31,12 @@ class Store:
     def __getitem__(self, item):
         return Store._registry[item]
 
-    def subscribe(self, component_instance, attr_name:str):
+    def add_subscription(self, component_instance, attr_name:str):
         if (component_instance, attr_name) not in self._subscriptions:
-            self._subscriptions.append((component_instance, attr_name))
+            new_subscription = ComponentSubscription(component_instance, attr_name)
+            self.__dict__['_subscriptions'].append(new_subscription)
 
-    def unsubscribe(self, component_instance, attr_name:str):
+    def remove_subscription(self, component_instance, attr_name:str):
         self.__dict__['_subscriptions'] = [
             sub for sub in self._subscriptions if sub != (component_instance, attr_name)
         ]

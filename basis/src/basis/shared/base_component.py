@@ -5,7 +5,7 @@ from string import Formatter
 
 from basis.shared.bindings import Binding, SelfBinding, TextBinding, \
     AttributeBinding, SelfAttributeBinding, ModelBinding, EventBinding, IfBinding, \
-    ChildBinding, LoopBinding, KeyedLoopBinding, SlotBinding, \
+    ChildBinding, LoopBinding, KeyedLoopBinding, SlotBinding, ComponentSubscription, \
     safe_eval, safe_format, safe_format_with_stores, \
     extract_dependencies, ALLOWED_BUILTINS, Refrain, \
     _process_event_attr_bindings, _process_standard_attr_bindings, \
@@ -15,7 +15,13 @@ from basis.shared.store import Store
 
 
 class BaseComponent(object):
+
     _registry = {}
+    _instance_registry = {}
+    _pending_subscriptions = {}
+
+    S = Store._registry
+    C = _instance_registry
 
     @classmethod
     def from_template(cls, templatestr, **kwargs):
@@ -370,7 +376,7 @@ class BaseComponent(object):
 
         self.bind_nodes(nodes)
 
-        #print(f"Bindings of {self.__class__}:", self.__bindings__)
+        print(f"Bindings of {self.__class__}:", self.__bindings__)
         
         # add to component instance registry if it is has an id
         self_element = self.__element__
@@ -380,10 +386,11 @@ class BaseComponent(object):
             
             if component_id in self.__class__._pending_subscriptions:
                 for subscribing_component_instance, attr_name in self.__class__._pending_subscriptions.pop(component_id):
-                    self.subscribe(subscribing_component_instance, attr_name)
+                    self.add_subscription(subscribing_component_instance, attr_name)
                     subscribed_field = f"#{component_id}.{attr_name}"
                     with subscribing_component_instance.refrain() as refrained:
-                        setattr(refrained, subscribed_field, self)
+                        #setattr(refrained, subscribed_field, self)
+                        setattr(refrained, subscribed_field, getattr(self, attr_name))
 
 
     def __init_fields__(self):
@@ -415,7 +422,7 @@ class BaseComponent(object):
                     
                     setattr(refrained, field, store_instance)
                     
-                    store_instance.subscribe(self, attr_name)
+                    store_instance.add_subscription(self, attr_name)
                 
                 elif field.startswith("#"):
                     component_name, attr_name = field.strip("#").split(".")
@@ -425,14 +432,18 @@ class BaseComponent(object):
 
                         setattr(refrained, field, component_instance)
                         
-                        component_instance.subscribe(self, attr_name)
+                        component_instance.add_subscription(self, attr_name)
 
                     else:
+                        
+                        new_subscription = ComponentSubscription(self, attr_name)
+
+                        print("New ComponentSubscription:", new_subscription)
 
                         if component_name in self.__class__._pending_subscriptions:
-                            self.__class__._pending_subscriptions[component_name].append((self, attr_name))
+                            self.__class__._pending_subscriptions[component_name].append(new_subscription)
                         else:
-                            self.__class__._pending_subscriptions[component_name] = [(self, attr_name)]
+                            self.__class__._pending_subscriptions[component_name] = [new_subscription]
                 else:
                     self.react([field])
 
@@ -676,32 +687,55 @@ class BaseComponent(object):
         ref_context = Refrain(self)
         return ref_context
 
-    def subscribe(self, component_instance, attr_name:str):
+    def add_subscription(self, component_instance, attr_name:str):
         if (component_instance, attr_name) not in self._subscriptions:
-            self.__dict__['_subscriptions'].append((component_instance, attr_name))
+            new_subscription = ComponentSubscription(component_instance, attr_name)
+
+            self.__dict__['_subscriptions'].append(new_subscription)
+
+            if attr_name not in self._deps:
+                self._deps[attr_name] = []
+
+            if new_subscription not in self._deps[attr_name]:
+                self._deps[attr_name].append(new_subscription)
 
         print(f"_subscriptions of {self.__class__}: ", self.__dict__['_subscriptions'])
 
-    def unsubscribe(self, component_instance, attr_name:str):
+    def remove_subscription(self, component_instance, attr_name:str):
         self.__dict__['_subscriptions'] = [
             sub for sub in self._subscriptions if sub != (component_instance, attr_name)
         ]
 
-    def react(self, names):
+    def react(self, names:list[str]):
+
+        if isinstance(names, str):
+            raise Exception("Please pass only a list of strings to react().")
 
         print(f"In react({names}) of {self.__class__}")
-
         bindings_to_update = []
+        subscriptions_to_update = []
 
         dependencies = set(names).intersection(set(self._deps.keys()))
         
         for name in dependencies:
+            print("_deps:", self._deps[name])
             for binding in self._deps[name]:
                 if binding not in bindings_to_update:
                     bindings_to_update.append(binding)
-        
-        #print("bindings_to_update: ", bindings_to_update)
+
+        for name in dependencies:
+            for sub in self.__dict__['_subscriptions']:
+                subscribing_component_instance, sub_attr_name = sub #deconstruct the ComponentSubscription
+                if name == sub_attr_name:
+                    subscriptions_to_update.append(sub)
+                
+        print("bindings_to_update: ", bindings_to_update)
+        print("all _deps: ", self._deps)
         
         for binding in bindings_to_update:
             if hasattr(binding, 'update'):
                 binding.update()
+            elif isinstance(binding, ComponentSubscription):
+                sub = binding
+                self_component_id = self.__element__.getAttribute("id")
+                sub.component_instance.react([f"#{self_component_id}.{sub.attr}"])

@@ -6,8 +6,6 @@ import operator
 from string import Formatter
 from typing import Any
 
-from basis.shared.store import Store
-
 
 ALLOWED_BUILTINS = {'False': False,
                     'True': True,
@@ -41,29 +39,48 @@ ALLOWED_BUILTINS = {'False': False,
                     'zip': zip}
 
 
-class StoreField(object):
-    name:str
-    store:str
-
 @dataclass
 class Binding(object):
     component_instance:"Component"
-    node:object
 
     @property
     def component_class(self):
         return self.component_instance.__class__
+
+@dataclass
+class ComponentSubscription(Binding):
+    attr:str
+
+    @property
+    def subscribing_component(self):
+        return self.component_instance
+
+    def __eq__(self, value):
+        if isinstance(value, ComponentSubscription):
+            return (value.attr == self.attr) and (value.component_instance is self.component_instance) 
+        elif isinstance(value, tuple) and len(value) == 2:
+            return (value[1] == self.attr) and (value[0] is self.component_instance) 
+        else:
+            return super().__eq__(value)
+    
+    def __iter__(self):
+        # Allows: x, y = obj destructuring
+        return iter([self.component_instance, self.attr])
+
+@dataclass
+class NodeBinding(Binding):
+    node:object
 
     def marked_for_hydration(self):
         return [self.node]
 
             
 @dataclass
-class SelfBinding(Binding):
+class SelfBinding(NodeBinding):
     ...
 
 @dataclass
-class TextBinding(Binding):
+class TextBinding(NodeBinding):
     content:str
     fields:list[str]
     parent:object
@@ -71,7 +88,7 @@ class TextBinding(Binding):
     def update(self):
 
         context = self.component_instance.__dict__
-        store_registry=Store._registry
+        store_registry = self.component_instance.__class__.S
 
         self.node.textContent = safe_format_with_stores(
             self.content, 
@@ -85,7 +102,7 @@ class TextBinding(Binding):
         return [self.parent]
     
 @dataclass
-class AttributeBinding(Binding):
+class AttributeBinding(NodeBinding):
     attr:str
     content:str
     fields:list[str]
@@ -93,8 +110,9 @@ class AttributeBinding(Binding):
     
     def update(self):
         context = self.component_instance.__dict__
+        store_registry = self.component_instance.__class__.S
         if self.attr not in ["in"]:
-            final_val = safe_format_with_stores(self.content, self.component_instance.__dict__, ALLOWED_BUILTINS, Store._registry, self.component_instance.__class__._instance_registry)
+            final_val = safe_format_with_stores(self.content, self.component_instance.__dict__, ALLOWED_BUILTINS, store_registry, self.component_instance.__class__._instance_registry)
             if self.is_boolean:
                 bool_val = str(final_val).lower() == 'true'
                 self.node.toggleAttribute(self.attr, bool_val)
@@ -111,8 +129,10 @@ class AttributeBinding(Binding):
 class SelfAttributeBinding(AttributeBinding):
     def update(self):
         context = self.component_instance.__dict__
+        store_registry = self.component_instance.__class__.S
+
         if self.attr not in ["in"]:
-            final_val = safe_format_with_stores(self.content, context, ALLOWED_BUILTINS, Store._registry, self.component_instance.__class__._instance_registry)
+            final_val = safe_format_with_stores(self.content, context, ALLOWED_BUILTINS, store_registry, self.component_instance.__class__._instance_registry)
             if self.is_boolean:
                 bool_val = str(final_val).lower() == 'true'
                 setattr(self.component_instance, self.attr, bool_val)
@@ -126,7 +146,7 @@ class SelfAttributeBinding(AttributeBinding):
             setattr(self.component_instance, self.attr, final_val)
 
 @dataclass
-class ModelBinding(Binding):
+class ModelBinding(NodeBinding):
     field: str
 
     @property
@@ -142,7 +162,7 @@ class ModelBinding(Binding):
             self.node.value = str(val) if val is not None else ""
 
 @dataclass
-class EventBinding(Binding):
+class EventBinding(NodeBinding):
     event:str
     target_fn:str
 
@@ -156,7 +176,7 @@ class EventBinding(Binding):
     
 
 @dataclass
-class IfBinding(Binding):
+class IfBinding(NodeBinding):
     expr: str
     anchor: object
     is_visible: bool
@@ -177,14 +197,14 @@ class IfBinding(Binding):
 
 
 @dataclass
-class ChildBinding(Binding):
+class ChildBinding(NodeBinding):
     childclass:str
     childinstance:object=None
     attr_bindings:list[SelfAttributeBinding] = field(default_factory=list)
     loop_binding:"LoopBinding|KeyedLoopBinding|None"=None
 
 @dataclass
-class LoopBinding(Binding):
+class LoopBinding(NodeBinding):
     item:str
     collection:str
     clone:object
@@ -271,7 +291,7 @@ class LoopBinding(Binding):
 
 
 @dataclass
-class KeyedLoopBinding(Binding):
+class KeyedLoopBinding(NodeBinding):
     item:str
     collection:str
     clone:object
@@ -430,7 +450,7 @@ class KeyedLoopBinding(Binding):
         return [self.node, self.parent]
 
 @dataclass
-class SlotBinding(Binding):
+class SlotBinding(NodeBinding):
     name: str | None = None
     is_default: bool = True
     

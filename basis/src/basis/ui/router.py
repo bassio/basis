@@ -39,7 +39,7 @@ class Route(Component):
         super().__init__()
 
         # Ensure we subscribe to router.current_path
-        Component.S['router'].subscribe(self, "current_path")
+        Component.S['router'].add_subscription(self, "current_path")
         self.__dict__['router'] = Component.S['router']
 
     @classmethod
@@ -173,7 +173,7 @@ class Link(Component):
 
     def __init__(self):
         super().__init__()
-        Component.S['router'].subscribe(self, "current_path")
+        Component.S['router'].add_subscription(self, "current_path")
         self.__dict__['router'] = Component.S['router']
 
     @client
