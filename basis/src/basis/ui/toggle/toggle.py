@@ -1,22 +1,42 @@
 from basis.shared.component import Component
+from basis.shared.bindings import SetterBinding
 
 class Toggle(Component):
     __tag__ = "ui-toggle"
     first = ""
     second = ""
     value = ""
-    bind = ""
-    
+    update = ""
+    checked = False
+
+    def __init_bindings__(self):
+        super().__init_bindings__()
+        field_to_update = self.update
+        self.add_binding(SetterBinding(self, self.__element__, field=field_to_update))
+
     def on_change(self, event):
         print("Toggle:inside on_change")
+
+        #client
         checkbox = self.__element__.querySelector('.toggle-checkbox')
+        
         is_checked = checkbox.checked
         
-        if is_checked:
-            self.value = self.first
+        print("is_checked", is_checked)
+        print("event target value", event.target.value)
+
+        if not is_checked:
+            value_to_set = self.first
         else:
-            self.value = self.second
-        
+            value_to_set = self.second
+
+        print("value_to_set", value_to_set)
+
+        if self.update:
+            field_to_update = self.update
+            print("field_to_update", field_to_update)
+            setattr(self, field_to_update, value_to_set)
+
     def style(self):
         """
         ui-toggle {

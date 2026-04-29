@@ -104,71 +104,12 @@ class BaseComponent(object):
         self.__dict__['__fields__'] = []
         self.__dict__['_subscriptions'] = []
         
-    def add_binding(self, binding):
-
-        self.__dict__['__bindings__'].append(binding)
-
-        if hasattr(binding, 'fields'):
-            for field in binding.fields:
-                if field not in self._deps:
-                    self._deps[field] = []
-                if binding not in self._deps[field]:
-                    self._deps[field].append(binding)
-
-        if hasattr(binding, 'attr_bindings'):
-            for cab in binding.attr_bindings:
-                if hasattr(cab, 'fields'):
-                    for field in cab.fields:
-                        if field not in self._deps:
-                            self._deps[field] = []
-                        if cab not in self._deps[field]:
-                            self._deps[field].append(cab)
-
-    def remove_binding(self, binding):
-        try:
-            self.__dict__['__bindings__'].remove(binding)
-        except ValueError:
-            pass
-        if hasattr(binding, 'fields'):
-            for field in binding.fields:
-                if field in self._deps and binding in self._deps[field]:
-                    self._deps[field].remove(binding)
-        if hasattr(binding, 'attr_bindings'):
-            for cab in binding.attr_bindings:
-                if hasattr(cab, 'fields'):
-                    for field in cab.fields:
-                        if field in self._deps and cab in self._deps[field]:
-                            self._deps[field].remove(cab)
-    
     def __init_selfbinding__(self):
         #template is ServerFragment on server and DocumentFragment on client
         template = self.__template__
         self_element = template.firstElementChild
         self.add_binding(SelfBinding(component_instance=self, node=self_element))
         
-    def __init_selfbinding__(self):
-        #template is ServerFragment on server and DocumentFragment on client
-        template = self.__template__
-        self_element = template.firstElementChild
-        self.add_binding(SelfBinding(component_instance=self, node=self_element))
-    
-    def set_selfbinding(self, node):
-        #template is ServerFragment on server and DocumentFragment on client
-        sb = None
-
-        for b in self.__bindings__:
-            if isinstance(b, SelfBinding):
-                sb = b
-                break
-
-        if sb:
-            sb.node = node
-        else:
-            self.__bindings__.append(SelfBinding(component_instance=self, node=node))
-
-    def _get_nodes(self, element=None):
-        return NotImplementedError
-
     #
     def __init_slot_bindings__(self):
         nodes = self._get_nodes()
@@ -207,7 +148,6 @@ class BaseComponent(object):
 
         for b in attr_bindings:
             self.add_binding(b)
-        self.__fields__.extend(fields)
 
     @classmethod
     def initialize(cls, container, **kwargs):
@@ -230,6 +170,63 @@ class BaseComponent(object):
                 setattr(refrained, k, v)
 
         return new_instance
+
+    def set_selfbinding(self, node):
+        #template is ServerFragment on server and DocumentFragment on client
+        sb = None
+
+        for b in self.__bindings__:
+            if isinstance(b, SelfBinding):
+                sb = b
+                break
+
+        if sb:
+            sb.node = node
+        else:
+            self.__bindings__.append(SelfBinding(component_instance=self, node=node))
+
+    def add_binding(self, binding):
+
+        self.__dict__['__bindings__'].append(binding)
+
+        if hasattr(binding, 'fields'):
+            for field in binding.fields:
+                if field not in self._deps:
+                    self._deps[field] = []
+                    if field not in self.__fields__:
+                        self.__fields__.append(field)
+                if binding not in self._deps[field]:
+                    self._deps[field].append(binding)
+
+        if hasattr(binding, 'attr_bindings'):
+            for cab in binding.attr_bindings:
+                if hasattr(cab, 'fields'):
+                    for field in cab.fields:
+                        if field not in self._deps:
+                            self._deps[field] = []
+                        if cab not in self._deps[field]:
+                            self._deps[field].append(cab)
+
+    def remove_binding(self, binding):
+        try:
+            self.__dict__['__bindings__'].remove(binding)
+        except ValueError:
+            pass
+        if hasattr(binding, 'fields'):
+            for field in binding.fields:
+                if field in self._deps and binding in self._deps[field]:
+                    self._deps[field].remove(binding)
+        if hasattr(binding, 'attr_bindings'):
+            for cab in binding.attr_bindings:
+                if hasattr(cab, 'fields'):
+                    for field in cab.fields:
+                        if field in self._deps and cab in self._deps[field]:
+                            self._deps[field].remove(cab)
+    
+
+    def _get_nodes(self, element=None):
+        return NotImplementedError
+
 
     def _create_function_proxy(self, f):
         return f
@@ -405,14 +402,12 @@ class BaseComponent(object):
         
         print(f"fields_on_class of {cls} : ", fields_on_class)
 
-        if fields_on_class:
-            with self.refrain() as refrained:
-                for field in fields_on_class:
-                    print(f"setting attr from class {self.__class__.__name__} on the instance: {field}, with value {cls.__dict__[field]}")
-                    setattr(refrained, field, cls.__dict__[field])
-                    self.__fields__.append(field)
-        
+
         with self.refrain() as refrained:
+
+            for field in fields_on_class:
+                print(f"setting attr from class {self.__class__.__name__} on the instance: {field}, with value {cls.__dict__[field]}")
+                setattr(refrained, field, cls.__dict__[field])
 
             for field in self.__fields__:
                 if field.startswith("$"):
@@ -445,7 +440,8 @@ class BaseComponent(object):
                         else:
                             self.__class__._pending_subscriptions[component_name] = [new_subscription]
                 else:
-                    self.react([field])
+                    refrained.force_react(field)
+
 
     @property
     def __element__(self):
@@ -521,20 +517,46 @@ class BaseComponent(object):
                 return super().__getattribute__(name)
 
     def __setattr__(self, name, value):
-        try:
-            old_value = self.__dict__[name]
-        except KeyError: #setting a new attribute
-            old_value = None
 
-        super().__setattr__(name, value)
+        print(f"inside __setattr__ of {self} for the attr {name}")
 
-        if not name.startswith("$") or name.startswith("#"):
-            super().__setattr__(name, value)
+        if name.startswith("$"):
+            store_name, attr_name = name.strip("$").split(".")
+            store_instance = self.__class__.S[store_name]
+            
+            try:
+                old_value = store_instance.__dict__[attr_name]
+            except KeyError:
+                old_value = None
+            
+            print(f"calling __setattr__ on {store_instance} called for {attr_name}, old value {old_value}, new value {value}")
+            setattr(store_instance, attr_name, value)
 
-        #check for change
-        if value != old_value:
-            if name in self.__fields__:
-                print(f"__setattr__ on {self.__class__} called for {name}, old value {old_value}, new value {value}")
+        elif name.startswith("#"):
+            component_name, attr_name = name.strip("#").split(".")
+            component_instance = self.__class__.C[component_name]
+
+            try:
+                old_value = component_instance.__dict__[attr_name]
+            except KeyError:
+                old_value = None
+            
+            setattr(component_instance, attr_name, value)
+            print(f"calling __setattr__ on {component_instance} called for {attr_name}, old value {old_value}, new value {value}")
+            #the component_instance should then react from its instance !
+
+        else:
+            try:
+                old_value = self.__dict__[name]
+                print(f"old_value of {name}", old_value)
+            except KeyError: #setting a new attribute
+                old_value = None
+
+            self.__dict__[name] = value
+
+            #check for change
+            if value != old_value:
+                print(f"__setattr__ on {self} called for {name}, old value {old_value}, new value {value}")
                 print("and now reacting ..")
                 self.react([name])
 
@@ -560,6 +582,24 @@ class BaseComponent(object):
             container.appendChild(new_template)
 
 
+        #print("nested:", cls.get_nested_children())
+        for nested_child in cls.get_nested_children():
+            child_instance = nested_child.mount(self_element, replace=False) #appendChild
+            #child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
+            #node.__basis_mounted__ = True
+            #node.appendChild(child_instance.__template__)
+
+            child_attr_bindings = [sab for sab in child_instance.__bindings__ \
+                                    if isinstance(sab, SelfAttributeBinding)]
+            #child_attr_bindings = []
+
+            new_instance.add_binding(ChildBinding(component_instance=new_instance,
+                                                          node=self_element,
+                                                          childclass=nested_child,
+                                                          childinstance=child_instance,
+                                                          attr_bindings=child_attr_bindings))
+
+
         event_bindings = [eb for eb in new_instance.__bindings__ if isinstance(eb, EventBinding)]
 
         for binding in event_bindings:
@@ -574,23 +614,6 @@ class BaseComponent(object):
                 binding.node.removeAttribute(binding.event)
                 setattr(binding.element, binding.event, self_event_method)
                 
-
-        #print("nested:", cls.get_nested_children())
-        for nested_child in cls.get_nested_children():
-            child_instance = nested_child.mount(self_element, replace=False) #appendChild
-            #child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
-            #node.__basis_mounted__ = True
-            #node.appendChild(child_instance.__template__)
-
-            #child_attr_bindings = [sab for sab in child_instance.__bindings__ \
-            #                    if isinstance(sab, SelfAttributeBinding)]
-            child_attr_bindings = []
-
-            new_instance.__bindings__.append(ChildBinding(component_instance=new_instance,
-                                                          node=self_element,
-                                                          childclass=nested_child,
-                                                          childinstance=child_instance,
-                                                          attr_bindings=child_attr_bindings))
 
         print(f"mount: finished mounting {cls}")
 
@@ -693,11 +716,17 @@ class BaseComponent(object):
 
             self.__dict__['_subscriptions'].append(new_subscription)
 
+            #TRIAL: add it to bindings
+            self.add_binding(new_subscription)
+            #note: line above is alternative to below code
+
+            '''
             if attr_name not in self._deps:
                 self._deps[attr_name] = []
 
             if new_subscription not in self._deps[attr_name]:
                 self._deps[attr_name].append(new_subscription)
+            '''
 
         print(f"_subscriptions of {self.__class__}: ", self.__dict__['_subscriptions'])
 
@@ -711,14 +740,15 @@ class BaseComponent(object):
         if isinstance(names, str):
             raise Exception("Please pass only a list of strings to react().")
 
-        print(f"In react({names}) of {self.__class__}")
+        print(f"In react({names}) of {self}")
+
         bindings_to_update = []
         subscriptions_to_update = []
 
         dependencies = set(names).intersection(set(self._deps.keys()))
         
         for name in dependencies:
-            print("_deps:", self._deps[name])
+            
             for binding in self._deps[name]:
                 if binding not in bindings_to_update:
                     bindings_to_update.append(binding)
@@ -730,10 +760,11 @@ class BaseComponent(object):
                     subscriptions_to_update.append(sub)
                 
         print("bindings_to_update: ", bindings_to_update)
-        print("all _deps: ", self._deps)
+        print("__fields__: ", self.__fields__)
+        #print("all _deps: ", self._deps)
         
         for binding in bindings_to_update:
-            if hasattr(binding, 'update'):
+            if hasattr(binding, 'update'): # or perhaps we could also use isinstance(binding, NodeBinding)
                 binding.update()
             elif isinstance(binding, ComponentSubscription):
                 sub = binding

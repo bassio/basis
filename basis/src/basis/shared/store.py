@@ -47,16 +47,16 @@ class Store:
         except KeyError:
             old_value = None
 
-        super().__setattr__(key, value)
-
         # On update, trigger react() on all subscribed components
         if value != old_value:
 
+            super().__setattr__(key, value)
+            
             store_name = self.name
 
             for component, attr_name in self._subscriptions:
                 # We tell the component to react to the store's "name"
-                # so it re-evaluates bindings starting with `{store_name.xxx}`
+                # so it re-evaluates bindings starting with `{$store_name.xxx}`
                 if key == attr_name:
                     component.react([f"${store_name}.{attr_name}"])
 

@@ -24,30 +24,6 @@ def client(func):
     return wrapper
 
 
-class Refrain:
-    def __init__(self, component):
-        self.__dict__['inner_dict'] = {}
-        self.__dict__['component'] = component
-
-    def __enter__(self):
-        return self
-    
-    def __setattr__(self, name, value):
-        self.inner_dict[name] = value
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-
-        inner_dict = self.inner_dict
-
-        for k, v in inner_dict.items():
-            self.component.__dict__[k] = v
-        
-        #print(f"inner_dict in Refrain of {self.component}: ", inner_dict)
-
-        if len(inner_dict) > 0:
-            self.component.react([k for k in inner_dict.keys()])
-
-
 class Component(BaseComponent):
 
     @classmethod
@@ -151,8 +127,16 @@ class Component(BaseComponent):
             matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{eb_node_cid}']")
             if matched_ssr_node:
                 eb_node_new = matched_ssr_node
+                print(f"MATCHED event binding's {eb.event} node: {eb_node_new.outerHTML}")
+            elif ssr_root.getAttribute("data-hydration-id") == eb_node_cid:
+                eb_node_new = ssr_root
+                print(f"MATCHED event binding's {eb.event} node: {eb_node_new.outerHTML}")
             else:
-                eb_node_new = self.__element__
+                eb_node_new = eb.node #just keep the old node then !
+                # this addresses an error that elements hidden because of an IfBinding will not be assigned a client id
+                # because they are not in the shadow dom tree in the first place !!
+                print(f"DID NOT MATCH event binding's {eb.event} node with client_id {eb_node_cid}: {eb_node_new.outerHTML}")
+
             eb.node = eb_node_new
 
             if isinstance(eb.target_fn, str):
@@ -200,6 +184,15 @@ class Component(BaseComponent):
                 if matched_ssr_node:
                     cb.node = matched_ssr_node
                     klb.parent = matched_ssr_node.parentNode
+
+        for cb in child_bindings:
+            if cb.loop_binding:
+                continue
+
+            cb_node_cid = cb.node.getAttribute("data-client-id")
+            matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{cb_node_cid}']")
+            if matched_ssr_node:
+                cb.node = matched_ssr_node
 
         for ob in other_bindings:
             ob_node_cid = ob.node.getAttribute("data-client-id")

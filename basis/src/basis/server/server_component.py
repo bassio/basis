@@ -11,13 +11,6 @@ from basis.server.tree_builder import html_to_element_tree
 
 class ServerComponent(BaseComponent):
 
-    # _registry = {} defined on BaseComponent
-    _instance_registry = {}
-    _pending_subscriptions = {}
-
-    S = Store._registry
-    C = _instance_registry
-
     #@server
     @classmethod
     def _initialize_blueprint(cls):

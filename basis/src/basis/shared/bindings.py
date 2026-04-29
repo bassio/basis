@@ -54,7 +54,18 @@ class ComponentSubscription(Binding):
     @property
     def subscribing_component(self):
         return self.component_instance
-
+    
+    @property
+    def fields(self):
+        return [self.attr]
+    
+    def marked_for_hydration(self):
+        return [self.node]
+    
+    @property
+    def node(self):
+        return self.component_instance.__element__
+    
     def __eq__(self, value):
         if isinstance(value, ComponentSubscription):
             return (value.attr == self.attr) and (value.component_instance is self.component_instance) 
@@ -66,6 +77,7 @@ class ComponentSubscription(Binding):
     def __iter__(self):
         # Allows: x, y = obj destructuring
         return iter([self.component_instance, self.attr])
+
 
 @dataclass
 class NodeBinding(Binding):
@@ -135,15 +147,34 @@ class SelfAttributeBinding(AttributeBinding):
             final_val = safe_format_with_stores(self.content, context, ALLOWED_BUILTINS, store_registry, self.component_instance.__class__._instance_registry)
             if self.is_boolean:
                 bool_val = str(final_val).lower() == 'true'
-                setattr(self.component_instance, self.attr, bool_val)
+                # following line was causing circular updates in react()
+                # setattr(self.component_instance, self.attr, bool_val)
+                # replaced with below
+                self.component_instance.__dict__[self.attr] = final_val
             else:
-                setattr(self.component_instance, self.attr, final_val)
+                # following line was causing circular updates in react()
+                # setattr(self.component_instance, self.attr, final_val)
+                # replaced with below
+                self.component_instance.__dict__[self.attr] = final_val
+
         else:
             formatter = Formatter()
             _, fname, _, _ = next(iter(formatter.parse(self.content)))
             evaluated_val = safe_eval(fname, context, ALLOWED_BUILTINS)
             final_val = json.dumps(evaluated_val)
-            setattr(self.component_instance, self.attr, final_val)
+            self.component_instance.__dict__[self.attr] = final_val
+
+
+@dataclass
+class SetterBinding(NodeBinding):
+    field: str
+
+    @property
+    def fields(self):
+        return [self.field]
+
+    def update(self):
+        pass
 
 @dataclass
 class ModelBinding(NodeBinding):
@@ -771,10 +802,12 @@ def _process_text_bindings(component_instance, textnode):
 
     return bindings, fields
 
-class Refrain:
+
+class Refrain(object):
     def __init__(self, component):
         self.__dict__['inner_dict'] = {}
         self.__dict__['component'] = component
+        self.__dict__['forced_reactivity'] = set()
 
     def __enter__(self):
         return self
@@ -782,15 +815,26 @@ class Refrain:
     def __setattr__(self, name, value):
         self.inner_dict[name] = value
 
+    def force_react(self, name):
+        self.forced_reactivity.add(name)
+
     def __exit__(self, exc_type, exc_val, exc_tb):
 
-        inner_dict = self.inner_dict
-
-        for k, v in inner_dict.items():
+        inner_dict_values = [k for k in self.__dict__['inner_dict'].values()]
+        inner_dict_keys = [k for k in self.__dict__['inner_dict'].keys()]
+        for k, v in zip(inner_dict_keys, inner_dict_values):
             self.component.__dict__[k] = v
         
-        if len(inner_dict) > 0:
-            self.component.react([k for k in inner_dict.keys()])
+        #print(f"inner_dict in Refrain of {self.component}: ", inner_dict)
+
+        if len(inner_dict_keys) > 0:
+            self.component.react([k for k in inner_dict_keys])
+
+        # at the end .. react forcibly to the marked items
+        forced_fields = [k for k in self.forced_reactivity if k not in inner_dict_keys]
+
+        if len(forced_fields) > 0:
+            self.component.react(forced_fields)
 
 
 __all__ = ['Binding', 'SelfBinding', 'TextBinding', 'AttributeBinding', \
