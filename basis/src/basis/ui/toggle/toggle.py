@@ -12,7 +12,9 @@ class Toggle(Component):
     def __init_bindings__(self):
         super().__init_bindings__()
         field_to_update = self.update
-        self.add_binding(SetterBinding(self, self.__element__, field=field_to_update))
+        self.add_binding(SetterBinding(component_instance=self,
+                                       node=self.__element__,
+                                       field=field_to_update))
 
     def on_change(self, event):
         print("Toggle:inside on_change")

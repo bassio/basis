@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 import inspect
 import json
 import operator
+import re
 from string import Formatter
 from typing import Any
 
@@ -39,7 +40,25 @@ ALLOWED_BUILTINS = {'False': False,
                     'zip': zip}
 
 
+def desugar_expression(expr: str) -> str:
+    """Transform Basis DSL ($store, #comp) into valid Python (BaseComponent.S['store'], BaseComponent.C['comp'])."""
+    if not expr:
+        return expr
+    # Replace $name with BaseComponent.S['name']
+    expr = re.sub(r'\$([a-zA-Z_][a-zA-Z0-9_]*)', r"BaseComponent.S['\1']", expr)
+    # Replace #id with BaseComponent.C['id']
+    expr = re.sub(r'#([a-zA-Z_][a-zA-Z0-9_]*)', r"BaseComponent.C['\1']", expr)
+    return expr
+
 @dataclass
+class BindingBlueprint:
+    binding_class: type
+    node_index: int
+    kwargs: dict = field(default_factory=dict)
+    ast_trees: dict = field(default_factory=dict)
+
+
+@dataclass(kw_only=True)
 class Binding(object):
     component_instance:"Component"
 
@@ -47,7 +66,7 @@ class Binding(object):
     def component_class(self):
         return self.component_instance.__class__
 
-@dataclass
+@dataclass(kw_only=True)
 class ComponentSubscription(Binding):
     attr:str
 
@@ -79,19 +98,56 @@ class ComponentSubscription(Binding):
         return iter([self.component_instance, self.attr])
 
 
-@dataclass
+@dataclass(kw_only=True)
 class NodeBinding(Binding):
     node:object
+    ast_trees: dict
 
     def marked_for_hydration(self):
         return [self.node]
 
+    @classmethod
+    def from_blueprint(cls, component_instance, node, blueprint):
+        instance = cls(
+            component_instance=component_instance, 
+            node=node, 
+            ast_trees=blueprint.ast_trees,
+            **blueprint.kwargs, 
+        )
+        
+        # Cross-Boundary Reactive Link Logic
+        # Scan fields for DSL prefixes ($ for Store, # for Component)
+        if hasattr(blueprint, 'kwargs') and 'fields' in blueprint.kwargs:
+            for field in blueprint.kwargs['fields']:
+                if "." in field:
+                    try:
+                        if field.startswith("$"): # Store link
+                            store_name, attr = field.strip("$").split(".")
+                            registry = component_instance.__class__.S
+                            if store_name in registry:
+                                target_store = registry[store_name]
+                                target_store.add_subscription(component_instance, attr)
+                        
+                        elif field.startswith("#"): # Component link
+                            comp_id, attr = field.strip("#").split(".")
+                            registry = component_instance.__class__.C
+                            if comp_id in registry:
+                                target_comp = registry[comp_id]
+                                component_instance.add_subscription(target_comp, attr)
+                            else:
+                                # Target not found yet — register a pending subscription
+                                component_instance.add_pending_subscription(comp_id, attr)
+                    except ValueError:
+                        pass # malformed dependency
+        
+        return instance
             
-@dataclass
+@dataclass(kw_only=True)
 class SelfBinding(NodeBinding):
+    ast_trees: dict = field(default_factory=dict, init=False, repr=False)
     ...
 
-@dataclass
+@dataclass(kw_only=True)
 class TextBinding(NodeBinding):
     content:str
     fields:list[str]
@@ -104,16 +160,29 @@ class TextBinding(NodeBinding):
 
         self.node.textContent = safe_format_with_stores(
             self.content, 
-            context, 
+            context,
             ALLOWED_BUILTINS, 
             store_registry=store_registry, 
-            component_instance_registry=self.component_instance.__class__._instance_registry
+            component_instance_registry=self.component_instance.__class__._instance_registry,
+            ast_trees=self.ast_trees
         )
 
     def marked_for_hydration(self):
         return [self.parent]
     
-@dataclass
+    @classmethod
+    def from_blueprint(cls, component_instance, node, blueprint):
+        instance = cls(
+            component_instance=component_instance, 
+            node=node,
+            parent=node.parentNode,
+            ast_trees=blueprint.ast_trees,
+            **blueprint.kwargs, 
+        )
+
+        return instance
+        
+@dataclass(kw_only=True)
 class AttributeBinding(NodeBinding):
     attr:str
     content:str
@@ -121,30 +190,94 @@ class AttributeBinding(NodeBinding):
     is_boolean:bool = False
     
     def update(self):
+        # Always evaluate in the context of the component that owns the binding (the parent)
         context = self.component_instance.__dict__
         store_registry = self.component_instance.__class__.S
-        if self.attr not in ["in"]:
-            final_val = safe_format_with_stores(self.content, self.component_instance.__dict__, ALLOWED_BUILTINS, store_registry, self.component_instance.__class__._instance_registry)
-            if self.is_boolean:
-                bool_val = str(final_val).lower() == 'true'
-                self.node.toggleAttribute(self.attr, bool_val)
+        instance_registry = self.component_instance.__class__._instance_registry
+
+        # Detect if it's a single expression like "{val}" or an interpolation like "count: {val}"
+        formatter = Formatter()
+        try:
+            parsed = list(formatter.parse(self.content))
+        except ValueError:
+            # Handle cases where content is not a valid format string
+            parsed = []
+
+        is_single_expr = len(parsed) == 1 and parsed[0][1] is not None and not parsed[0][0]
+        
+        if is_single_expr:
+            fname = parsed[0][1]
+            ast_tree = self.ast_trees.get(fname)
+            evaluated_val = safe_eval(fname, context, ALLOWED_BUILTINS, tree=ast_tree)
+            
+            # For the DOM attribute, we convert to string/JSON
+            if isinstance(evaluated_val, (list, dict)):
+                final_dom_val = json.dumps(evaluated_val)
             else:
-                self.node.setAttribute(self.attr, final_val)
+                final_dom_val = evaluated_val
         else:
-            formatter = Formatter()
-            _, fname, _, _ = next(iter(formatter.parse(self.content)))
-            evaluated_val = safe_eval(fname, self.component_instance.__dict__, ALLOWED_BUILTINS)
-            final_val = json.dumps(evaluated_val)
-            self.node.setAttribute(self.attr, final_val)
-    
-@dataclass
+            evaluated_val = safe_format_with_stores(
+                self.content,
+                context,
+                ALLOWED_BUILTINS,
+                store_registry=store_registry,
+                component_instance_registry=instance_registry,
+                ast_trees=self.ast_trees
+            )
+            final_dom_val = evaluated_val
+
+        # Update the DOM node
+        if self.is_boolean:
+            bool_val = bool(evaluated_val) if is_single_expr else str(final_dom_val).lower() == 'true'
+            self.node.toggleAttribute(self.attr, bool_val)
+        else:
+            self.node.setAttribute(self.attr, str(final_dom_val))
+
+        # Prop Synchronization: If the node is a Basis component instance, update its Python property.
+        if hasattr(self.node, '__basis_instance__'):
+            child_instance = self.node.__basis_instance__
+            # We use the raw evaluated value to maintain object references (lists/dicts)
+            # Use setattr to trigger the child's reactivity
+            setattr(child_instance, self.attr, evaluated_val)
+
+    @classmethod
+    def from_blueprint(cls, component_instance, node, blueprint):
+
+        attr = blueprint.kwargs["attr"]
+        content = blueprint.kwargs["content"]
+        fields = blueprint.kwargs["fields"]
+        is_boolean = blueprint.kwargs["is_boolean"]
+
+        if is_boolean:
+            node.removeAttribute(attr)
+
+        instance = cls(
+            component_instance=component_instance,
+            node=node,
+            attr=attr,
+            content=content,
+            fields=fields,
+            is_boolean=is_boolean,
+            ast_trees=blueprint.ast_trees
+        )
+
+        return instance
+
+@dataclass(kw_only=True)
 class SelfAttributeBinding(AttributeBinding):
     def update(self):
         context = self.component_instance.__dict__
         store_registry = self.component_instance.__class__.S
 
+
         if self.attr not in ["in"]:
-            final_val = safe_format_with_stores(self.content, context, ALLOWED_BUILTINS, store_registry, self.component_instance.__class__._instance_registry)
+            final_val = safe_format_with_stores(self.content,
+                                                context,
+                                                ALLOWED_BUILTINS,
+                                                store_registry,
+                                                self.component_instance.__class__._instance_registry,
+                                                ast_trees=self.ast_trees)
+
             if self.is_boolean:
                 bool_val = str(final_val).lower() == 'true'
                 # following line was causing circular updates in react()
@@ -160,14 +293,31 @@ class SelfAttributeBinding(AttributeBinding):
         else:
             formatter = Formatter()
             _, fname, _, _ = next(iter(formatter.parse(self.content)))
-            evaluated_val = safe_eval(fname, context, ALLOWED_BUILTINS)
+            evaluated_val = safe_eval(fname, context, ALLOWED_BUILTINS, tree=self.ast_trees.get(fname))
             final_val = json.dumps(evaluated_val)
             self.component_instance.__dict__[self.attr] = final_val
 
+    @classmethod
+    def from_blueprint(cls, component_instance, node, blueprint):
+        instance = cls(
+            component_instance=component_instance,
+            node=node,
+            attr=blueprint.kwargs['attr'],
+            content=blueprint.kwargs['content'],
+            fields=blueprint.kwargs['fields'],
+            is_boolean=blueprint.kwargs['is_boolean'],
+            ast_trees=blueprint.ast_trees
+        )
 
-@dataclass
+        if instance.is_boolean:
+            node.removeAttribute(blueprint.attr)
+
+        return instance
+
+@dataclass(kw_only=True)
 class SetterBinding(NodeBinding):
     field: str
+    ast_trees: dict = field(default_factory=dict, init=False, repr=False)
 
     @property
     def fields(self):
@@ -176,7 +326,7 @@ class SetterBinding(NodeBinding):
     def update(self):
         pass
 
-@dataclass
+@dataclass(kw_only=True)
 class ModelBinding(NodeBinding):
     field: str
 
@@ -192,7 +342,27 @@ class ModelBinding(NodeBinding):
         else:
             self.node.value = str(val) if val is not None else ""
 
-@dataclass
+    @classmethod
+    def from_blueprint(cls, component_instance, node, blueprint):
+        
+        bind_attr_value = blueprint.kwargs['field']
+        target_fn = "bind_handler"
+
+        input_type = node.getAttribute('type') if hasattr(node, 'hasAttribute') and node.hasAttribute('type') else 'text'
+
+        handler = component_instance._create_update_handler(bind_attr_value, input_type)
+        component_instance.__dict__[target_fn] = handler
+
+        instance = cls(
+            component_instance=component_instance,
+            node=node,
+            ast_trees=blueprint.ast_trees,
+            **blueprint.kwargs,
+        )
+
+        return instance
+
+@dataclass(kw_only=True)
 class EventBinding(NodeBinding):
     event:str
     target_fn:str
@@ -200,13 +370,35 @@ class EventBinding(NodeBinding):
     @property
     def element(self):
         return self.node
-
+    
     @property
     def fields(self):
         return [self.target_fn]
     
+    @classmethod
+    def from_blueprint(cls, component_instance, node, blueprint):
+        
+        event = blueprint.kwargs['event']
+        target_fn = blueprint.kwargs['target_fn']
 
-@dataclass
+        func_obj = getattr(component_instance, target_fn)
+        handler = component_instance._create_function_proxy(func_obj)
+
+        if node.hasAttribute(event):
+            node.removeAttribute(event)
+
+        setattr(node, event, handler)
+
+        instance = cls(
+            component_instance=component_instance,
+            node=node,
+            ast_trees=blueprint.ast_trees,
+            **blueprint.kwargs,
+        )
+
+        return instance
+
+@dataclass(kw_only=True)
 class IfBinding(NodeBinding):
     expr: str
     anchor: object
@@ -214,7 +406,7 @@ class IfBinding(NodeBinding):
     fields: list
 
     def update(self):
-        expr_eval = bool(safe_eval(self.expr, self.component_instance.__dict__, ALLOWED_BUILTINS))
+        expr_eval = bool(safe_eval(self.expr, self.component_instance.__dict__, ALLOWED_BUILTINS, tree=self.ast_trees.get(self.expr)))
         if expr_eval == self.is_visible:
             return  # visibility unchanged — skip DOM mutation
         if expr_eval == False:
@@ -226,20 +418,59 @@ class IfBinding(NodeBinding):
     def marked_for_hydration(self):
         return [self.node, self.anchor]
 
+    @classmethod
+    def from_blueprint(cls, component_instance, node, blueprint):
+        if_expr_clean = blueprint.kwargs['expr']
+        anchor = component_instance._create_element(f"div")
+        anchor.setAttribute("style", "display: contents;")
+        anchor.setAttribute("data-if-expression", "{" + if_expr_clean + "}")
+        
+        node.parentNode.insertBefore(anchor, node)
+        
+        return cls(
+            component_instance=component_instance, 
+            node=node,
+            anchor=anchor,
+            ast_trees=blueprint.ast_trees,
+            **blueprint.kwargs
+        )
 
-@dataclass
+
+@dataclass(kw_only=True)
 class ChildBinding(NodeBinding):
     childclass:str
     childinstance:object=None
-    attr_bindings:list[SelfAttributeBinding] = field(default_factory=list)
+    attr_bindings:"list[SelfAttrBinding]"=field(default_factory=list)
     loop_binding:"LoopBinding|KeyedLoopBinding|None"=None
+    ast_trees: dict = field(default_factory=dict, init=True, repr=False)
 
-@dataclass
+    @classmethod
+    def from_blueprint(cls, component_instance, node, blueprint):
+        tag = blueprint.kwargs['tag']
+        childcomponent_py = component_instance.__class__._registry[tag]
+        dom_child_node_attrs = {a: node.getAttribute(a) for a in node.getAttributeNames()}
+        
+        if not getattr(node, '__basis_mounted__', False):
+            child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
+            node.__basis_mounted__ = True
+            
+            return cls(
+                component_instance=component_instance, 
+                node=node, 
+                childclass=childcomponent_py, 
+                childinstance=child_instance, 
+                ast_trees=blueprint.ast_trees,
+            )
+
+        return None
+
+@dataclass(kw_only=True)
 class LoopBinding(NodeBinding):
     item:str
     collection:str
     clone:object
     parent:object
+    ast_trees: dict = field(default_factory=dict, repr=False)
 
     @property
     def fields(self):
@@ -320,8 +551,22 @@ class LoopBinding(NodeBinding):
     def marked_for_hydration(self):
         return [self.node, self.parent]
 
+    @classmethod
+    def from_blueprint(cls, component_instance, node, blueprint):
+        cloned_node = node.cloneNode(True)
+        
+        instance = cls(
+            component_instance=component_instance, 
+            node=node,
+            clone=cloned_node,
+            parent=node.parentNode,
+            ast_trees=blueprint.ast_trees,
+            **blueprint.kwargs,
+        )
+        
+        return instance
 
-@dataclass
+@dataclass(kw_only=True)
 class KeyedLoopBinding(NodeBinding):
     item:str
     collection:str
@@ -329,6 +574,7 @@ class KeyedLoopBinding(NodeBinding):
     parent:object
     key:str
     instances:dict = field(default_factory=dict)
+    ast_trees: dict = field(default_factory=dict, repr=False)
 
     @property
     def fields(self):
@@ -460,10 +706,10 @@ class KeyedLoopBinding(NodeBinding):
 
 
                 new_cb = ChildBinding(component_instance=self.component_instance,
-                        node=child_instance.__element__,
-                        childclass=childcomponent_py,
-                        childinstance=child_instance,
-                        loop_binding=self)
+                                      node=child_instance.__element__,
+                                      childclass=childcomponent_py,
+                                      childinstance=child_instance,
+                                      loop_binding=self)
                 self.component_instance.add_binding(new_cb)
                 
 
@@ -480,6 +726,21 @@ class KeyedLoopBinding(NodeBinding):
     def marked_for_hydration(self):
         return [self.node, self.parent]
 
+    @classmethod
+    def from_blueprint(cls, component_instance, node, blueprint):
+        cloned_node = node.cloneNode(True)
+        
+        instance = cls(
+            component_instance=component_instance, 
+            node=node,
+            clone=cloned_node,
+            parent=node.parentNode,
+            ast_trees=blueprint.ast_trees,
+            **blueprint.kwargs,
+        )
+        
+        return instance
+
 @dataclass
 class SlotBinding(NodeBinding):
     name: str | None = None
@@ -491,13 +752,7 @@ class SlotBinding(NodeBinding):
 
 
 
-def safe_eval(expr_str, context, allowed_builtins):
-    try:
-        tree = ast.parse(expr_str, mode='eval')
-    except Exception as e:
-        print(f"Failed to parse {expr_str}: {e}")
-        return f"[Error: {expr_str}]"
-    
+def _eval_ast(node, context, allowed_builtins):
     def _eval(node):
         if isinstance(node, ast.Expression):
             return _eval(node.body)
@@ -529,15 +784,6 @@ def safe_eval(expr_str, context, allowed_builtins):
 
         elif isinstance(node, ast.Constant):
             return node.value
-
-        #elif isinstance(node, ast.Str):
-        #    return node.s
-
-        #elif isinstance(node, ast.Num):
-        #    return node.n
-
-        #elif isinstance(node, ast.NameConstant):
-        #    return node.value
 
         elif isinstance(node, ast.BinOp):
             left = _eval(node.left)
@@ -605,8 +851,18 @@ def safe_eval(expr_str, context, allowed_builtins):
         else:
             raise ValueError(f"Unsupported AST node type: {type(node).__name__}")
             
+    return _eval(node)
+
+def safe_eval(expr_str, context, allowed_builtins, tree=None):
+    if tree is None:
+        try:
+            tree = ast.parse(expr_str, mode='eval')
+        except Exception as e:
+            print(f"Failed to parse {expr_str}: {e}")
+            return f"[Error: {expr_str}]"
+    
     try:
-        return _eval(tree.body)
+        return _eval_ast(tree.body if isinstance(tree, ast.Expression) else tree, context, allowed_builtins)
     except Exception as e:
         print(f"Error evaluating '{expr_str}': {e}", context)
         return f"[Error: {expr_str}]"
@@ -625,23 +881,28 @@ def safe_format(template_str, context, allowed_builtins):
                 result += str(val)
     return result
 
-def safe_format_with_stores(template_str, context, allowed_builtins, store_registry, component_instance_registry):
+def safe_format_with_stores(template_str, context, allowed_builtins, store_registry, component_instance_registry, ast_trees=None):
     
     result = ""
     formatter = Formatter()
     for literal_text, fname, format_spec, conversion in formatter.parse(template_str):
         result += literal_text
         if fname is not None:
-            if fname.startswith("$"):
+            ast_tree = ast_trees.get(fname) if ast_trees else None
+            
+            # If we have an AST tree, it should be the desugared one.
+            # safe_eval will handle evaluating BaseComponent.S[...] or BaseComponent.C[...]
+            # if we provide the tree.
+            if ast_tree:
+                val = safe_eval(fname, context, allowed_builtins, tree=ast_tree)
+            elif fname.startswith("$"):
                 store_name, attr_name = fname.strip("$").split(".")
                 val = getattr(store_registry[store_name], attr_name)
             elif fname.startswith("#"):
                 component_name, attr_name = fname.strip("#").split(".")
                 if component_name in component_instance_registry:
-                    #print("FOUND COMPONENT INSTANCE IN REGISTRY: ")
                     val = getattr(component_instance_registry[component_name], attr_name)
                 else:
-                    #print("COULD NOT FIND COMPONENT INSTANCE IN THE REGISTRY: ", component_name)
                     val = ""
             else:
                 val = safe_eval(fname, context, allowed_builtins)
@@ -653,43 +914,81 @@ def safe_format_with_stores(template_str, context, allowed_builtins, store_regis
     
     return result
 
-def extract_dependencies(template_str, allowed_builtins):
-    
+def extract_dependencies(template_str, allowed_builtins=ALLOWED_BUILTINS):
+    """
+    Extracts dependencies from a template string and returns a tuple:
+    (list of dependencies, dictionary of desugared AST trees mapping fname -> tree).
+    """
     formatter = Formatter()
     deps = set()
-    for _, fname, _, _ in formatter.parse(template_str):
-        if fname is not None:
-            if (dollar_or_hash_sign:=fname[0]) in ['$', '#']:
-                fname_no_sign = fname.strip("$#")
-                try:
-                    tree = ast.parse(fname_no_sign, mode='eval')
+    trees = {}
 
-                    store_name = None
-                    attr_name = None
+    try:
+        parsed_template = list(formatter.parse(template_str))
+    except ValueError:
+        # Handle cases where template_str is not a valid format string (e.g. CSS)
+        return [], {}
+    
+    fnames = [fname for _, fname, _, _ in parsed_template]
+    
+    has_expr = any(fnames)
 
-                    for node in ast.walk(tree):
-                        if isinstance(node, ast.Name): # extract store_name
-                            if node.id not in allowed_builtins and isinstance(getattr(node, 'ctx', None), ast.Load):
-                                store_name = node.id
-                        if isinstance(node, ast.Attribute): # extract the attr in the Store
-                            attr_name = node.attr
-                            
-                    if store_name and attr_name:
-                        deps.add(f"{dollar_or_hash_sign}{store_name}.{attr_name}")
+    if not has_expr:
+        return [], {}
+    
+    for fname in fnames:
+
+        desugared = desugar_expression(fname)
+
+        try:
+            tree = ast.parse(desugared, mode='eval')
+            trees[fname] = tree
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name):
+                    if node.id not in allowed_builtins and node.id not in ['BaseComponent'] and isinstance(getattr(node, 'ctx', None), ast.Load):
+                        deps.add(node.id)
+                elif isinstance(node, ast.Attribute):
+                    # Detect BaseComponent.S['store'].attr or BaseComponent.C['comp'].attr
+                    if isinstance(node.value, ast.Subscript) and \
+                       isinstance(node.value.value, ast.Attribute) and \
+                       isinstance(node.value.value.value, ast.Name) and \
+                       node.value.value.value.id == 'BaseComponent' and \
+                       node.value.value.attr in ['S', 'C']:
                         
-                except SyntaxError:
-                    pass
-            else:
-                try:
-                    tree = ast.parse(fname, mode='eval')
-                    for node in ast.walk(tree):
-                        if isinstance(node, ast.Name):
-                            if node.id not in allowed_builtins and isinstance(getattr(node, 'ctx', None), ast.Load):
-                                deps.add(node.id)
-                except SyntaxError:
-                    pass
-        
-    return list(deps)
+                        s_name = None
+                        if isinstance(node.value.slice, ast.Constant):
+                            s_name = node.value.slice.value
+                        elif hasattr(ast, 'Index') and isinstance(node.value.slice, ast.Index) and isinstance(node.value.slice.value, ast.Constant):
+                            s_name = node.value.slice.value.value
+                        
+                        if s_name:
+                            prefix = '$' if node.value.value.attr == 'S' else '#'
+                            deps.add(f"{prefix}{s_name}.{node.attr}")
+                
+                elif isinstance(node, ast.Subscript):
+                    # Fallback for just BaseComponent.S['store'] without attribute
+                    if isinstance(node.value, ast.Attribute) and \
+                       isinstance(node.value.value, ast.Name) and \
+                       node.value.value.id == 'BaseComponent' and \
+                       node.value.attr in ['S', 'C']:
+                        
+                        s_name = None
+                        if isinstance(node.slice, ast.Constant):
+                            s_name = node.slice.value
+                        elif hasattr(ast, 'Index') and isinstance(node.slice, ast.Index) and isinstance(node.slice.value, ast.Constant):
+                            s_name = node.slice.value.value
+                        
+                        if s_name:
+                            prefix = '$' if node.value.attr == 'S' else '#'
+                            #deps.add(f"{prefix}{s_name}")
+
+        except SyntaxError:
+            print(f"Error parsing expression: {desugared}")
+        except Exception as e:
+            print(f"Error extracting dependencies for {desugared}: {e}")
+
+    return list(deps), trees
 
 
 def _process_standard_attr_bindings(component_instance, element, attribute_names):
@@ -716,10 +1015,8 @@ def _process_standard_attr_bindings(component_instance, element, attribute_names
             other_attr_value = element.getAttribute(other_attr)
             other_attr_isboolean = False
 
-        fnames = [fname for _, fname, _, _ in formatter.parse(other_attr_value) if fname is not None]
-        has_expr = any(fnames)
-        if has_expr:
-            fieldnames = extract_dependencies(other_attr_value, ALLOWED_BUILTINS)
+        fieldnames, ast_trees_dict = extract_dependencies(other_attr_value, ALLOWED_BUILTINS)
+        if len(fieldnames):
             bindings.append(AttributeBinding(component_instance=component_instance, node=element, attr=other_attr_no_braces, content=other_attr_value, fields=fieldnames, is_boolean=other_attr_isboolean))
             fields += fieldnames
             
@@ -748,13 +1045,18 @@ def _process_self_attr_bindings(component_instance, attrs_dict:dict):
             other_attr_isboolean = False
 
         try:
-            fnames = [fname for _, fname, _, _ in formatter.parse(other_attr_value) if fname is not None]
-            has_expr = any(fnames)
-            if has_expr:
-                fieldnames = extract_dependencies(other_attr_value, ALLOWED_BUILTINS)
-                if len(fieldnames):
-                    bindings.append(SelfAttributeBinding(component_instance=component_instance, node=component_instance.__element__, attr=other_attr_no_braces, content=other_attr_value, fields=fieldnames, is_boolean=other_attr_isboolean))
-                    fields += fieldnames
+            fieldnames, ast_trees_dict = extract_dependencies(other_attr_value, ALLOWED_BUILTINS)
+            if len(fieldnames):
+                bindings.append(SelfAttributeBinding(
+                    component_instance=component_instance,
+                    node=component_instance.__element__,
+                    attr=other_attr_no_braces,
+                    content=other_attr_value,
+                    fields=fieldnames,
+                    is_boolean=other_attr_isboolean,
+                    ast_trees=ast_trees_dict)
+                )
+                fields += fieldnames
         except:
             continue
 
@@ -785,14 +1087,14 @@ def _process_text_bindings(component_instance, textnode):
     bindings = []
     fields = []
 
-    if node.parentElement and str.lower(node.parentElement.tagName) == 'style':
+    if node.parentElement and str.lower(node.parentElement.tagName) in ['style', 'script']:
         return [], []
     
     text_content = node.textContent
-    fnames = [fname for _, fname, _, _ in formatter.parse(text_content) if fname is not None]
-    has_expr = any(fnames)
-    if has_expr:
-        fieldnames = extract_dependencies(text_content, ALLOWED_BUILTINS)
+    
+    fieldnames, ast_trees_dict = extract_dependencies(text_content, ALLOWED_BUILTINS)
+
+    if len(fieldnames):
         bindings.append(TextBinding(component_instance=component_instance, \
                                     node=node, \
                                     content=text_content, \

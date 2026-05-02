@@ -34,6 +34,20 @@ class Component(BaseComponent):
         setattr(cls, "__blueprint__", init_template)
     
     @classmethod
+    def _analyze_template(cls):
+
+        cloned_blueprint = cls.clone_blueprint()
+        cloned_content = cloned_blueprint.content
+        
+        # Reuse _get_nodes for consistent indexing
+        nodes = cls._get_nodes(cloned_content)
+        
+        for node_index, node in enumerate(nodes):
+            blueprints = cls._analyze_node(node, node_index)
+            if blueprints:
+                cls.__binding_blueprints__.extend(blueprints)
+    
+    @classmethod
     @client
     def clone_blueprint(cls):
         cloned = document.importNode(cls.__blueprint__, True)
@@ -68,16 +82,10 @@ class Component(BaseComponent):
         super().__init__()
 
 
+    @classmethod
+    def _get_nodes(cls, element):
 
-    @client
-    def _get_nodes(self, element=None):
-
-        if not element:
-            element_to_walk = self.__template__
-        else:
-            element_to_walk = element
-
-        walker = document.createTreeWalker(element_to_walk, window.NodeFilter.SHOW_ELEMENT | window.NodeFilter.SHOW_TEXT | window.NodeFilter.SHOW_COMMENT)
+        walker = document.createTreeWalker(element, window.NodeFilter.SHOW_ELEMENT | window.NodeFilter.SHOW_TEXT | window.NodeFilter.SHOW_COMMENT)
 
         nodes = []
         current_node = walker.nextNode()
@@ -281,58 +289,6 @@ class Component(BaseComponent):
             if child_instance.client_id: # ?mismatched alignment
                 corresponding_ssr_root_node = marked_for_hydration_dict[child_instance.client_id]
                 child_instance.initialize_ssr(corresponding_ssr_root_node)
-            
-
-    @classmethod
-    def hydrate(cls, container, **attributes):
-
-        """
-        Attach Basis reactivity to an existing server-rendered DOM node.
-
-        Unlike mount(), this method does NOT insert any new nodes — it binds
-        against what is already in the live DOM (placed there by SSR).
-
-        Parameters
-        ----------
-        container:
-            The custom-element host node (e.g. <my-sidebar>) whose
-            firstElementChild is the pre-rendered component root.
-        attributes:
-            Initial attribute values to set before building bindings.
-        """
-        print(f"hydrate: starting hydration of {cls} against existing DOM")
-        new_instance = cls.__new__(cls)
-        # Manually call super() __init__ to set up __bindings__ / __fields__
-        super(Component, new_instance).__init__()
-        new_instance.__dict__['_subscriptions'] = []
-
-        if attributes:
-            new_instance.__dict__.update(attributes)
-
-        # Point _template at the existing live DOM root (firstElementChild of
-        # the custom-element host, which is the server-rendered component root).
-        live_root = container.firstElementChild or container
-        new_instance.__dict__['_template'] = cls._create_element('template')
-        new_instance.__dict__['_template'].content.appendChild(live_root)
-
-        # Bootstrap SelfBinding from the live root
-        new_instance.__dict__['__bindings__'].append(
-            SelfBinding(component_instance=new_instance, node=live_root)
-        )
-
-        @client
-        def _finish_hydration(inst):
-            inst.__init_bindings__()
-            inst.__init_fields__()
-            with inst.refrain() as refrained:
-                for k, v in attributes.items():
-                    setattr(refrained, k, v)
-
-        _finish_hydration(new_instance)
-
-        print(f"hydrate: finished hydration of {cls}")
-        return new_instance
-        
     
     @client
     def _find_elements_marked_for_hydration(self, element=None):
@@ -378,11 +334,11 @@ class Component(BaseComponent):
 
     @client
     def _set_nodes_with_client_ids(self, element=None):
-
+            
         if not element:
-            element_to_walk = self.__template__
-        else:
-            element_to_walk = element
+            element = self.__template__
+
+        element_to_walk = element
         
         id_to_node_map = {}
 

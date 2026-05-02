@@ -33,7 +33,8 @@ class Store:
 
     def add_subscription(self, component_instance, attr_name:str):
         if (component_instance, attr_name) not in self._subscriptions:
-            new_subscription = ComponentSubscription(component_instance, attr_name)
+            new_subscription = ComponentSubscription(component_instance=component_instance,
+                                                     attr=attr_name)
             self.__dict__['_subscriptions'].append(new_subscription)
 
     def remove_subscription(self, component_instance, attr_name:str):

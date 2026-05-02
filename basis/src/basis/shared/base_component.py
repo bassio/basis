@@ -1,16 +1,14 @@
 import inspect
 from pathlib import Path
-from pathlib import Path
 from string import Formatter
 
-from basis.shared.bindings import Binding, SelfBinding, TextBinding, \
+from basis.shared.bindings import BindingBlueprint, Binding, SelfBinding, TextBinding, \
     AttributeBinding, SelfAttributeBinding, ModelBinding, EventBinding, IfBinding, \
     ChildBinding, LoopBinding, KeyedLoopBinding, SlotBinding, ComponentSubscription, \
-    safe_eval, safe_format, safe_format_with_stores, \
-    extract_dependencies, ALLOWED_BUILTINS, Refrain, \
-    _process_event_attr_bindings, _process_standard_attr_bindings, \
-    _process_text_bindings, _process_self_attr_bindings
-
+    desugar_expression, safe_eval, safe_format, safe_format_with_stores, \
+    ALLOWED_BUILTINS, Refrain, \
+    _process_self_attr_bindings
+from basis.shared.bindings import extract_dependencies
 from basis.shared.store import Store
 
 
@@ -69,6 +67,10 @@ class BaseComponent(object):
         raise NotImplementedError()
     
     @classmethod
+    def _analyze_template(cls):
+        raise NotImplementedError()
+
+    @classmethod
     def _register_component_subclass(cls):
         if hasattr(cls, '__tag__') and "-" in cls.__tag__:
             tag = cls.__tag__
@@ -80,7 +82,7 @@ class BaseComponent(object):
 
     @classmethod
     def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
+        super().__init_subclass__()
         
         templatestr = cls._get_template_string()
         
@@ -90,16 +92,26 @@ class BaseComponent(object):
         setattr(cls, "__templatestr__", templatestr)
 
         cls._set_style_string()
-        
+
+        setattr(cls, "__binding_blueprints__", [])
+
+        #set kwargs
+        setattr(cls, "_creation_kwargs", kwargs)
+
         ###Client
         cls._initialize_blueprint()
-        
+
+        cls._analyze_creation_args()
+
+        cls._analyze_template()
+
         cls._register_component_subclass()
 
 
     def __init__(self):
         super().__init__()
         self.__dict__['__bindings__'] = []
+        self.__dict__['_selfattr_bindings'] = {}
         self.__dict__['_deps'] = {}
         self.__dict__['__fields__'] = []
         self.__dict__['_subscriptions'] = []
@@ -109,28 +121,23 @@ class BaseComponent(object):
         template = self.__template__
         self_element = template.firstElementChild
         self.add_binding(SelfBinding(component_instance=self, node=self_element))
+        setattr(self_element, '__basis_instance__', self)
         
     #
+    def _get_instance_nodes(self):
+        """Walk the template once and cache the nodes for index-based lookup."""
+        if '_nodes' not in self.__dict__:
+            self.__dict__['_nodes'] = self.__class__._get_nodes(self.__template__)
+        return self.__dict__['_nodes']
+
     def __init_slot_bindings__(self):
-        nodes = self._get_nodes()
-
-        bindings = []
-
-        for node in nodes:
-            if hasattr(node, 'getAttributeNames') \
-            and str.lower(node.tagName) == 'slot':
-                slot_name = node.getAttribute('name')
-
-                if not slot_name:
-                    slot_is_default = True
-                    slot_name = None
-                else:
-                    slot_is_default = False
-
-                bindings.append(SlotBinding(component_instance=self, node=node, name=slot_name, is_default=slot_is_default))
-
-        for b in bindings:
-            self.add_binding(b)
+        nodes = self._get_instance_nodes()
+        for blueprint in self.__class__.__binding_blueprints__:
+            if blueprint.binding_class == SlotBinding:
+                node = nodes[blueprint.node_index]
+                binding = SlotBinding.from_blueprint(self, node, blueprint)
+                if binding:
+                    self.add_binding(binding)
     
     #
     def __init_self_attr_bindings__(self, **attrs_dict):
@@ -142,20 +149,32 @@ class BaseComponent(object):
 
         #print("attrs_dict", attrs_dict, self.__class__)
 
-        attr_bindings, fields = _process_self_attr_bindings(self, attrs_dict)
+        #attr_bindings, fields = _process_self_attr_bindings(self, attrs_dict)
         
-        #print("self attr bindings:", attr_bindings)
+        self_attr_binding_blueprints = [bp for bp in self.__class__.__binding_blueprints__
+                                        if bp.binding_class == SelfAttributeBinding]
+
+        attr_bindings = []
+
+        for bp in self_attr_binding_blueprints:
+            attr_bindings.append(SelfAttributeBinding.from_blueprint(self, bp.node, bp))
 
         for b in attr_bindings:
             self.add_binding(b)
+            self.__dict__['_selfattr_bindings'][b.attr] = b
 
     @classmethod
     def initialize(cls, container, **kwargs):
-        new_instance = cls()
+
+        cls_dict = dict(cls.__dict__)
+        
+        new_cls = type(cls.__name__, (cls,), cls_dict, **kwargs)
+
+        new_instance = new_cls()
 
         new_instance.__init_selfbinding__()
 
-        new_instance.__init_self_attr_bindings__(**kwargs)
+        #new_instance.__init_self_attr_bindings__(**kwargs)
         
         new_instance.__init_slot_bindings__()
 
@@ -198,15 +217,6 @@ class BaseComponent(object):
                 if binding not in self._deps[field]:
                     self._deps[field].append(binding)
 
-        if hasattr(binding, 'attr_bindings'):
-            for cab in binding.attr_bindings:
-                if hasattr(cab, 'fields'):
-                    for field in cab.fields:
-                        if field not in self._deps:
-                            self._deps[field] = []
-                        if cab not in self._deps[field]:
-                            self._deps[field].append(cab)
-
     def remove_binding(self, binding):
         try:
             self.__dict__['__bindings__'].remove(binding)
@@ -216,17 +226,11 @@ class BaseComponent(object):
             for field in binding.fields:
                 if field in self._deps and binding in self._deps[field]:
                     self._deps[field].remove(binding)
-        if hasattr(binding, 'attr_bindings'):
-            for cab in binding.attr_bindings:
-                if hasattr(cab, 'fields'):
-                    for field in cab.fields:
-                        if field in self._deps and cab in self._deps[field]:
-                            self._deps[field].remove(cab)
     
 
-    def _get_nodes(self, element=None):
-        return NotImplementedError
-
+    @classmethod
+    def _get_nodes(cls, element):
+        raise NotImplementedError()
 
     def _create_function_proxy(self, f):
         return f
@@ -241,89 +245,119 @@ class BaseComponent(object):
                 setattr(self, f, event.target.value)
 
         return update_state
+    
+    @classmethod
+    def _analyze_creation_args(cls):
 
-    def _bind_node(self, node):
+        blueprints = []
 
+        for k, v in cls._creation_kwargs.items():
+
+            if k.startswith("{") and k.endswith("}"):
+                attr_no_braces = k.strip("{}")
+                attr_isboolean = True
+
+                if (v == "") or (v == None):
+                    attr_value = k
+            
+            else:
+                attr_no_braces = k
+                attr_isboolean = False
+                attr_value = v
+
+            try:
+                fieldnames, ast_trees_dict = extract_dependencies(attr_value, ALLOWED_BUILTINS)
+
+                if len(fieldnames):
+
+                    kwargs = {}
+                    kwargs['attr'] = attr_no_braces
+                    kwargs['content'] = attr_value
+                    kwargs['fields'] = fieldnames
+                    kwargs['is_boolean'] = attr_isboolean
+
+                    bp = BindingBlueprint(binding_class=SelfAttributeBinding,
+                                        node_index = -1,
+                                        kwargs = kwargs,
+                                        ast_trees=ast_trees_dict)
+                    blueprints.append(bp)
+
+            except:
+                continue
+        
+        #print("####### blueprints", cls._creation_kwargs)
+
+        cls.__binding_blueprints__.extend(blueprints)
+
+    @classmethod
+    def _analyze_node(cls, node, node_index):
+
+        blueprints = []
         formatter = Formatter()
-        bindings=[]
-        fields=[]
 
-        if hasattr(node, 'getAttributeNames'): #confirm it is an ELEMENT not a TEXT node
+        if hasattr(node, 'getAttributeNames'): # ELEMENT node
             element = node
 
-            element_attrs = [a for a in element.getAttributeNames()]
+            tag_name = element.tagName.lower()
+            if tag_name in ['style', 'script']:
+                return []
+
+            element_attrs = list(element.getAttributeNames())
             event_attrs = [a for a in element_attrs if a.startswith("on")]
             other_attrs = [a for a in element_attrs if not a.startswith("on")]
 
             special_attrs = ["if", "for", "in", "key", "bind"]
-
-            non_standard_attrs = [a for a in other_attrs if not a.startswith("on") and a in special_attrs]
+            non_standard_attrs = [a for a in other_attrs if a in special_attrs]
             standard_attrs = [a for a in other_attrs if a not in non_standard_attrs]
 
             is_loop_template = 'for' in non_standard_attrs
 
-            if '-' in element.tagName and not is_loop_template:
-                tag = str.lower(element.tagName)
-                childcomponent_py = self.__class__._registry[tag]
-                dom_child_node_attrs = {a: element.getAttribute(a) for a in element.getAttributeNames()}
-
-                if not getattr(node, '__basis_mounted__', False):
-                    print("appending child.. with dom attrs:", dom_child_node_attrs)
-                    child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
-                    node.__basis_mounted__ = True
-                    node.appendChild(child_instance.__template__)
-                
-                    child_attr_bindings = [sab for sab in child_instance.__bindings__ \
-                                        if isinstance(sab, SelfAttributeBinding)]
-                    bindings.append(ChildBinding(component_instance=self, node=element, childclass=childcomponent_py, childinstance=child_instance, attr_bindings=child_attr_bindings))
-
-            if str.lower(element.tagName) == 'slot':
-                return
-
-            if not is_loop_template:    
-                #event
-                event_bindings, event_fields = _process_event_attr_bindings(self, element, event_attrs)
-                bindings += event_bindings
-                fields += event_fields
-                
-                #standard
-                std_bindings, std_fields = _process_standard_attr_bindings(self, element, standard_attrs)
-                bindings += std_bindings
-                fields += std_fields
-
-
-            #'if' attr
+            # Process 'if'
             if 'if' in non_standard_attrs:
                 if_expr = element.getAttribute('if')
                 if_expr_clean = if_expr.removeprefix("{").removesuffix("}")
-                fieldnames = extract_dependencies(if_expr, ALLOWED_BUILTINS) 
+                fieldnames, trees_dict = extract_dependencies(if_expr, ALLOWED_BUILTINS)
                 
-                #anchor = self._create_element(f"if: {if_expr_clean}")
-                anchor = self._create_element(f"div")
-                anchor.setAttribute("style", "display: contents;")
-                anchor.setAttribute("data-if-expression", "{" + if_expr_clean + "}")
-                
-                #client
-                element.parentNode.insertBefore(anchor, element)
-                bindings.append(IfBinding(
-                    component_instance=self, node=element, expr=if_expr_clean, anchor=anchor, is_visible=True, fields=fieldnames
+                blueprints.append(BindingBlueprint(
+                    binding_class=IfBinding,
+                    node_index=node_index,
+                    kwargs={'expr': if_expr_clean, 'fields': fieldnames, 'is_visible': True},
+                    ast_trees=trees_dict
                 ))
-                fields += fieldnames
 
-            #'bind' attr
+            # Process 'for' (Loop)
+            if 'for' in non_standard_attrs:
+                inlist_attr_value = element.getAttribute('in').strip("{}")
+                for_attr_value = element.getAttribute('for')
+                fieldnames, trees_dict = extract_dependencies(element.getAttribute('in'), ALLOWED_BUILTINS)
+                
+                binding_class = KeyedLoopBinding if 'key' in non_standard_attrs else LoopBinding
+                kwargs = {'item': for_attr_value, 'collection': inlist_attr_value}
+                if 'key' in non_standard_attrs:
+                    kwargs['key'] = element.getAttribute('key')
+                
+                blueprints.append(BindingBlueprint(
+                    binding_class=binding_class,
+                    node_index=node_index,
+                    kwargs=kwargs,
+                    ast_trees=trees_dict
+                ))
+            
+            # Process 'bind'
             if 'bind' in non_standard_attrs and not is_loop_template:
                 bind_attr_value = element.getAttribute('bind')
-                fieldnames = extract_dependencies(bind_attr_value, ALLOWED_BUILTINS)
+                fieldnames, trees_dict = extract_dependencies(bind_attr_value, ALLOWED_BUILTINS)
                 if len(fieldnames) == 1:
                     field = fieldnames[0]
-                    bindings.append(ModelBinding(component_instance=self, node=element, field=field))
-                    fields.append(field)
+                    blueprints.append(BindingBlueprint(
+                        binding_class=ModelBinding,
+                        node_index=node_index,
+                        kwargs={'field': field},
+                        ast_trees=trees_dict
+                    ))
+                    # Also need the event binding for the input
                     tag_name = str.lower(element.tagName)
                     input_type = element.getAttribute('type') if element.hasAttribute('type') else 'text'
-
-                    handler = self._create_update_handler(field, input_type)
-                    self.__dict__['bind_handler'] = handler
-
                     if tag_name == 'input' and input_type in ['checkbox', 'radio']:
                         bound_event = 'change'
                     elif tag_name == 'select':
@@ -331,47 +365,113 @@ class BaseComponent(object):
                     else:
                         bound_event = 'input'
                     
-                    #client
-                    element.addEventListener(bound_event, handler)
-                    bindings.append(EventBinding(component_instance=self, node=element, event=f"on{bound_event}", target_fn='bind_handler'))
+                    blueprints.append(BindingBlueprint(
+                        binding_class=EventBinding,
+                        node_index=node_index,
+                        kwargs={'event': f"on{bound_event}", 'target_fn': 'bind_handler'}
+                    ))
 
-            if 'for' in non_standard_attrs:
-                inlist_attr_value = element.getAttribute('in').strip("{}")
-                for_attr_value = element.getAttribute('for')
+            # Process Components (ChildBinding)
+            if '-' in element.tagName and not is_loop_template:
+                tag = str.lower(element.tagName)
 
-                #client
-                element_clone = element.cloneNode(True)
-                if element.hasAttribute('key'):
-                    bindings.append(KeyedLoopBinding(component_instance=self, node=element, clone=element_clone, parent=element.parentElement, collection=inlist_attr_value, item=for_attr_value, key=element.getAttribute('key')))
-                else:
-                    bindings.append(LoopBinding(component_instance=self, node=element, clone=element_clone, parent=element.parentElement, collection=inlist_attr_value, item=for_attr_value))
+                blueprints.append(BindingBlueprint(
+                    binding_class=ChildBinding,
+                    node_index=node_index,
+                    kwargs={'tag': tag}
+                ))
+
+            # Process standard attributes and events (if not a loop template)
+            if not is_loop_template:
+                # Events
+                for event_attr in event_attrs:
+                    val = element.getAttribute(event_attr)
+                    if val.startswith("{") and val.endswith("}"):
+                        fieldnames, trees_dict = extract_dependencies(val, ALLOWED_BUILTINS)
+                        
+                        if len(fieldnames) == 1:
+                            field = fieldnames[0]
+                            
+                            blueprints.append(BindingBlueprint(
+                                binding_class=EventBinding,
+                                node_index=node_index,
+                                kwargs={'event': event_attr, 'target_fn': field},
+                                ast_trees=trees_dict
+                            ))
+                
+                # Standard attributes
+                for attr in standard_attrs:
+                    if attr.startswith("{") and attr.endswith("}"):
+                        attr_no_braces = attr.strip("{}")
+                        attr_value = element.getAttribute(attr)
+                        attr_isboolean = True
+            
+                        if (attr_value == "") or (attr_value == None):
+                            attr_value = attr
+
+                    else:
+                        attr_no_braces = attr
+                        attr_value = element.getAttribute(attr)
+                        attr_isboolean = False
+
+                        fieldnames, trees_dict = extract_dependencies(attr_value, ALLOWED_BUILTINS)
+                        
+                        if len(fieldnames):
+                            blueprints.append(BindingBlueprint(
+                                binding_class=AttributeBinding,
+                                node_index=node_index,
+                                kwargs={'attr': attr_no_braces,
+                                        'content': attr_value,
+                                        'fields': fieldnames,
+                                        'is_boolean': attr_isboolean},
+                                ast_trees=trees_dict
+                            ))
+
+            # Special case for Slot
+            if str.lower(element.tagName) == 'slot':
+                slot_name = element.getAttribute('name')
+                blueprints.append(BindingBlueprint(
+                    binding_class=SlotBinding,
+                    node_index=node_index,
+                    kwargs={'name': slot_name, 'is_default': not bool(slot_name)}
+                ))
 
         elif node.nodeName == '#text':
-            text_bindings, text_fields = _process_text_bindings(self, node)
-            bindings += text_bindings
-            fields += text_fields
+            parent = getattr(node, 'parentNode', None) or getattr(node, 'parentElement', None)
+            if parent and hasattr(parent, 'tagName') and parent.tagName.lower() in ['style', 'script']:
+                return []
+                
+            text_content = node.textContent
+            fieldnames, trees_dict = extract_dependencies(text_content, ALLOWED_BUILTINS)
 
-        elif node.nodeName == '#comment':
-            pass
+            if len(fieldnames):
+                blueprints.append(BindingBlueprint(
+                    binding_class=TextBinding,
+                    node_index=node_index,
+                    kwargs={'content': text_content, 'fields': fieldnames},
+                    ast_trees=trees_dict
+                ))
 
-        for b in bindings:
-            self.add_binding(b)
+        return blueprints
 
-        for f in fields:
-            if f not in self.__fields__:
-                self.__fields__.append(f)
-
-    def bind_nodes(self, nodes):
-        for node in nodes:
-            self._bind_node(node)
-
-    def __init_bindings__(self, root_element=None):
-
+    def __init_bindings__(self):
         print(f"__init_bindings__ of {self.__class__}")
+        
+        #print("__binding_blueprints__", self.__class__.__binding_blueprints__)
+        
+        nodes = self._get_instance_nodes()
 
-        nodes = self._get_nodes(element=root_element)
-
-        self.bind_nodes(nodes)
+        for blueprint in self.__class__.__binding_blueprints__:
+            if blueprint.binding_class == SlotBinding:
+                continue
+            elif blueprint.binding_class == SelfAttributeBinding:
+                binding = blueprint.binding_class.from_blueprint(self, self.__element__, blueprint)
+                self.add_binding(binding)
+            else:
+                node = nodes[blueprint.node_index]
+                binding = blueprint.binding_class.from_blueprint(self, node, blueprint)
+                if binding:
+                    self.add_binding(binding)
 
         print(f"Bindings of {self.__class__}:", self.__bindings__)
         
@@ -412,33 +512,48 @@ class BaseComponent(object):
             for field in self.__fields__:
                 if field.startswith("$"):
                     
-                    store_name, attr_name = field.strip("$").split(".")
-                    store_instance = Store._registry[store_name]
+                    if "." in field:
+                        store_name, attr_name = field.strip("$").split(".")
+                        store_instance = Store._registry[store_name]
                     
-                    setattr(refrained, field, store_instance)
-                    
-                    store_instance.add_subscription(self, attr_name)
-                
-                elif field.startswith("#"):
-                    component_name, attr_name = field.strip("#").split(".")
-                    
-                    if component_name in self.__class__._instance_registry:
-                        component_instance = self.__class__._instance_registry[component_name]
-
-                        setattr(refrained, field, component_instance)
-                        
-                        component_instance.add_subscription(self, attr_name)
+                        setattr(refrained, field, store_instance)
+                        store_instance.add_subscription(self, attr_name)
 
                     else:
-                        
-                        new_subscription = ComponentSubscription(self, attr_name)
+                        store_name = field.strip("$")
+                        attr_name = ""
 
-                        print("New ComponentSubscription:", new_subscription)
+                        store_instance = Store._registry[store_name]
 
-                        if component_name in self.__class__._pending_subscriptions:
-                            self.__class__._pending_subscriptions[component_name].append(new_subscription)
+                        setattr(refrained, field, store_instance)
+                        #store_instance.add_subscription(self, attr_name) ?could we subscribe to "" attr (the whole store)
+                
+                elif field.startswith("#"):
+                    if "." in field:
+                        component_name, attr_name = field.strip("#").split(".")
+
+                        if component_name in self.__class__._instance_registry:
+                            component_instance = self.__class__._instance_registry[component_name]
+
+                            setattr(refrained, field, component_instance)
+                            
+                            component_instance.add_subscription(self, attr_name)
+
                         else:
-                            self.__class__._pending_subscriptions[component_name] = [new_subscription]
+                            
+                            new_subscription = ComponentSubscription(component_instance=self,
+                                                                     attr=attr_name)
+
+                            if component_name in self.__class__._pending_subscriptions:
+                                self.__class__._pending_subscriptions[component_name].append(new_subscription)
+                            else:
+                                self.__class__._pending_subscriptions[component_name] = [new_subscription]
+                
+                    else:
+                        # no-op if only "#component_id" with no attribute specified
+                        pass
+
+                        
                 else:
                     refrained.force_react(field)
 
@@ -570,9 +685,7 @@ class BaseComponent(object):
         new_instance = cls.initialize(container, **attributes)
         new_template = new_instance.__template__
         self_element = new_instance.__element__
-        
-        #child_bindings = [eb for eb in new_instance.__bindings__ if isinstance(eb, ChildBinding)]
-        
+                
         if replace:
             container.replaceWith(new_template)
             for k, v in attributes.items():
@@ -585,23 +698,16 @@ class BaseComponent(object):
         #print("nested:", cls.get_nested_children())
         for nested_child in cls.get_nested_children():
             child_instance = nested_child.mount(self_element, replace=False) #appendChild
-            #child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
-            #node.__basis_mounted__ = True
-            #node.appendChild(child_instance.__template__)
-
-            child_attr_bindings = [sab for sab in child_instance.__bindings__ \
-                                    if isinstance(sab, SelfAttributeBinding)]
-            #child_attr_bindings = []
 
             new_instance.add_binding(ChildBinding(component_instance=new_instance,
                                                           node=self_element,
                                                           childclass=nested_child,
                                                           childinstance=child_instance,
-                                                          attr_bindings=child_attr_bindings))
+                                                          ))
 
-
+        '''
         event_bindings = [eb for eb in new_instance.__bindings__ if isinstance(eb, EventBinding)]
-
+        
         for binding in event_bindings:
             if isinstance(binding.target_fn, str):
                 event_method = getattr(new_instance, binding.target_fn)
@@ -614,6 +720,7 @@ class BaseComponent(object):
                 binding.node.removeAttribute(binding.event)
                 setattr(binding.element, binding.event, self_event_method)
                 
+        '''
 
         print(f"mount: finished mounting {cls}")
 
@@ -712,23 +819,18 @@ class BaseComponent(object):
 
     def add_subscription(self, component_instance, attr_name:str):
         if (component_instance, attr_name) not in self._subscriptions:
-            new_subscription = ComponentSubscription(component_instance, attr_name)
+            new_subscription = ComponentSubscription(component_instance=component_instance,
+                                                     attr=attr_name)
 
             self.__dict__['_subscriptions'].append(new_subscription)
 
-            #TRIAL: add it to bindings
             self.add_binding(new_subscription)
-            #note: line above is alternative to below code
 
-            '''
-            if attr_name not in self._deps:
-                self._deps[attr_name] = []
+    def add_pending_subscription(self, target_id, attr_name):
+        if target_id not in self.__class__._pending_subscriptions:
+            self.__class__._pending_subscriptions[target_id] = []
 
-            if new_subscription not in self._deps[attr_name]:
-                self._deps[attr_name].append(new_subscription)
-            '''
-
-        print(f"_subscriptions of {self.__class__}: ", self.__dict__['_subscriptions'])
+        self.__class__._pending_subscriptions[target_id].append((self, attr_name))
 
     def remove_subscription(self, component_instance, attr_name:str):
         self.__dict__['_subscriptions'] = [
@@ -770,3 +872,5 @@ class BaseComponent(object):
                 sub = binding
                 self_component_id = self.__element__.getAttribute("id")
                 sub.component_instance.react([f"#{self_component_id}.{sub.attr}"])
+
+ALLOWED_BUILTINS['BaseComponent'] = BaseComponent
