@@ -26,11 +26,12 @@ class Node(object):
             if type(n).__name__ == 'ServerFragment':
                 expanded.extend(n._consume())
             else:
+                n.remove() # Ensure it's detached from previous parent
                 expanded.append(n)
                 
         parent.children[index+1:index+1] = expanded
         # Update parent references for inserted elements
-        for n in nodes:
+        for n in expanded:
             if hasattr(n, 'parent'):
                 n.parent = parent
 
@@ -132,7 +133,7 @@ class Element(Node):
 
     # Attributes that are template directives — fully resolved by react(),
     # so we strip them from the final serialized HTML to keep output clean.
-    _DIRECTIVE_ATTRS = frozenset({'if', 'for', 'in', 'bind', 'key'})
+    _DIRECTIVE_ATTRS = frozenset({'if', 'for', 'in', 'bind', 'key', 'text-content'})
 
     @property
     def __tag__(self) -> str:
@@ -291,10 +292,17 @@ class Element(Node):
             raise NotImplementedError()
 
     def replace(self, other_element:'Element'):
+        # If the other element is already in a tree, remove it
+        other_element.remove()
+        
         self.tag = other_element.tag
         self.attrs = other_element.attrs
         self.children = other_element.children
         self.void_ = other_element.void_
+        
+        # Ensure children point to this element now
+        for c in self.children:
+            c.parent = self
 
     def replaceWith(self, *elements):
         parent = self.parentNode
@@ -305,47 +313,58 @@ class Element(Node):
             if type(el).__name__ == 'ServerFragment':
                 expanded.extend(el._consume())
             else:
+                el.remove() # Ensure it's detached from previous parent
                 expanded.append(el)
                 
         parent.children[index+1:index+1] = expanded
         parent.children.pop(index)
         # Update parent references for inserted elements
         for el in expanded:
-            if hasattr(el, 'parent'):
-                el.parent = parent
+            el.parent = parent
     
 
     def appendChild(self, child):
-        #print(f"ELEMENT: appendChild of {self.__tag__}:", child)
+        
+        child.remove()
+
         if type(child).__name__ == 'ServerFragment':
             # Mirror DOM DocumentFragment: move its root element in and empty the fragment
             children_to_move = child._consume()
             for c in children_to_move:
                 self.children.append(c)
-                if hasattr(c, 'parent'):
-                    c.parent = self
+                c.parent = self
         else:
             self.children.append(child)
-            if hasattr(child, 'parent'):
-                child.parent = self
+            child.parent = self
 
     def prepend(self, child):
+
+        child.remove()
+
         self.children.insert(0, child)
 
+        child.parent = self
+
     def insertBefore(self, new_node, reference_node):
-        #print("in insertBefore", self.children)
+
+        #In the browser DOM, insertBefore(newNode, null)
+        #is a valid operation that defaults to appendChild(newNode).
+        if reference_node is None:
+            self.appendChild(new_node)
+            return
+
+        new_node.remove()
+
         idx = self.children.index(reference_node)
         
         if type(new_node).__name__ == 'ServerFragment':
             children_to_move = new_node._consume()
             for c in reversed(children_to_move):
                 self.children.insert(idx, c)
-                if hasattr(c, 'parent'):
-                    c.parent = self
+                c.parent = self
         else:
             self.children.insert(idx, new_node)
-            if hasattr(new_node, 'parent'):
-                new_node.parent = self
+            new_node.parent = self
  
     def replaceChildren(self, *children):
         expanded = []
@@ -354,10 +373,15 @@ class Element(Node):
                 expanded.extend(c._consume())
             else:
                 expanded.append(c)
-        self.children = expanded
+        
         for c in self.children:
-            if hasattr(c, 'parent'):
-                c.parent = self
+            c.parent = None
+            
+        self.children = []
+        for c in expanded:
+            c.remove()
+            self.children.append(c)
+            c.parent = self
 
     def cloneNode(self, deep:bool=True):
 

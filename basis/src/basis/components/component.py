@@ -13,6 +13,7 @@ except ImportError:
 from basis.shared.bindings import SelfBinding, ChildBinding, EventBinding, IfBinding, TextBinding, KeyedLoopBinding
 
 from basis.shared.base_component import BaseComponent
+from basis.shared.hmr import start_hmr
 
 def client(func):
 
@@ -64,6 +65,7 @@ class Component(BaseComponent):
 
     @classmethod
     def _register_custom_element(cls):
+        print("_register_custom_element", cls.__tag__)
         if "-" in cls.__tag__ \
         and cls.__tag__ not in cls._registry:
             templatestr = cls.__templatestr__
@@ -77,6 +79,10 @@ class Component(BaseComponent):
         
         #client
         cls._register_custom_element()
+        
+        # Start HMR if on client
+        #if PYSCRIPT:
+        #    start_hmr()
 
     def __init__(self):
         super().__init__()
@@ -150,7 +156,7 @@ class Component(BaseComponent):
             if isinstance(eb.target_fn, str):
                 event_method = getattr(self, eb.target_fn)
                 event_method_final = self._create_function_proxy(event_method)
-                eb.node.removeAttribute(eb)
+                eb.node.removeAttribute(eb.event)
                 setattr(eb.node, eb.event, event_method_final)
             else:
                 self_event_method = eb.target_fn
@@ -162,10 +168,13 @@ class Component(BaseComponent):
             matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{ib_node_cid}']")
             if matched_ssr_node:
                 ib.node = matched_ssr_node
+                ib.is_visible = True
             elif ib_node_cid and ssr_root.getAttribute("data-hydration-id") == ib_node_cid:
                 ib.node = ssr_root
+                ib.is_visible = True
             else:
-                pass #no-op : leave the node the one still in the shadow dom
+                ib.is_visible = False
+                #no-op : leave the node the one still in the shadow dom
 
             anchor_cid = ib.anchor.getAttribute("data-client-id")
             matched_ssr_anchor = ssr_root.querySelector(f"[data-hydration-id='{anchor_cid}']")
@@ -286,9 +295,14 @@ class Component(BaseComponent):
         #print("marked_for_hydration_dict", marked_for_hydration_dict)
         
         for child_instance in root_plus_child_component_instances:
-            if child_instance.client_id: # ?mismatched alignment
-                corresponding_ssr_root_node = marked_for_hydration_dict[child_instance.client_id]
+            cid = child_instance.client_id
+            if cid \
+            and (cid in marked_for_hydration_dict):
+                corresponding_ssr_root_node = marked_for_hydration_dict[cid]
                 child_instance.initialize_ssr(corresponding_ssr_root_node)
+            else:
+                # Component is not in the SSR tree (e.g. hidden by IfBinding)
+                print(f"Skipping hydration for hidden component: {child_instance} (id: {cid})")
     
     @client
     def _find_elements_marked_for_hydration(self, element=None):
@@ -350,7 +364,7 @@ class Component(BaseComponent):
 
         walker = document.createTreeWalker(
             element_to_walk, 
-            window.NodeFilter.SHOW_ELEMENT | window.NodeFilter.SHOW_TEXT | window.NodeFilter.SHOW_COMMENT
+            window.NodeFilter.SHOW_ELEMENT | window.NodeFilter.SHOW_TEXT
         )
 
         # Stack stores: [ [node, path_prefix, next_child_index] ]

@@ -168,7 +168,10 @@ def render_page(
                 
 
                 children = getattr(obj, 'children', [])
-                for i, child in reversed(list(enumerate(children))):
+                # Filter out comments to ensure they don't shift hydration indices
+                valid_children = [c for c in children if type(c).__name__ != 'Comment']
+                
+                for i, child in reversed(list(enumerate(valid_children))):
                     # Concatenate current path with the new index
                     stack.append((child, depth + 1, path + [i]))
 

@@ -1,21 +1,25 @@
+from basis.shared.bindings import SmartKeyedLoopBinding
 import inspect
+import weakref
 from pathlib import Path
 from string import Formatter
 
 from basis.shared.bindings import BindingBlueprint, Binding, SelfBinding, TextBinding, \
-    AttributeBinding, SelfAttributeBinding, ModelBinding, EventBinding, IfBinding, \
+    AttributeBinding, SelfAttributeBinding, TextContentAttributeBinding, ModelBinding, EventBinding, IfBinding, \
     ChildBinding, LoopBinding, KeyedLoopBinding, SlotBinding, ComponentSubscription, \
     desugar_expression, safe_eval, safe_format, safe_format_with_stores, \
     ALLOWED_BUILTINS, Refrain, \
     _process_self_attr_bindings
 from basis.shared.bindings import extract_dependencies
 from basis.shared.store import Store
+from basis.shared.dag import DependencyGraph, StateNode, ComputedNode, EffectNode, computed
 
 
 class BaseComponent(object):
 
     _registry = {}
     _instance_registry = {}
+    _live_instances = weakref.WeakSet()
     _pending_subscriptions = {}
 
     S = Store._registry
@@ -115,6 +119,9 @@ class BaseComponent(object):
         self.__dict__['_deps'] = {}
         self.__dict__['__fields__'] = []
         self.__dict__['_subscriptions'] = []
+        self.__dict__['_dag'] = DependencyGraph()
+        self.__dict__['_dag_nodes'] = self._dag.nodes
+        self.__class__._live_instances.add(self)
         
     def __init_selfbinding__(self):
         #template is ServerFragment on server and DocumentFragment on client
@@ -209,6 +216,7 @@ class BaseComponent(object):
         self.__dict__['__bindings__'].append(binding)
 
         if hasattr(binding, 'fields'):
+            # Existing flat dependency tracking (keeping for compatibility for now, but will eventually remove)
             for field in binding.fields:
                 if field not in self._deps:
                     self._deps[field] = []
@@ -216,6 +224,12 @@ class BaseComponent(object):
                         self.__fields__.append(field)
                 if binding not in self._deps[field]:
                     self._deps[field].append(binding)
+            
+            # DAG integration: Register as an EffectNode
+            if hasattr(binding, 'update'):
+                # Generate a unique name for the effect node
+                effect_name = f"effect_{id(binding)}"
+                self._dag.add_effect(effect_name, binding.update, binding.fields)
 
     def remove_binding(self, binding):
         try:
@@ -299,14 +313,14 @@ class BaseComponent(object):
             element = node
 
             tag_name = element.tagName.lower()
-            if tag_name in ['style', 'script']:
+            if tag_name in ['style', 'script'] and not element.hasAttribute('text-content'):
                 return []
 
             element_attrs = list(element.getAttributeNames())
             event_attrs = [a for a in element_attrs if a.startswith("on")]
             other_attrs = [a for a in element_attrs if not a.startswith("on")]
 
-            special_attrs = ["if", "for", "in", "key", "bind"]
+            special_attrs = ["if", "for", "in", "key", "bind", "text-content"]
             non_standard_attrs = [a for a in other_attrs if a in special_attrs]
             standard_attrs = [a for a in other_attrs if a not in non_standard_attrs]
 
@@ -331,7 +345,9 @@ class BaseComponent(object):
                 for_attr_value = element.getAttribute('for')
                 fieldnames, trees_dict = extract_dependencies(element.getAttribute('in'), ALLOWED_BUILTINS)
                 
-                binding_class = KeyedLoopBinding if 'key' in non_standard_attrs else LoopBinding
+                #binding_class = KeyedLoopBinding if 'key' in non_standard_attrs else LoopBinding
+                binding_class = SmartKeyedLoopBinding if 'key' in non_standard_attrs else LoopBinding
+                
                 kwargs = {'item': for_attr_value, 'collection': inlist_attr_value}
                 if 'key' in non_standard_attrs:
                     kwargs['key'] = element.getAttribute('key')
@@ -369,6 +385,18 @@ class BaseComponent(object):
                         binding_class=EventBinding,
                         node_index=node_index,
                         kwargs={'event': f"on{bound_event}", 'target_fn': 'bind_handler'}
+                    ))
+
+            # Process text-content binding
+            if 'text-content' in non_standard_attrs and not is_loop_template:
+                text_content_attr_value = element.getAttribute('text-content')
+                fieldnames, trees_dict = extract_dependencies(text_content_attr_value, ALLOWED_BUILTINS)
+                if len(fieldnames):
+                    blueprints.append(BindingBlueprint(
+                        binding_class=TextContentAttributeBinding,
+                        node_index=node_index,
+                        kwargs={'attr': 'text-content', 'content': text_content_attr_value, 'fields': fieldnames},
+                        ast_trees=trees_dict
                     ))
 
             # Process Components (ChildBinding)
@@ -413,6 +441,11 @@ class BaseComponent(object):
                         attr_no_braces = attr
                         attr_value = element.getAttribute(attr)
                         attr_isboolean = False
+
+                        # Guard: standalone/valueless attrs
+                        # are returned as None by getAttribute. They have no reactive content.
+                        if attr_value is None:
+                            continue
 
                         fieldnames, trees_dict = extract_dependencies(attr_value, ALLOWED_BUILTINS)
                         
@@ -518,6 +551,8 @@ class BaseComponent(object):
                     
                         setattr(refrained, field, store_instance)
                         store_instance.add_subscription(self, attr_name)
+                        # Register in DAG
+                        self._dag.get_or_create_state(field)
 
                     else:
                         store_name = field.strip("$")
@@ -527,6 +562,8 @@ class BaseComponent(object):
 
                         setattr(refrained, field, store_instance)
                         #store_instance.add_subscription(self, attr_name) ?could we subscribe to "" attr (the whole store)
+                        # Register in DAG
+                        self._dag.get_or_create_state(field)
                 
                 elif field.startswith("#"):
                     if "." in field:
@@ -538,6 +575,8 @@ class BaseComponent(object):
                             setattr(refrained, field, component_instance)
                             
                             component_instance.add_subscription(self, attr_name)
+                            # Register in DAG
+                            self._dag.get_or_create_state(field)
 
                         else:
                             
@@ -548,6 +587,9 @@ class BaseComponent(object):
                                 self.__class__._pending_subscriptions[component_name].append(new_subscription)
                             else:
                                 self.__class__._pending_subscriptions[component_name] = [new_subscription]
+                            
+                            # Register in DAG (even if pending, we want the node)
+                            self._dag.get_or_create_state(field)
                 
                     else:
                         # no-op if only "#component_id" with no attribute specified
@@ -555,7 +597,23 @@ class BaseComponent(object):
 
                         
                 else:
+                    # Register standard fields as StateNodes in the DAG
+                    self._dag.get_or_create_state(field)
                     refrained.force_react(field)
+
+            # Register computed properties in the DAG
+            for name, member in inspect.getmembers(self.__class__):
+                # Check if it's a computed property (metadata is on fget if it's a property)
+                member_func = getattr(member, 'fget', member)
+                if hasattr(member_func, '_is_computed'):
+                    # The 'computed' decorator stores dependencies in _dependencies
+                    deps = getattr(member_func, '_dependencies', [])
+                    # The original function is stored in _original_func
+                    original_func = getattr(member_func, '_original_func', None)
+                    if original_func:
+                        node = self._dag.add_computed(name, original_func, self, deps)
+                        # Force an initial calculation so we don't start with None
+                        node.update()
 
 
     @property
@@ -672,9 +730,11 @@ class BaseComponent(object):
             #check for change
             if value != old_value:
                 print(f"__setattr__ on {self} called for {name}, old value {old_value}, new value {value}")
-                print("and now reacting ..")
-                self.react([name])
-
+                #print("and now reacting ..")
+                #self.react([name])
+                print("and now reacting via DAG ..")
+                self._dag.trigger(name)
+    
     @classmethod
     def mount(cls, container, replace=False, **attributes):
         
@@ -732,30 +792,81 @@ class BaseComponent(object):
         
         new_instance = cls.mount(container, replace)
 
-        #fix styles
-        styles = set()
-
         #client
-        style_elem = cls._create_element("style")
-
-        for c in cls._registry.values():
+        for c_tag, c in cls._registry.items():
             if hasattr(c, 'style'):
+                style_content = ""
                 if isinstance(c.style, str):
-                    styles.add(c.style)
+                    style_content = c.style
                 elif inspect.isfunction(c.style):
                     if c.style.__doc__ is not None:
-                        styles.add(c.style.__doc__)
-                else:
-                    raise
-        
-        #client
-        style_elem.textContent = "\n".join(styles)
-        
-        #client
-        container.prepend(style_elem)
-
+                        style_content = c.style.__doc__
+                
+                if style_content:
+                    style_elem = cls._create_element("style")
+                    style_elem.setAttribute("data-component-class", c.__name__)
+                    style_elem.textContent = style_content
+                    container.prepend(style_elem)
 
         return new_instance
+
+    def hot_swap(self, new_cls):
+        """Hot-swap this instance with a new class definition."""
+        print(f"HMR: Hot-swapping instance {self} to {new_cls}")
+        
+        # 1. Capture current state (standard fields)
+        state = {}
+        for field in self.__fields__:
+            if not field.startswith(("$", "#")):
+                try:
+                    state[field] = getattr(self, field)
+                except AttributeError:
+                    pass
+
+        # 2. Update class reference
+        self.__class__ = new_cls
+        
+        # 3. Clean up old bindings and DAG
+        for b in list(self.__bindings__):
+            self.remove_binding(b)
+        
+        self.__dict__['__bindings__'] = []
+        self.__dict__['_deps'] = {}
+        self.__dict__['_dag'] = DependencyGraph()
+        self.__dict__['_dag_nodes'] = self._dag.nodes
+        
+        # 4. Clear cached template/nodes to force reload from new class blueprint
+        if '_template' in self.__dict__:
+            del self.__dict__['_template']
+        if '_nodes' in self.__dict__:
+            del self.__dict__['_nodes']
+
+        # 5. Handle DOM replacement
+        old_element = self.__element__
+        if old_element:
+            # Create new template content from the new class
+            new_fragment = self.__template__
+            # Note: self.__template__ is a DocumentFragment/ServerFragment
+            
+            # Replace old root element with new one
+            # We assume the first child of the fragment is the component root
+            old_element.replaceWith(new_fragment)
+            
+            # Re-initialize everything
+            self.__init_selfbinding__()
+            self.__init_slot_bindings__()
+            self.__init_bindings__()
+            self.__init_fields__()
+            
+            # 6. Restore state and trigger updates
+            with self.refrain() as refrained:
+                for k, v in state.items():
+                    setattr(refrained, k, v)
+            
+            # Trigger all bindings to reflect the restored state in the new DOM
+            self._dag.trigger_batch(list(state.keys()))
+            
+        print(f"HMR: Hot-swap complete for {self}")
     
     @classmethod
     def get_nested_children(cls):
@@ -820,7 +931,8 @@ class BaseComponent(object):
     def add_subscription(self, component_instance, attr_name:str):
         if (component_instance, attr_name) not in self._subscriptions:
             new_subscription = ComponentSubscription(component_instance=component_instance,
-                                                     attr=attr_name)
+                                                     attr=attr_name,
+                                                     target_instance=self)
 
             self.__dict__['_subscriptions'].append(new_subscription)
 
@@ -843,34 +955,31 @@ class BaseComponent(object):
             raise Exception("Please pass only a list of strings to react().")
 
         print(f"In react({names}) of {self}")
+        print(self._dag.nodes)
+        # Integration with DAG: trigger the graph
+        self._dag.trigger_batch(names)
 
-        bindings_to_update = []
+        # The following logic is mostly for manual/legacy cross-component propagation 
+        # if not already handled by DAG EffectNodes (ComponentSubscription)
+        # But since we added ComponentSubscription as an EffectNode, this might be redundant.
+        # However, we'll keep a simplified version for any non-DAG cases if they exist.
+        
+        '''
         subscriptions_to_update = []
-
         dependencies = set(names).intersection(set(self._deps.keys()))
         
         for name in dependencies:
-            
-            for binding in self._deps[name]:
-                if binding not in bindings_to_update:
-                    bindings_to_update.append(binding)
-
-        for name in dependencies:
             for sub in self.__dict__['_subscriptions']:
-                subscribing_component_instance, sub_attr_name = sub #deconstruct the ComponentSubscription
-                if name == sub_attr_name:
+                if name == sub.attr:
                     subscriptions_to_update.append(sub)
                 
-        print("bindings_to_update: ", bindings_to_update)
-        print("__fields__: ", self.__fields__)
-        #print("all _deps: ", self._deps)
+        for sub in subscriptions_to_update:
+            # If the DAG already handled it, this might be a double update.
+            # But DAG nodes mark themselves as not stale after update, 
+            # and ComponentSubscription.update calls subscriber.react()
+            # so it should be fine.
+            if hasattr(sub, 'update'):
+                sub.update()
+        '''
         
-        for binding in bindings_to_update:
-            if hasattr(binding, 'update'): # or perhaps we could also use isinstance(binding, NodeBinding)
-                binding.update()
-            elif isinstance(binding, ComponentSubscription):
-                sub = binding
-                self_component_id = self.__element__.getAttribute("id")
-                sub.component_instance.react([f"#{self_component_id}.{sub.attr}"])
-
 ALLOWED_BUILTINS['BaseComponent'] = BaseComponent

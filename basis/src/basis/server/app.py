@@ -8,6 +8,8 @@ import logging
 import itertools
 import importlib.util
 import os
+import asyncio
+from typing import Set
 
 logger = logging.getLogger('uvicorn.error')
 logger.setLevel(logging.DEBUG)
@@ -32,6 +34,8 @@ async def pyscript_json(request:Request):
     files_dict["{DOMAIN}/basis/shared/base_component.py"] = "./basis/shared/base_component.py"
     files_dict["{DOMAIN}/basis/shared/element.py"] = "./basis/shared/element.py"
     files_dict["{DOMAIN}/basis/shared/component.py"] = "./basis/shared/component.py"
+    files_dict["{DOMAIN}/basis/shared/dag.py"] = "./basis/shared/dag.py"
+    files_dict["{DOMAIN}/basis/shared/hmr.py"] = "./basis/shared/hmr.py"
 
 
     for i, m in enumerate(request.app._component_routes, 1):
@@ -74,49 +78,39 @@ async def pyscript_json(request:Request):
     })
 
 
-class StoreManager:
+class HMRManager:
     def __init__(self):
-        self.active_connections: list[WebSocket] = []
+        self.active_connections: Set[WebSocket] = set()
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
-        self.active_connections.append(websocket)
+        self.active_connections.add(websocket)
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
 
     async def broadcast(self, message: dict):
-        for connection in self.active_connections:
-            await connection.send_json(message)
+        for connection in list(self.active_connections):
+            try:
+                await connection.send_json(message)
+            except Exception:
+                self.active_connections.remove(connection)
 
 class Basis(FastAPI):
     
     _component_dirs = []
     _component_routes = []
+    hmr_manager = HMRManager()
 
     def include_offline_pyscript(self, mount_path:str="/pyscript"):
         pyscript_mount = Mount(mount_path, StaticFiles(packages=[("basis", "static/pyscript")]), name="pyscript")
         self.routes.append(pyscript_mount)
-        
+    
+    def include_pyscript_json(self, mount_path:str="/pyscript.json"):
+        self.add_route(mount_path, pyscript_json, methods=['get'])
+
     def include_components_dir(self, mount_path:str, dir_path:str, name:str):
-
-        static_route = None
-        shared_route = None
-
-        for r in self.routes:
-            if r.name == 'basis_components':
-                static_route = r
-            elif r.name == 'basis_shared':
-                shared_route = r
-
-        if not static_route:
-            static_mount = Mount("/basis/components", StaticFiles(packages=[('basis', 'components')]), name='basis_components')
-            self.routes.append(static_mount)
-
-        if not shared_route:
-            shared_mount = Mount("/basis/shared", StaticFiles(packages=[('basis', 'shared')]), name='basis_shared')
-            self.routes.append(shared_mount)
 
         m = Mount(mount_path, StaticFiles(directory=dir_path), name=name)
         
@@ -124,30 +118,74 @@ class Basis(FastAPI):
         self._component_routes.append(m)
 
 
-        self.add_route("/pyscript.json", pyscript_json, methods=['get'])
 
-
-        # Store sync mechanism over WebSockets
-        '''
-        self.store_manager = StoreManager()
-        
-        @self.websocket("/ws/store")
-        async def store_websocket_endpoint(websocket: WebSocket):
-            await self.store_manager.connect(websocket)
+        # HMR WebSocket endpoint
+        @self.websocket("/ws/hmr")
+        async def hmr_websocket_endpoint(websocket: WebSocket):
+            await self.hmr_manager.connect(websocket)
             try:
                 while True:
-                    data = await websocket.receive_json()
-                    
-                    # You could validate with schemas here:
-                    # from basis.shared.schemas import StoreAction
-                    # action = StoreAction(**data)
-                    
-                    # For demonstration, broadcast directly
-                    await self.store_manager.broadcast(data)
+                    await websocket.receive_text() # Just keep connection alive
             except WebSocketDisconnect:
-                self.store_manager.disconnect(websocket)
-        '''
+                self.hmr_manager.disconnect(websocket)
+            except Exception:
+                self.hmr_manager.disconnect(websocket)
 
+    async def _start_file_watcher(self):
+        """Simple poller to watch for file changes and broadcast HMR events."""
+        mtimes = {}
+        
+        # Initial scan
+        watch_dirs = [Path(m.app.directory).absolute() for m in self._component_routes]
+        # Also watch the basis package itself for core changes? Maybe too much.
+        
+        while True:
+            for watch_dir in watch_dirs:
+                for ext in ["*.py", "*.html", "*.css"]:
+                    for f in watch_dir.glob(f"**/{ext}"):
+                        mtime = f.stat().st_mtime
+                        if f in mtimes and mtimes[f] < mtime:
+                            logger.info(f"HMR: File changed: {f.name}")
+                            # Determine type and relative path
+                            rel_path = f.relative_to(watch_dir)
+                            await self.hmr_manager.broadcast({
+                                "type": "hmr",
+                                "file": str(rel_path),
+                                "ext": f.suffix.lstrip("."),
+                                "content": f.read_text()
+                            })
+                        mtimes[f] = mtime
+            await asyncio.sleep(0.5)
+
+    def start_file_watcher(self):
+        asyncio.create_task(self._start_file_watcher())
+
+    def run_with_hmr(self, host="127.0.0.1", port=8000):
+        import uvicorn
+        
+        @self.on_event("startup")
+        async def startup_event():
+            asyncio.create_task(self._start_file_watcher())
+            
+        uvicorn.run(self, host=host, port=port)
+
+    def include_framework(self):
+        components_route = None
+        shared_route = None
+
+        for r in self.routes:
+            if r.name == 'basis_components':
+                components_route = r
+            elif r.name == 'basis_shared':
+                shared_route = r
+
+        if not components_route:
+            components_mount = Mount("/basis/components", StaticFiles(packages=[('basis', 'components')]), name='basis_components')
+            self.routes.append(components_mount)
+
+        if not shared_route:
+            shared_mount = Mount("/basis/shared", StaticFiles(packages=[('basis', 'shared')]), name='basis_shared')
+            self.routes.append(shared_mount)
 
     def include_ui_components(self):
 
@@ -202,6 +240,13 @@ class Basis(FastAPI):
 
         self.add_route(path, _ssr_handler, methods=['GET'], name=name)
 
+
+    def bootstrap(self, include_offline_pyscript=True):
+        self.include_offline_pyscript()
+        self.include_pyscript_json()
+        self.include_framework()
+        self.include_ui_components()
+        
 
 class BasisAPIRouter(APIRouter):
     def component(self, cls):

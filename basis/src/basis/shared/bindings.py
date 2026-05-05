@@ -69,7 +69,12 @@ class Binding(object):
 @dataclass(kw_only=True)
 class ComponentSubscription(Binding):
     attr:str
+    target_instance:Any = None # The component that owns the attribute being subscribed to
 
+    @property
+    def subscriber(self):
+        return self.component_instance
+    
     @property
     def subscribing_component(self):
         return self.component_instance
@@ -83,19 +88,26 @@ class ComponentSubscription(Binding):
     
     @property
     def node(self):
-        return self.component_instance.__element__
+        return self.subscriber.__element__
     
     def __eq__(self, value):
         if isinstance(value, ComponentSubscription):
-            return (value.attr == self.attr) and (value.component_instance is self.component_instance) 
+            return (value.attr == self.attr) and (value.subscriber is self.subscriber) 
         elif isinstance(value, tuple) and len(value) == 2:
-            return (value[1] == self.attr) and (value[0] is self.component_instance) 
+            return (value[1] == self.attr) and (value[0] is self.subscriber) 
         else:
             return super().__eq__(value)
     
     def __iter__(self):
         # Allows: x, y = obj destructuring
-        return iter([self.component_instance, self.attr])
+        return iter([self.subscriber, self.attr])
+
+    def update(self):
+        """Propagate change to the subscribing component."""
+        if self.target_instance:
+            self_component_id = self.target_instance.__element__.getAttribute("id")
+            if self_component_id:
+                self.subscriber.react([f"#{self_component_id}.{self.attr}"])
 
 
 @dataclass(kw_only=True)
@@ -155,7 +167,7 @@ class TextBinding(NodeBinding):
 
     def update(self):
 
-        context = self.component_instance.__dict__
+        context = self.component_instance
         store_registry = self.component_instance.__class__.S
 
         self.node.textContent = safe_format_with_stores(
@@ -191,7 +203,7 @@ class AttributeBinding(NodeBinding):
     
     def update(self):
         # Always evaluate in the context of the component that owns the binding (the parent)
-        context = self.component_instance.__dict__
+        context = self.component_instance
         store_registry = self.component_instance.__class__.S
         instance_registry = self.component_instance.__class__._instance_registry
 
@@ -266,7 +278,7 @@ class AttributeBinding(NodeBinding):
 @dataclass(kw_only=True)
 class SelfAttributeBinding(AttributeBinding):
     def update(self):
-        context = self.component_instance.__dict__
+        context = self.component_instance
         store_registry = self.component_instance.__class__.S
 
 
@@ -311,6 +323,44 @@ class SelfAttributeBinding(AttributeBinding):
 
         if instance.is_boolean:
             node.removeAttribute(blueprint.attr)
+
+        return instance
+
+@dataclass(kw_only=True)
+class TextContentAttributeBinding(AttributeBinding):
+    is_boolean:bool = field(default=False, init=False, repr=False)
+
+    def update(self):
+        # We leverage the base evaluation logic but redirect the output to textContent
+        context = self.component_instance
+        store_registry = self.component_instance.__class__.S
+        instance_registry = self.component_instance.__class__._instance_registry
+
+        final_dom_val = safe_format_with_stores(
+            self.content,
+            context,
+            ALLOWED_BUILTINS,
+            store_registry=store_registry,
+            component_instance_registry=instance_registry,
+            ast_trees=self.ast_trees
+        )
+        self.node.textContent = str(final_dom_val)
+
+    @classmethod
+    def from_blueprint(cls, component_instance, node, blueprint):
+
+        attr = blueprint.kwargs["attr"]
+        content = blueprint.kwargs["content"]
+        fields = blueprint.kwargs["fields"]
+
+        instance = cls(
+            component_instance=component_instance,
+            node=node,
+            attr=attr,
+            content=content,
+            fields=fields,
+            ast_trees=blueprint.ast_trees
+        )
 
         return instance
 
@@ -406,7 +456,7 @@ class IfBinding(NodeBinding):
     fields: list
 
     def update(self):
-        expr_eval = bool(safe_eval(self.expr, self.component_instance.__dict__, ALLOWED_BUILTINS, tree=self.ast_trees.get(self.expr)))
+        expr_eval = bool(safe_eval(self.expr, self.component_instance, ALLOWED_BUILTINS, tree=self.ast_trees.get(self.expr)))
         if expr_eval == self.is_visible:
             return  # visibility unchanged — skip DOM mutation
         if expr_eval == False:
@@ -741,6 +791,110 @@ class KeyedLoopBinding(NodeBinding):
         
         return instance
 
+@dataclass(kw_only=True)
+class SmartKeyedLoopBinding(KeyedLoopBinding):
+    """
+    Experimental high-performance keyed loop reconciliation using the 
+    Longest Increasing Subsequence (LIS) algorithm.
+    """
+    def update(self):
+        # 1. Prepare data
+        new_keys = self.get_collection_keys()
+        new_items = self.get_collection_items()
+        
+        # 2. Removal Phase
+        # Find instances that are no longer in the new keys
+        new_keys_set = set(new_keys)
+        removed_keys = [k for k in self.instances.keys() if k not in new_keys_set]
+        for r_key in removed_keys:
+            old_instance = self.instances[r_key]
+            # Remove from DOM
+            if old_instance.__element__ and old_instance.__element__.parentNode:
+                old_instance.__element__.remove()
+            
+            # Remove associated bindings from the parent component
+            bindings_to_rem = [cb for cb in self.component_instance.__bindings__ 
+                              if isinstance(cb, ChildBinding) and cb.childinstance == old_instance]
+            for rem in bindings_to_rem:
+                self.component_instance.remove_binding(rem)
+            
+            # Remove from our instance map
+            del self.instances[r_key]
+
+        # 3. Creation & Update Phase
+        new_instances_list = []
+        sources = [-1] * len(new_keys)
+        
+        # Mapping old_key -> stable index for LIS
+        # We use the order keys were in before the update
+        old_keys_list = list(self.instances.keys())
+        old_key_to_idx = {k: i for i, k in enumerate(old_keys_list)}
+
+        new_instances_map = {}
+
+        for i, (k_val, item) in enumerate(zip(new_keys, new_items)):
+            if k_val in self.instances:
+                # Reuse existing instance
+                child_instance = self.instances[k_val]
+                updated_child_node_attrs = self._child_node_attrs_dict(item)
+                
+                # Update properties (using refrain to batch reactions)
+                with child_instance.refrain() as refrained:
+                    for k, v in updated_child_node_attrs.items():
+                        setattr(refrained, k, v)
+                
+                sources[i] = old_key_to_idx[k_val]
+                new_instances_map[k_val] = child_instance
+            else:
+                # New creation
+                cloned_element = self._new_clone()
+                updated_child_node_attrs = self._child_node_attrs_dict(item)
+                childcomponent_py = self._child_component_class()
+                
+                # Mount to parent (will be moved to correct position later)
+                child_instance = childcomponent_py.mount(self.parent, replace=False, **updated_child_node_attrs)
+                child_instance.__element__.setAttribute('data-item-key', str(k_val))
+                
+                new_cb = ChildBinding(component_instance=self.component_instance,
+                                      node=child_instance.__element__,
+                                      childclass=childcomponent_py,
+                                      childinstance=child_instance,
+                                      loop_binding=self)
+                self.component_instance.add_binding(new_cb)
+                
+                new_instances_map[k_val] = child_instance
+                sources[i] = -1
+
+            new_instances_list.append(new_instances_map[k_val])
+
+        # 4. Movement Phase (LIS)
+        # Find LIS of the original positions to minimize moves
+        actual_sources = [s for s in sources if s != -1]
+        lis_values_indices = get_lis_indices(actual_sources)
+        
+        # Map LIS indices back to the 'sources' (new list) indices
+        lis_indices_in_new_list = set()
+        j = 0
+        for i, s in enumerate(sources):
+            if s != -1:
+                if j in lis_values_indices:
+                    lis_indices_in_new_list.add(i)
+                j += 1
+
+        # 5. Reorder in DOM (Iterate backwards for stable insertBefore)
+        next_node = None
+        for i in range(len(new_keys) - 1, -1, -1):
+            instance = new_instances_list[i]
+            node = instance.__element__
+            
+            # If it's a new item or not in the LIS, it must be moved/inserted
+            if sources[i] == -1 or i not in lis_indices_in_new_list:
+                self.parent.insertBefore(node, next_node)
+            
+            next_node = node
+            
+        self.instances = new_instances_map
+
 @dataclass
 class SlotBinding(NodeBinding):
     name: str | None = None
@@ -758,9 +912,15 @@ def _eval_ast(node, context, allowed_builtins):
             return _eval(node.body)
 
         elif isinstance(node, ast.Name):
-            if node.id in context:
-                return context[node.id]
-            elif node.id in allowed_builtins:
+            # Check context (can be a dict or a component instance)
+            if isinstance(context, dict):
+                if node.id in context:
+                    return context[node.id]
+            else:
+                if hasattr(context, node.id):
+                    return getattr(context, node.id)
+            
+            if node.id in allowed_builtins:
                 return allowed_builtins[node.id]
             raise NameError(f"Name {node.id} is not defined")
 
@@ -1121,27 +1281,61 @@ class Refrain(object):
         self.forced_reactivity.add(name)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-
-        inner_dict_values = [k for k in self.__dict__['inner_dict'].values()]
-        inner_dict_keys = [k for k in self.__dict__['inner_dict'].keys()]
-        for k, v in zip(inner_dict_keys, inner_dict_values):
+        inner_dict = self.__dict__['inner_dict']
+        inner_dict_keys = list(inner_dict.keys())
+        for k, v in inner_dict.items():
             self.component.__dict__[k] = v
         
-        #print(f"inner_dict in Refrain of {self.component}: ", inner_dict)
+        # Collect all fields that need to react
+        fields_to_react = inner_dict_keys + [k for k in self.forced_reactivity if k not in inner_dict_keys]
 
-        if len(inner_dict_keys) > 0:
-            self.component.react([k for k in inner_dict_keys])
+        if fields_to_react:
+            self.component._dag.trigger_batch(fields_to_react)
 
-        # at the end .. react forcibly to the marked items
-        forced_fields = [k for k in self.forced_reactivity if k not in inner_dict_keys]
 
-        if len(forced_fields) > 0:
-            self.component.react(forced_fields)
 
+def get_lis_indices(arr: list[int]) -> list[int]:
+    """
+    Finds the indices of the longest increasing subsequence in O(n log n).
+    Example: [1, 3, 0, 2, 4] -> [0, 1, 4] (values 1, 3, 4)
+    """
+    if not arr:
+        return []
+        
+    p = [0] * len(arr)
+    m = [0] * (len(arr) + 1)
+    l = 0
+    
+    for i in range(len(arr)):
+        # Binary search for the smallest value in m >= arr[i]
+        lo = 1
+        hi = l
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if arr[m[mid]] < arr[i]:
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        
+        new_l = lo
+        p[i] = m[new_l - 1]
+        m[new_l] = i
+        
+        if new_l > l:
+            l = new_l
+            
+    # Backtrack
+    res = [0] * l
+    k = m[l]
+    for i in range(l - 1, -1, -1):
+        res[i] = k
+        k = p[k]
+        
+    return res
 
 __all__ = ['Binding', 'SelfBinding', 'TextBinding', 'AttributeBinding', \
             'ModelBinding', 'EventBinding', 'IfBinding', 'ChildBinding', \
-            'LoopBinding', 'KeyedLoopBinding', 'SlotBinding', \
+            'LoopBinding', 'KeyedLoopBinding', 'SmartKeyedLoopBinding', 'SlotBinding', \
             'safe_eval', 'safe_format', 'safe_format_with_stores', \
             'extract_dependencies', 'Refrain', \
             '_process_standard_attr_bindings', '_process_event_attr_bindings', \
