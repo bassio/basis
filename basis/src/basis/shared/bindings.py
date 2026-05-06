@@ -344,6 +344,9 @@ class TextContentAttributeBinding(AttributeBinding):
             component_instance_registry=instance_registry,
             ast_trees=self.ast_trees
         )
+
+        print("IN TextContentAttributeBinding : final_dom_val", final_dom_val)
+
         self.node.textContent = str(final_dom_val)
 
     @classmethod
@@ -912,6 +915,9 @@ def _eval_ast(node, context, allowed_builtins):
             return _eval(node.body)
 
         elif isinstance(node, ast.Name):
+            if node.id in allowed_builtins:
+                return allowed_builtins[node.id]
+
             # Check context (can be a dict or a component instance)
             if isinstance(context, dict):
                 if node.id in context:
@@ -920,8 +926,6 @@ def _eval_ast(node, context, allowed_builtins):
                 if hasattr(context, node.id):
                     return getattr(context, node.id)
             
-            if node.id in allowed_builtins:
-                return allowed_builtins[node.id]
             raise NameError(f"Name {node.id} is not defined")
 
         elif isinstance(node, ast.Attribute):
@@ -1014,6 +1018,10 @@ def _eval_ast(node, context, allowed_builtins):
     return _eval(node)
 
 def safe_eval(expr_str, context, allowed_builtins, tree=None):
+
+    if expr_str in allowed_builtins:
+        return allowed_builtins[expr_str]
+
     if tree is None:
         try:
             tree = ast.parse(expr_str, mode='eval')
@@ -1048,24 +1056,27 @@ def safe_format_with_stores(template_str, context, allowed_builtins, store_regis
     for literal_text, fname, format_spec, conversion in formatter.parse(template_str):
         result += literal_text
         if fname is not None:
-            ast_tree = ast_trees.get(fname) if ast_trees else None
-            
-            # If we have an AST tree, it should be the desugared one.
-            # safe_eval will handle evaluating BaseComponent.S[...] or BaseComponent.C[...]
-            # if we provide the tree.
-            if ast_tree:
-                val = safe_eval(fname, context, allowed_builtins, tree=ast_tree)
-            elif fname.startswith("$"):
-                store_name, attr_name = fname.strip("$").split(".")
-                val = getattr(store_registry[store_name], attr_name)
-            elif fname.startswith("#"):
-                component_name, attr_name = fname.strip("#").split(".")
-                if component_name in component_instance_registry:
-                    val = getattr(component_instance_registry[component_name], attr_name)
-                else:
-                    val = ""
+            if fname in allowed_builtins:
+                val = allowed_builtins[fname]
             else:
-                val = safe_eval(fname, context, allowed_builtins)
+                ast_tree = ast_trees.get(fname) if ast_trees else None
+                
+                # If we have an AST tree, it should be the desugared one.
+                # safe_eval will handle evaluating BaseComponent.S[...] or BaseComponent.C[...]
+                # if we provide the tree.
+                if ast_tree:
+                    val = safe_eval(fname, context, allowed_builtins, tree=ast_tree)
+                elif fname.startswith("$"):
+                    store_name, attr_name = fname.strip("$").split(".")
+                    val = getattr(store_registry[store_name], attr_name)
+                elif fname.startswith("#"):
+                    component_name, attr_name = fname.strip("#").split(".")
+                    if component_name in component_instance_registry:
+                        val = getattr(component_instance_registry[component_name], attr_name)
+                    else:
+                        val = ""
+                else:
+                    val = safe_eval(fname, context, allowed_builtins)
             
             if format_spec:
                 result += format(val, format_spec)
@@ -1141,7 +1152,7 @@ def extract_dependencies(template_str, allowed_builtins=ALLOWED_BUILTINS):
                         
                         if s_name:
                             prefix = '$' if node.value.attr == 'S' else '#'
-                            #deps.add(f"{prefix}{s_name}")
+                            deps.add(f"{prefix}{s_name}")
 
         except SyntaxError:
             print(f"Error parsing expression: {desugared}")

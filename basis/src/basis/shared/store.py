@@ -60,6 +60,9 @@ class Store:
                 # so it re-evaluates bindings starting with `{$store_name.xxx}`
                 if key == attr_name:
                     component.react([f"${store_name}.{attr_name}"])
+                elif attr_name == "":
+                    # Whole-store subscription
+                    component.react([f"${store_name}"])
 
 class WebSocketStore(Store):
     def __init__(self, name: str, ws_url: str):

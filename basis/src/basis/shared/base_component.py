@@ -1,12 +1,11 @@
-from basis.shared.bindings import SmartKeyedLoopBinding
 import inspect
-import weakref
 from pathlib import Path
 from string import Formatter
+import weakref
 
 from basis.shared.bindings import BindingBlueprint, Binding, SelfBinding, TextBinding, \
     AttributeBinding, SelfAttributeBinding, TextContentAttributeBinding, ModelBinding, EventBinding, IfBinding, \
-    ChildBinding, LoopBinding, KeyedLoopBinding, SlotBinding, ComponentSubscription, \
+    ChildBinding, LoopBinding, KeyedLoopBinding, SmartKeyedLoopBinding, SlotBinding, ComponentSubscription, \
     desugar_expression, safe_eval, safe_format, safe_format_with_stores, \
     ALLOWED_BUILTINS, Refrain, \
     _process_self_attr_bindings
@@ -59,6 +58,19 @@ class BaseComponent(object):
         
         return templatestr
     
+    @classmethod
+    def _get_style_string(cls):
+        style_content = ""
+        if isinstance(cls.style, str):
+            style_content = cls.style
+        elif inspect.isfunction(cls.style):
+            if cls.style.__doc__ is not None:
+                style_content = cls.style.__doc__
+            elif isinstance(cls.style, classmethod):
+                style_content = cls.style()
+        
+        return style_content
+
     @classmethod
     def _set_style_string(cls):
         css_file = cls.__file__().with_suffix(".css").with_stem(cls.__file__().parent.name)
@@ -282,7 +294,7 @@ class BaseComponent(object):
             try:
                 fieldnames, ast_trees_dict = extract_dependencies(attr_value, ALLOWED_BUILTINS)
 
-                if len(fieldnames):
+                if ast_trees_dict:
 
                     kwargs = {}
                     kwargs['attr'] = attr_no_braces
@@ -391,7 +403,7 @@ class BaseComponent(object):
             if 'text-content' in non_standard_attrs and not is_loop_template:
                 text_content_attr_value = element.getAttribute('text-content')
                 fieldnames, trees_dict = extract_dependencies(text_content_attr_value, ALLOWED_BUILTINS)
-                if len(fieldnames):
+                if trees_dict:
                     blueprints.append(BindingBlueprint(
                         binding_class=TextContentAttributeBinding,
                         node_index=node_index,
@@ -449,7 +461,7 @@ class BaseComponent(object):
 
                         fieldnames, trees_dict = extract_dependencies(attr_value, ALLOWED_BUILTINS)
                         
-                        if len(fieldnames):
+                        if trees_dict:
                             blueprints.append(BindingBlueprint(
                                 binding_class=AttributeBinding,
                                 node_index=node_index,
@@ -477,7 +489,7 @@ class BaseComponent(object):
             text_content = node.textContent
             fieldnames, trees_dict = extract_dependencies(text_content, ALLOWED_BUILTINS)
 
-            if len(fieldnames):
+            if trees_dict:
                 blueprints.append(BindingBlueprint(
                     binding_class=TextBinding,
                     node_index=node_index,
@@ -535,6 +547,14 @@ class BaseComponent(object):
         
         print(f"fields_on_class of {cls} : ", fields_on_class)
 
+        # Collect dependencies from computed properties
+        for name, member in inspect.getmembers(cls):
+            member_func = getattr(member, 'fget', member)
+            if hasattr(member_func, '_is_computed'):
+                deps = getattr(member_func, '_dependencies', [])
+                for d in deps:
+                    if d not in self.__fields__:
+                        self.__fields__.append(d)
 
         with self.refrain() as refrained:
 
@@ -561,7 +581,7 @@ class BaseComponent(object):
                         store_instance = Store._registry[store_name]
 
                         setattr(refrained, field, store_instance)
-                        #store_instance.add_subscription(self, attr_name) ?could we subscribe to "" attr (the whole store)
+                        store_instance.add_subscription(self, attr_name)
                         # Register in DAG
                         self._dag.get_or_create_state(field)
                 
@@ -754,8 +774,6 @@ class BaseComponent(object):
         else:
             container.appendChild(new_template)
 
-
-        #print("nested:", cls.get_nested_children())
         for nested_child in cls.get_nested_children():
             child_instance = nested_child.mount(self_element, replace=False) #appendChild
 
@@ -764,23 +782,6 @@ class BaseComponent(object):
                                                           childclass=nested_child,
                                                           childinstance=child_instance,
                                                           ))
-
-        '''
-        event_bindings = [eb for eb in new_instance.__bindings__ if isinstance(eb, EventBinding)]
-        
-        for binding in event_bindings:
-            if isinstance(binding.target_fn, str):
-                event_method = getattr(new_instance, binding.target_fn)
-                binding.node.removeAttribute(binding.event)
-                event_method_final = new_instance._create_function_proxy(event_method)
-                setattr(binding.element, binding.event, event_method_final)
-                
-            else:
-                self_event_method = binding.target_fn
-                binding.node.removeAttribute(binding.event)
-                setattr(binding.element, binding.event, self_event_method)
-                
-        '''
 
         print(f"mount: finished mounting {cls}")
 
@@ -795,12 +796,7 @@ class BaseComponent(object):
         #client
         for c_tag, c in cls._registry.items():
             if hasattr(c, 'style'):
-                style_content = ""
-                if isinstance(c.style, str):
-                    style_content = c.style
-                elif inspect.isfunction(c.style):
-                    if c.style.__doc__ is not None:
-                        style_content = c.style.__doc__
+                style_content = c._get_style_string()
                 
                 if style_content:
                     style_elem = cls._create_element("style")

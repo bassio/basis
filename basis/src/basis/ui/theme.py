@@ -2,6 +2,7 @@ from basis.shared.store import Store
 from basis.shared.component import Component
 from basis.shared.dag import computed
 
+
 class ThemeStore(Store):
     """
     A reactive store for design tokens.
@@ -16,14 +17,14 @@ class ThemeStore(Store):
         self.accent_color = "#007acc"
         
         # Light Theme defaults
-        self.bg_primary = "#ffffff"
-        self.bg_secondary = "#f8f9fa"
-        self.bg_tertiary = "#e9ecef"
-        self.text_primary = "#212529"
-        self.text_secondary = "#6c757d"
-        self.border_color = "#dee2e6"
-        self.hover_bg = "rgba(0, 0, 0, 0.05)"
-        self.glass_bg = "rgba(255, 255, 255, 0.8)"
+        self.bg_primary = "light-dark(#ffffff, #1a1a1a)"
+        self.bg_secondary = "light-dark(#f8f9fa, #252525)"
+        self.bg_tertiary = "light-dark(#e9ecef, #333333)"
+        self.text_primary = "light-dark(#212529, #f8f9fa)"
+        self.text_secondary = "light-dark(#6c757d, #adb5bd)"
+        self.border_color = "light-dark(#dee2e6, #404040)"
+        self.hover_bg = "light-dark(rgba(0, 0, 0, 0.05), rgba(255, 255, 255, 0.1))"
+        self.glass_bg = "light-dark(rgba(255, 255, 255, 0.8), rgba(20, 20, 20, 0.7))"
         
         # Shared tokens
         self.glass_blur = "12px"
@@ -33,26 +34,6 @@ class ThemeStore(Store):
         self.shadow_sm = "0 1px 2px 0 rgba(0, 0, 0, 0.05)"
         self.shadow_md = "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)"
 
-    def toggle_dark_mode(self):
-        self.dark_mode = not self.dark_mode
-        if self.dark_mode:
-            self.bg_primary = "#1a1a1a"
-            self.bg_secondary = "#252525"
-            self.bg_tertiary = "#333333"
-            self.text_primary = "#f8f9fa"
-            self.text_secondary = "#adb5bd"
-            self.border_color = "#404040"
-            self.hover_bg = "rgba(255, 255, 255, 0.1)"
-            self.glass_bg = "rgba(20, 20, 20, 0.7)"
-        else:
-            self.bg_primary = "#ffffff"
-            self.bg_secondary = "#f8f9fa"
-            self.bg_tertiary = "#e9ecef"
-            self.text_primary = "#212529"
-            self.text_secondary = "#6c757d"
-            self.border_color = "#dee2e6"
-            self.hover_bg = "rgba(0, 0, 0, 0.05)"
-            self.glass_bg = "rgba(255, 255, 255, 0.8)"
 
 
 class ThemeProvider(Component):
@@ -90,7 +71,10 @@ class ThemeProvider(Component):
             f"--shadow-sm: {t.shadow_sm}",
             f"--shadow-md: {t.shadow_md}",
         ]
-        return ":root { " + "; ".join(rules) + "; }"
+
+        joined_rules = "; ".join(rules)
+        return ":root { color-scheme: light dark; " + joined_rules + "}"
+
 
     def template(self):
         """

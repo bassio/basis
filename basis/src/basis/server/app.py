@@ -1,15 +1,17 @@
-from pathlib import Path
-from fastapi import FastAPI, APIRouter, Request, WebSocket, WebSocketDisconnect
-from starlette.routing import Route, Mount
-from starlette.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, HTMLResponse
-from urllib.parse import urljoin
-import logging
+import asyncio
 import itertools
+import logging
 import importlib.util
 import os
-import asyncio
+from pathlib import Path
 from typing import Set
+from urllib.parse import urljoin
+
+from starlette.routing import Route, Mount
+from starlette.staticfiles import StaticFiles
+from fastapi import FastAPI, APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, HTMLResponse
+
 
 logger = logging.getLogger('uvicorn.error')
 logger.setLevel(logging.DEBUG)
@@ -37,7 +39,7 @@ async def pyscript_json(request:Request):
     files_dict["{DOMAIN}/basis/shared/dag.py"] = "./basis/shared/dag.py"
     files_dict["{DOMAIN}/basis/shared/hmr.py"] = "./basis/shared/hmr.py"
 
-
+    
     for i, m in enumerate(request.app._component_routes, 1):
         #print(f"* Mount Point: '{m.path}' (Name: '{m.name}')")
         # The directory path is stored in route.app.directory
@@ -117,8 +119,6 @@ class Basis(FastAPI):
         self.routes.append(m)
         self._component_routes.append(m)
 
-
-
         # HMR WebSocket endpoint
         @self.websocket("/ws/hmr")
         async def hmr_websocket_endpoint(websocket: WebSocket):
@@ -169,6 +169,11 @@ class Basis(FastAPI):
             
         uvicorn.run(self, host=host, port=port)
 
+    def run_without_hmr(self, host="127.0.0.1", port=8000):
+        import uvicorn
+            
+        uvicorn.run(self, host=host, port=port)
+
     def include_framework(self):
         components_route = None
         shared_route = None
@@ -206,6 +211,7 @@ class Basis(FastAPI):
         title: str = "Basis App",
         stores: dict | None = None,
         name: str | None = None,
+        pyscript_src: str = "/pyscript"
     ):
         """
         Register a GET route that returns a fully server-rendered HTML page.
@@ -233,7 +239,7 @@ class Basis(FastAPI):
                 title=title,
                 stores=stores or {},
                 entry_module=entry_module,
-                pyscript_src=str(request.url_for('pyscript', path='core.js')),
+                pyscript_src=pyscript_src,
                 pyscript_json_url=str(request.url_for('pyscript_json')),
             )
             return HTMLResponse(html)
@@ -246,6 +252,57 @@ class Basis(FastAPI):
         self.include_pyscript_json()
         self.include_framework()
         self.include_ui_components()
+
+    def entrypoint(self, component_cls, **kwargs):
+        """
+        Configure the app with bootstrap, component routes, and SSR page in one go.
+        Returns the component class so it can be used as a decorator.
+        """
+        import inspect
+        from pathlib import Path
+
+        self.bootstrap()
+
+        # Detect where the component was defined to serve that directory
+        try:
+            component_file = Path(inspect.getfile(component_cls)).absolute()
+        except (TypeError, OSError):
+            # Fallback to the file that called entrypoint()
+            caller_frame = inspect.stack()[1]
+            component_file = Path(caller_frame.filename).absolute()
+        
+        app_dir = component_file.parent
+        entry_module = f"/{component_file.name}"
+        
+        online_pyscript = "https://pyscript.net/releases/2026.3.1"
+        # Register the main SSR page
+        print("including ssr page at /")
+        self.include_ssr_page("/", component_cls, entry_module=entry_module, pyscript_src=online_pyscript)
+
+        # Serve the application directory so PyScript can find the code
+        self.include_components_dir("/", str(app_dir), name="app_root")
+
+        return self
+
+    def serve(self, component_cls, port=8000, **kwargs):
+        """
+        Bootstrap, register, and run a Basis app with HMR.
+        """
+        self.component(component_cls, **kwargs)
+
+        # Print startup info
+        import inspect
+        from pathlib import Path
+        try:
+            component_file = Path(inspect.getfile(component_cls)).absolute()
+        except:
+            component_file = Path.cwd()
+
+        print(f"\n🚀 Basis app starting at http://localhost:{port}")
+        print(f"📦 Entry module: /{component_file.name}")
+        print(f"🏠 App directory: {component_file.parent}\n")
+
+        self.run_without_hmr(port=port)
         
 
 class BasisAPIRouter(APIRouter):

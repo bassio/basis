@@ -257,7 +257,7 @@ class Component(BaseComponent):
         return client_id_node_mapping
 
     @classmethod
-    def mount_app_ssr(cls, container, ssr_root=None, replace=False):
+    def mount_app_ssr(cls, ssr_root=None, replace=False):
         
         shadow_element_div = document.createElement("div")
         shadow = shadow_element_div.attachShadow({ 'mode': 'open' })
@@ -281,7 +281,7 @@ class Component(BaseComponent):
             child_client_id = child_instance.__element__.getAttribute("data-client-id")
             client_ids_dict[child_client_id] = child_instance
             
-        #print("client_ids_dict keys:", [k for k in client_ids_dict.keys()])
+        print("client_ids_dict keys:", [k for k in client_ids_dict.keys()])
 
         if not ssr_root:
             ssr_root = document.body
@@ -289,10 +289,10 @@ class Component(BaseComponent):
         marked_for_hydration = ssr_root.querySelectorAll("[data-hydration-id]")
         marked_for_hydration_dict = {x.getAttribute("data-hydration-id"):x for x in marked_for_hydration}
         
-        #marked_for_hydration_ids = [k for k in marked_for_hydration_dict.keys()]
+        marked_for_hydration_ids = [k for k in marked_for_hydration_dict.keys()]
         #print("marked_for_hydration", marked_for_hydration_ids)
-        #print("mismatch", [x for x in marked_for_hydration_ids if x not in [k for k in client_ids_dict.keys()]])
-        #print("marked_for_hydration_dict", marked_for_hydration_dict)
+        print("marked_for_hydration_dict", marked_for_hydration_dict)
+        print("mismatch", [x for x in marked_for_hydration_ids if x not in [k for k in client_ids_dict.keys()]])
         
         for child_instance in root_plus_child_component_instances:
             cid = child_instance.client_id

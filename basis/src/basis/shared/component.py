@@ -2,17 +2,27 @@ import sys
 
 # Framework check
 IS_CLIENT = "pyscript" in sys.modules
-
-print("IS_CLIENT", IS_CLIENT)
+IS_SERVER = not IS_CLIENT
 
 if IS_CLIENT:
     from basis.components.component import Component as ClientComponent
+
     Component = ClientComponent
+
+    class Basis(object):
+        def entrypoint(self, component):
+            component.mount_app_ssr()
+            return component
+
+    Basis = Basis
+
 else:
     from basis.server.server_component import ServerComponent as ServerComponent
+
+    from basis.server.app import Basis
+
     Component = ServerComponent
 
+    Basis = Basis
 
-from basis.components.component import client
-
-__all__ = ['Component', 'IS_CLIENT', 'client']
+__all__ = ['Component', 'IS_CLIENT', 'IS_SERVER', 'Basis']
