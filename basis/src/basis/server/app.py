@@ -1,17 +1,21 @@
 import asyncio
+import functools
+import importlib.util
+import inspect
 import itertools
 import logging
-import importlib.util
 import os
 from pathlib import Path
 from typing import Set
 from urllib.parse import urljoin
-
 from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
 from fastapi import FastAPI, APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, HTMLResponse
 
+from basis.server.db import DBAppMixin
+
+ONLINE_PYSCRIPT = "https://pyscript.net/releases/2026.3.1"
 
 logger = logging.getLogger('uvicorn.error')
 logger.setLevel(logging.DEBUG)
@@ -36,6 +40,7 @@ async def pyscript_json(request:Request):
     files_dict["{DOMAIN}/basis/shared/base_component.py"] = "./basis/shared/base_component.py"
     files_dict["{DOMAIN}/basis/shared/element.py"] = "./basis/shared/element.py"
     files_dict["{DOMAIN}/basis/shared/component.py"] = "./basis/shared/component.py"
+    files_dict["{DOMAIN}/basis/shared/context.py"] = "./basis/shared/context.py"
     files_dict["{DOMAIN}/basis/shared/dag.py"] = "./basis/shared/dag.py"
     files_dict["{DOMAIN}/basis/shared/hmr.py"] = "./basis/shared/hmr.py"
 
@@ -99,7 +104,7 @@ class HMRManager:
             except Exception:
                 self.active_connections.remove(connection)
 
-class Basis(FastAPI):
+class Basis(FastAPI, DBAppMixin):
     
     _component_dirs = []
     _component_routes = []
@@ -231,18 +236,26 @@ class Basis(FastAPI):
         name:
             Optional route name.
         """
-        from basis.server.ssr import render_page
+        from basis.server.ssr import render_page, render_page_async
 
         async def _ssr_handler(request: Request):
-            html = render_page(
-                component_cls,
-                title=title,
-                stores=stores or {},
-                entry_module=entry_module,
-                pyscript_src=pyscript_src,
-                pyscript_json_url=str(request.url_for('pyscript_json')),
-            )
-            return HTMLResponse(html)
+
+            from basis.shared.context import base_url_var
+            
+            # Set the base URL context for this request lifecycle
+            token = base_url_var.set(str(request.base_url))
+            try:
+                html = await render_page_async(
+                    component_cls,
+                    title=title,
+                    stores=stores or {},
+                    entry_module=entry_module,
+                    pyscript_src=pyscript_src,
+                    pyscript_json_url=str(request.url_for('pyscript_json')),
+                )
+                return HTMLResponse(html)
+            finally:
+                base_url_var.reset(token)
 
         self.add_route(path, _ssr_handler, methods=['GET'], name=name)
 
@@ -253,13 +266,16 @@ class Basis(FastAPI):
         self.include_framework()
         self.include_ui_components()
 
-    def entrypoint(self, component_cls, **kwargs):
+    def entrypoint(self, component_cls=None, *, pyscript_src=ONLINE_PYSCRIPT):
         """
         Configure the app with bootstrap, component routes, and SSR page in one go.
         Returns the component class so it can be used as a decorator.
         """
-        import inspect
-        from pathlib import Path
+        
+        #handle optional argument case (i.e. @entrypoint decorator with no args)
+        if component_cls is None:
+            return functools.partial(self.entrypoint, pyscript_src=pyscript_src)
+
 
         self.bootstrap()
 
@@ -274,10 +290,12 @@ class Basis(FastAPI):
         app_dir = component_file.parent
         entry_module = f"/{component_file.name}"
         
-        online_pyscript = "https://pyscript.net/releases/2026.3.1"
         # Register the main SSR page
         print("including ssr page at /")
-        self.include_ssr_page("/", component_cls, entry_module=entry_module, pyscript_src=online_pyscript)
+        self.include_ssr_page("/", component_cls, entry_module=entry_module, pyscript_src=pyscript_src)
+
+        self.state.entry_module = entry_module
+        self.state.pyscript_src = pyscript_src
 
         # Serve the application directory so PyScript can find the code
         self.include_components_dir("/", str(app_dir), name="app_root")

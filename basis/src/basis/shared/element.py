@@ -10,6 +10,15 @@ class Node(object):
             return self.parent['component']
         return self.parent
 
+    @property
+    def nextSibling(self):
+        all_siblings = self.parentNode.childNodes
+        idx = all_siblings.index(self)
+        try:
+            return self.parentNode.childNodes[idx+1]
+        except IndexError:
+            return None
+
     def after(self, *nodes):
         parent = self.parentNode
         #print("inside after::", self, parent, parent.children)
@@ -273,6 +282,10 @@ class Element(Node):
             return f"<{tag}>{children_str}</{tag}>"
 
     @property
+    def outerHTML(self):
+        return self.__html__()
+
+    @property
     def descendants(self):
         yield self
         for c in self.children:
@@ -354,7 +367,10 @@ class Element(Node):
             return
 
         new_node.remove()
-
+        
+        print(self.children)
+        print(reference_node)
+        
         idx = self.children.index(reference_node)
         
         if type(new_node).__name__ == 'ServerFragment':

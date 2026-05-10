@@ -336,7 +336,7 @@ class BaseComponent(object):
             non_standard_attrs = [a for a in other_attrs if a in special_attrs]
             standard_attrs = [a for a in other_attrs if a not in non_standard_attrs]
 
-            is_loop_template = 'for' in non_standard_attrs
+            is_loop_template = 'for' in non_standard_attrs and 'in' in non_standard_attrs
 
             # Process 'if'
             if 'if' in non_standard_attrs:
@@ -352,7 +352,7 @@ class BaseComponent(object):
                 ))
 
             # Process 'for' (Loop)
-            if 'for' in non_standard_attrs:
+            if is_loop_template:
                 inlist_attr_value = element.getAttribute('in').strip("{}")
                 for_attr_value = element.getAttribute('for')
                 fieldnames, trees_dict = extract_dependencies(element.getAttribute('in'), ALLOWED_BUILTINS)
@@ -567,23 +567,23 @@ class BaseComponent(object):
                     
                     if "." in field:
                         store_name, attr_name = field.strip("$").split(".")
-                        store_instance = Store._registry[store_name]
-                    
-                        setattr(refrained, field, store_instance)
-                        store_instance.add_subscription(self, attr_name)
-                        # Register in DAG
-                        self._dag.get_or_create_state(field)
-
                     else:
                         store_name = field.strip("$")
                         attr_name = ""
 
+                    if store_name in Store._registry:
                         store_instance = Store._registry[store_name]
-
                         setattr(refrained, field, store_instance)
                         store_instance.add_subscription(self, attr_name)
-                        # Register in DAG
-                        self._dag.get_or_create_state(field)
+                    else:
+                        # Register pending subscription
+                        if store_name not in Store._pending_subscriptions:
+                            Store._pending_subscriptions[store_name] = []
+                        
+                        Store._pending_subscriptions[store_name].append((self, attr_name))
+                    
+                    # Register in DAG (even if pending)
+                    self._dag.get_or_create_state(field)
                 
                 elif field.startswith("#"):
                     if "." in field:
@@ -603,11 +603,11 @@ class BaseComponent(object):
                             new_subscription = ComponentSubscription(component_instance=self,
                                                                      attr=attr_name)
 
-                            if component_name in self.__class__._pending_subscriptions:
-                                self.__class__._pending_subscriptions[component_name].append(new_subscription)
-                            else:
-                                self.__class__._pending_subscriptions[component_name] = [new_subscription]
+                            if component_name not in self.__class__._pending_subscriptions:
+                                self.__class__._pending_subscriptions[component_name] = []
                             
+                            self.__class__._pending_subscriptions[component_name].append(new_subscription)
+                                
                             # Register in DAG (even if pending, we want the node)
                             self._dag.get_or_create_state(field)
                 
@@ -697,17 +697,18 @@ class BaseComponent(object):
         try:
             if name.startswith("$"):
                 store_name, attr_name = name.strip("$").split(".")
-                val = getattr(self.__class__.S[store_name], attr_name)
+                val = getattr(self.__class__.S[store_name], attr_name, None)
                 return val
             elif name.startswith("#"):
                 component_name, attr_name = name.strip("#").split(".")
-                val = getattr(self.__class__._instance_registry[component_name], attr_name)
+                val = getattr(self.__class__._instance_registry[component_name], attr_name, None)
                 return val
             else:
                 return super().__getattribute__(name)
 
-        except:
-                return super().__getattribute__(name)
+        except Exception as e:
+            print(f"Error in __getattribute__ for {name}: {e}")
+            return super().__getattribute__(name)
 
     def __setattr__(self, name, value):
 

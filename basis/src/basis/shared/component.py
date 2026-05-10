@@ -1,4 +1,5 @@
 import sys
+from functools import wraps
 
 # Framework check
 IS_CLIENT = "pyscript" in sys.modules
@@ -25,4 +26,14 @@ else:
 
     Basis = Basis
 
-__all__ = ['Component', 'IS_CLIENT', 'IS_SERVER', 'Basis']
+
+def client(func):
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if IS_CLIENT:
+            return func(*args, **kwargs)
+
+    return wrapper
+
+__all__ = ['Component', 'IS_CLIENT', 'IS_SERVER', 'Basis', 'client']

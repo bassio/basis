@@ -29,25 +29,6 @@ from basis.shared.store import Store
 from basis.shared.element import Element, DocumentType
 
 
-def _serialize_store(store) -> dict:
-    """
-    Extract serialisable state from a Store instance.
-    Skips private/dunder attributes and non-serialisable callables.
-    """
-    state = {}
-    for k, v in store.__dict__.items():
-        if k.startswith('_'):
-            continue
-        if callable(v):
-            continue
-        try:
-            json.dumps(v)     # quick serialisability check
-            state[k] = v
-        except (TypeError, ValueError):
-            pass
-    return state
-
-
 def render_page(
     component_cls,
     *,
@@ -97,7 +78,7 @@ def render_page(
     initial_state: dict[str, dict] = {}
     if stores:
         for store_name, store_instance in stores.items():
-            initial_state[store_name] = _serialize_store(store_instance)
+            initial_state[store_name] = store_instance.serialize()
 
     initial_state_json = json.dumps(initial_state, indent=2)
 
@@ -219,3 +200,134 @@ def render_page(
     page_html = doctype.__html__() + page.__html__()
 
     return page_html
+
+async def render_page_async(
+    component_cls,
+    *,
+    title: str = "Basis App",
+    stores: dict | None = None,
+    entry_module: str = "/main.py",
+    pyscript_src: str = "/pyscript",
+    pyscript_json_url: str = "/pyscript.json",
+    extra_head: str = "",
+    **kwargs,
+) -> str:
+    """Async version of render_page that supports server_load lifecycle."""
+    import asyncio
+    
+    # 1. Serialise store state (initial pass)
+    initial_state: dict[str, dict] = {}
+    if stores:
+        for store_name, store_instance in stores.items():
+            initial_state[store_name] = store_instance.serialize()
+
+    initial_state_json = json.dumps(initial_state, indent=2)
+
+    # 2. Assemble the full page
+    page_template = f"""
+<html>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>{title}</title>
+
+        <!-- PyScript offline bundle -->
+        <link rel="stylesheet" href="{pyscript_src}/core.css" />
+        <script type="module" src="{pyscript_src}/core.js" onload="window.pyscript = this.module;"></script>
+        
+        <script src="./basis/components/component.js"></script>
+
+        <!-- Basis SSR: initial store state for client hydration -->
+        <script id="basis-initial-state" type="application/json">
+            {initial_state_json}
+        </script>
+        {extra_head}
+    </head>
+    <body>
+        <div id="basis-ssr-root">
+        </div>
+        <!-- PyScript entry point: mounts/hydrates the application -->
+        <script type="py" src="{entry_module}" config="{pyscript_json_url}"></script>
+    </body>
+</html>
+"""
+    
+    page_tree = html_to_element_tree(page_template)
+    page = page_tree['component']
+    doctype = DocumentType(name="html")
+    body = page.children[1]
+    basis_ssr_root = body.children[0]
+    app = component_cls.mount_app(basis_ssr_root)
+
+    level = 0
+    app.__element__._depth_level = level
+
+    def map_hydration_ids(root_element):
+        stack = [(root_element, 0, [0])]
+        stack_return = []
+        while stack:
+            obj, depth, path = stack.pop()
+            path_str = ":".join(map(str, path))
+            path_str = "r:" + path_str
+            stack_return.append((obj, depth, path_str))
+            children = getattr(obj, 'children', [])
+            valid_children = [c for c in children if type(c).__name__ != 'Comment']
+            for i, child in reversed(list(enumerate(valid_children))):
+                stack.append((child, depth + 1, path + [i]))
+        id_map = {}
+        for obj, depth, path_str in iter(stack_return):
+            id_map[path_str] = obj
+        return id_map
+
+    hydration_ids_dict = map_hydration_ids(app.__element__)
+    child_bindings_recursive = [cb for cb  in app.get_child_bindings(recursive=True)]
+    child_component_instances = [cb.childinstance for cb  in child_bindings_recursive]
+    root_component_plus_child_components = [app, *child_component_instances]
+
+    # --- NEW: Async Preload Phase ---
+    preload_tasks = []
+    for comp in root_component_plus_child_components:
+        if hasattr(comp, 'server_load') and asyncio.iscoroutinefunction(comp.server_load):
+            preload_tasks.append(comp.server_load())
+            
+    if preload_tasks:
+        await asyncio.gather(*preload_tasks)
+        
+        if stores:
+            for store_name, store_instance in stores.items():
+                initial_state[store_name] = store_instance.serialize()
+        for store_name, store_instance in Store._registry.items():
+            if store_name not in initial_state:
+                initial_state[store_name] = store_instance.serialize()
+                
+        new_json = json.dumps(initial_state, indent=2)
+        
+        head = page.children[0]
+        script_node = None
+        for c in head.children:
+            if hasattr(c, 'attributes') and c.attributes.get('id') == 'basis-initial-state':
+                script_node = c
+                break
+        if script_node and script_node.children:
+            script_node.children[0].text = f"\n            {new_json}\n        "
+
+    root_component_plus_child_nodes = [comp.__element__ for comp in root_component_plus_child_components]
+    all_bindings_recursive = [cb for cb  in app.get_bindings(recursive=True)]
+    all_bindings_nodes = [b.node for b in all_bindings_recursive]
+    all_bindings_nodes_for_hydration = []
+    
+    for b in all_bindings_recursive:
+        all_bindings_nodes_for_hydration.extend(b.marked_for_hydration())
+
+    for hid, node in hydration_ids_dict.items():
+        try:
+            if any(node is target for target in all_bindings_nodes_for_hydration):
+                node.setAttribute("data-hydration-id", hid)
+            if any(node is target for target in root_component_plus_child_nodes):
+                node.setAttribute("data-component-hydration-id", hid)
+        except:
+            pass
+
+    page_html = doctype.__html__() + page.__html__()
+    return page_html
+

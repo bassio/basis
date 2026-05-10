@@ -24,7 +24,6 @@ def client(func):
 
     return wrapper
 
-
 class Component(BaseComponent):
 
     @classmethod
@@ -191,16 +190,18 @@ class Component(BaseComponent):
             and tb_node_parent_cid and ssr_root.getAttribute("data-hydration-id") == tb_node_parent_cid:
                 matched_ssr_node_parent = ssr_root
 
-            if matched_ssr_node_parent:
-                for childNode in matched_ssr_node_parent.childNodes:
-                    if childNode.nodeType == 3:
-                        if childNode.textContent == tb.node.textContent:
-                            #print("YES!!!!!!!!!!!!!!!!!!", tb.node.textContent)
-                            tb.node = childNode
-                        else:
-                            #print("No!!!!!!!!!!!!!!!!!!!", childNode.textContent)
-                            pass
+            position_in_shadow = None
+            for i, child_node in enumerate(tb.node.parentNode.childNodes):
+                if child_node == tb.node:
+                    position_in_shadow = i
 
+            if matched_ssr_node_parent:
+                #match the text node by its index (position within it's parent's childNodes)
+                for i, childNode in enumerate(matched_ssr_node_parent.childNodes):
+                    if childNode.nodeType == 3:
+                        if i == position_in_shadow:
+                            tb.node = childNode
+                        
         for klb in keyed_loop_bindings:
             klb.parent
             klb_child_bindings = [cb for cb in child_bindings if cb.loop_binding is klb]
@@ -209,6 +210,8 @@ class Component(BaseComponent):
                 matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{klb_child_node_cid}']")
                 if matched_ssr_node:
                     cb.node = matched_ssr_node
+                    # CRITICAL: Attach the component instance for loop items
+                    setattr(matched_ssr_node, '__basis_instance__', cb.childinstance)
                     klb.parent = matched_ssr_node.parentNode
 
         for cb in child_bindings:
@@ -219,8 +222,11 @@ class Component(BaseComponent):
             matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{cb_node_cid}']")
             if matched_ssr_node:
                 cb.node = matched_ssr_node
+                # CRITICAL: Attach the component instance so parent AttributeBindings can sync props
+                setattr(matched_ssr_node, '__basis_instance__', cb.childinstance)
             elif cb_node_cid and ssr_root.getAttribute("data-hydration-id") == cb_node_cid:
                 cb.node = ssr_root
+                setattr(ssr_root, '__basis_instance__', cb.childinstance)
 
         for ob in other_bindings:
             ob_node_cid = ob.node.getAttribute("data-client-id")

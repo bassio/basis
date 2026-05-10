@@ -65,11 +65,9 @@ class EffectNode(ReactiveNode):
     def update(self):
         if self.stale:
             # First, ensure all dependencies are updated (especially computed ones)
-            print("dependencies", self.dependencies)
             for dep in self.dependencies:
                 dep.update()
 
-            print("update_func", self.update_func)           
             self.update_func()
             self.stale = False
 
@@ -133,7 +131,6 @@ class DependencyGraph:
         # it's somewhat self-ordering.
         for node in list(self.nodes.values()):
             if isinstance(node, EffectNode) and node.stale:
-                print(f"STALE: {node}")
                 node.update()
 
 class DependencyVisitor(ast.NodeVisitor):

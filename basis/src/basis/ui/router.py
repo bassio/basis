@@ -8,6 +8,7 @@ else:
     window = None
     ffi = None
 
+
 class RouterStore(Store):
     current_path: str = ""
     

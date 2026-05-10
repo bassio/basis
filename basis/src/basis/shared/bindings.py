@@ -506,6 +506,10 @@ class ChildBinding(NodeBinding):
         if not getattr(node, '__basis_mounted__', False):
             child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
             node.__basis_mounted__ = True
+            # CRITICAL: This links the DOM wrapper node to the Python component instance. 
+            # It enables AttributeBinding.update() on the parent to correctly sync reactive 
+            # property changes down to the child component instance.
+            setattr(node, '__basis_instance__', child_instance)
             
             return cls(
                 component_instance=component_instance, 
@@ -570,6 +574,8 @@ class LoopBinding(NodeBinding):
                                 and cb.loop_binding == self]
 
         collection_value = getattr(self.component_instance, self.collection, [])
+        if collection_value is None:
+            collection_value = []
         fragment = self.component_instance._create_document_fragment()
 
         for i in collection_value:
@@ -647,12 +653,28 @@ class KeyedLoopBinding(NodeBinding):
         item_attr_name = self.item # the "for={single_item}"
         
         updated_child_node_attrs = {item_attr_name: item}
+
+
+        rest_of_fields = []
         
-        rest_of_fields = [f for f in self.component_instance.__fields__ \
-                          if (f != item_attr_name) \
-                            and (not inspect.isfunction(getattr(self.component_instance, f))) \
-                            and (not f in ["for", "in", "key"])]
-        
+        for f in self.component_instance.__fields__:
+            try:
+                if f in ["for", "in", "key"]:
+                    continue
+                elif f == item_attr_name:
+                    continue
+                elif f.startswith("#"):
+                    continue
+                elif f.startswith("$"):
+                    continue
+                elif inspect.isfunction(getattr(self.component_instance, f)):
+                    continue
+                else:
+                    rest_of_fields.append(f)
+            except:
+                continue
+
+
         for field in rest_of_fields:
             updated_child_node_attrs[field] = getattr(self.component_instance, field)
 
@@ -677,24 +699,31 @@ class KeyedLoopBinding(NodeBinding):
 
         return updated_child_node_attrs
 
-    def _child_component_class(self):
+    def _child_component_class(self, **kwargs):
         cloned_element = self._new_clone()
+        print("cloned_element.tagName", cloned_element.tagName)
         if '-' in (tag:=str.lower(cloned_element.tagName)):
             childcomponent_py = self.component_instance.__class__._registry[tag]
         else:
-            quick_component = self.component_instance.__class__.from_template(cloned_element.outerHTML)
+            quick_component = self.component_instance.__class__.from_template(cloned_element.outerHTML, **kwargs)
             childcomponent_py = quick_component
 
         return childcomponent_py
 
     def get_collection_keys(self):
+
+        print("self.collection", self.collection)
+
         collection_value = getattr(self.component_instance, self.collection, [])
+        if collection_value is None:
+            collection_value = []
+
 
         keys = []
 
         for i in collection_value:
             if isinstance(i, dict): #i.e. list of dicts
-                k_val = i.get(self.key)
+                k_val = i[self.key]
             else:
                 try:
                     k_val = getattr(i, self.key) #i.e. list of objects that has "key" as attribute
@@ -708,8 +737,10 @@ class KeyedLoopBinding(NodeBinding):
     
     def get_collection_items(self):
         collection_value = getattr(self.component_instance, self.collection, [])
+        if collection_value is None:
+            collection_value = []
 
-        return [i for i in collection_value]
+        return collection_value
     
 
     def update(self):
@@ -749,11 +780,12 @@ class KeyedLoopBinding(NodeBinding):
                 # New creation
                 cloned_element = self._new_clone()
                 updated_child_node_attrs = self._child_node_attrs_dict(i)
-                
+                print("updated_child_node_attrs", updated_child_node_attrs)
 
-                childcomponent_py = self._child_component_class()
+                childcomponent_py = self._child_component_class(**updated_child_node_attrs)
                 
                 child_instance = childcomponent_py.mount(fragment, replace=False, **updated_child_node_attrs)
+                print("child_instance", child_instance)
                 child_instance.__element__.setAttribute('data-item-key', k_val)
                 new_instances[k_val] = child_instance
 
@@ -783,14 +815,23 @@ class KeyedLoopBinding(NodeBinding):
     def from_blueprint(cls, component_instance, node, blueprint):
         cloned_node = node.cloneNode(True)
         
+        # Capture parent and the sibling that comes after the template node,
+        # then remove the template node entirely from the DOM.
+        # (Must capture before remove() since parentNode becomes None after.)
+        parent_node = node.parentNode
+        after_node = node.nextSibling
+        node.remove()
+        
         instance = cls(
             component_instance=component_instance, 
             node=node,
             clone=cloned_node,
-            parent=node.parentNode,
+            parent=parent_node,
             ast_trees=blueprint.ast_trees,
             **blueprint.kwargs,
         )
+        
+        instance._after_node = after_node
         
         return instance
 
@@ -804,11 +845,11 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
         # 1. Prepare data
         new_keys = self.get_collection_keys()
         new_items = self.get_collection_items()
-        
         # 2. Removal Phase
         # Find instances that are no longer in the new keys
         new_keys_set = set(new_keys)
         removed_keys = [k for k in self.instances.keys() if k not in new_keys_set]
+
         for r_key in removed_keys:
             old_instance = self.instances[r_key]
             # Remove from DOM
@@ -823,7 +864,7 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
             
             # Remove from our instance map
             del self.instances[r_key]
-
+        
         # 3. Creation & Update Phase
         new_instances_list = []
         sources = [-1] * len(new_keys)
@@ -849,14 +890,26 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
                 sources[i] = old_key_to_idx[k_val]
                 new_instances_map[k_val] = child_instance
             else:
-                # New creation
-                cloned_element = self._new_clone()
+                # New creation — mount immediately after the template node (self.node)
+                # so items appear in insertion order without a separate reorder pass.
                 updated_child_node_attrs = self._child_node_attrs_dict(item)
-                childcomponent_py = self._child_component_class()
-                
-                # Mount to parent (will be moved to correct position later)
-                child_instance = childcomponent_py.mount(self.parent, replace=False, **updated_child_node_attrs)
+                childcomponent_py = self._child_component_class(**updated_child_node_attrs)
+
+                # Use a temporary fragment then insertBefore to place correctly
+                fragment = self.component_instance._create_document_fragment()
+                child_instance = childcomponent_py.mount(fragment, replace=False, **updated_child_node_attrs)
                 child_instance.__element__.setAttribute('data-item-key', str(k_val))
+                
+                # Find anchor: after the last-inserted item, or before _after_node for the first
+                if new_instances_list:
+                    insert_after = new_instances_list[-1].__element__
+                    # insert after last item = insertBefore its nextSibling
+                    anchor = insert_after.nextSibling
+                else:
+                    # First item: insert at the slot where the template was
+                    anchor = getattr(self, '_after_node', None)
+
+                self.parent.insertBefore(child_instance.__element__, anchor)
                 
                 new_cb = ChildBinding(component_instance=self.component_instance,
                                       node=child_instance.__element__,
@@ -870,32 +923,36 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
 
             new_instances_list.append(new_instances_map[k_val])
 
-        # 4. Movement Phase (LIS)
-        # Find LIS of the original positions to minimize moves
-        actual_sources = [s for s in sources if s != -1]
-        lis_values_indices = get_lis_indices(actual_sources)
-        
-        # Map LIS indices back to the 'sources' (new list) indices
-        lis_indices_in_new_list = set()
-        j = 0
-        for i, s in enumerate(sources):
-            if s != -1:
-                if j in lis_values_indices:
-                    lis_indices_in_new_list.add(i)
-                j += 1
+        # 4. Movement Phase (LIS) — only needed when existing items may have moved
+        # If all items are new (sources all -1) they are already in order, skip.
+        has_existing = any(s != -1 for s in sources)
+        if has_existing:
+            actual_sources = [s for s in sources if s != -1]
+            lis_values_indices = get_lis_indices(actual_sources)
+            
+            # Map LIS indices back to the 'sources' (new list) indices
+            lis_indices_in_new_list = set()
+            j = 0
+            for i, s in enumerate(sources):
+                if s != -1:
+                    if j in lis_values_indices:
+                        lis_indices_in_new_list.add(i)
+                    j += 1
 
-        # 5. Reorder in DOM (Iterate backwards for stable insertBefore)
-        next_node = None
-        for i in range(len(new_keys) - 1, -1, -1):
-            instance = new_instances_list[i]
-            node = instance.__element__
-            
-            # If it's a new item or not in the LIS, it must be moved/inserted
-            if sources[i] == -1 or i not in lis_indices_in_new_list:
-                self.parent.insertBefore(node, next_node)
-            
-            next_node = node
-            
+            # 5. Reorder existing items in DOM (backwards for stable insertBefore)
+            # Start anchor from the end of our known item block
+            last_item_node = new_instances_list[-1].__element__
+            next_node = last_item_node.nextSibling
+            for i in range(len(new_keys) - 1, -1, -1):
+                instance = new_instances_list[i]
+                node = instance.__element__
+                
+                # Only move existing items that are not in their stable position
+                if sources[i] != -1 and i not in lis_indices_in_new_list:
+                    self.parent.insertBefore(node, next_node)
+                
+                next_node = node
+
         self.instances = new_instances_map
 
 @dataclass
@@ -1032,7 +1089,7 @@ def safe_eval(expr_str, context, allowed_builtins, tree=None):
     try:
         return _eval_ast(tree.body if isinstance(tree, ast.Expression) else tree, context, allowed_builtins)
     except Exception as e:
-        print(f"Error evaluating '{expr_str}': {e}", context)
+        #print(f"Error evaluating '{expr_str}': {e}", context)
         return f"[Error: {expr_str}]"
 
 def safe_format(template_str, context, allowed_builtins):
