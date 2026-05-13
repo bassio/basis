@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse, HTMLResponse
 
 from basis.server.db import DBAppMixin
 
+
 ONLINE_PYSCRIPT = "https://pyscript.net/releases/2026.3.1"
 
 logger = logging.getLogger('uvicorn.error')
@@ -108,7 +109,16 @@ class Basis(FastAPI, DBAppMixin):
     
     _component_dirs = []
     _component_routes = []
+    _global_stores = []
     hmr_manager = HMRManager()
+
+    def include_store(self, name: str, url: str = None, target: str = None):
+        self._global_stores.append({
+            'name': name,
+            'url': url,
+            'target': target
+        })
+        return self
 
     def include_offline_pyscript(self, mount_path:str="/pyscript"):
         pyscript_mount = Mount(mount_path, StaticFiles(packages=[("basis", "static/pyscript")]), name="pyscript")
@@ -212,11 +222,14 @@ class Basis(FastAPI, DBAppMixin):
         self,
         path: str,
         component_cls,
+        *,
+        page_cls = None,
         entry_module: str = "/main.py",
         title: str = "Basis App",
         stores: dict | None = None,
+        pyscript_src: str = "/pyscript",
+        pyscript_json_url: str = "/pyscript.json",
         name: str | None = None,
-        pyscript_src: str = "/pyscript"
     ):
         """
         Register a GET route that returns a fully server-rendered HTML page.
@@ -236,6 +249,9 @@ class Basis(FastAPI, DBAppMixin):
         name:
             Optional route name.
         """
+        if page_cls is None:
+            from basis.shared.page import Page
+            page_cls = Page
         from basis.server.ssr import render_page, render_page_async
 
         async def _ssr_handler(request: Request):
@@ -245,10 +261,14 @@ class Basis(FastAPI, DBAppMixin):
             # Set the base URL context for this request lifecycle
             token = base_url_var.set(str(request.base_url))
             try:
+                # Merge global stores with page-specific ones
+                page_stores = stores or {}
                 html = await render_page_async(
                     component_cls,
+                    page_cls=page_cls,
                     title=title,
-                    stores=stores or {},
+                    stores=page_stores,
+                    global_stores=self._global_stores,
                     entry_module=entry_module,
                     pyscript_src=pyscript_src,
                     pyscript_json_url=str(request.url_for('pyscript_json')),

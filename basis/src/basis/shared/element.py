@@ -400,19 +400,15 @@ class Element(Node):
             c.parent = self
 
     def cloneNode(self, deep:bool=True):
-
-        new_node = Element(tag=self.tag, attrs=self.attrs, children=self.children, void_=self.void_)
-        new_node.tag = self.tag
-        new_node.attrs = self.attrs
-        new_node.children = self.children
-        new_node.void_ = self.void_
+        new_attrs = self.attrs.copy()
+        new_node = Element(tag=self.tag, attrs=new_attrs, children=[], void_=self.void_)
 
         if deep:
             new_children = []
-
             for c in self.children:
-                new_children.append(c.cloneNode(deep=True))
-            
+                cloned_child = c.cloneNode(deep=True)
+                cloned_child.parent = new_node
+                new_children.append(cloned_child)
             new_node.children = new_children
         
         return new_node

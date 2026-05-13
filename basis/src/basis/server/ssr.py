@@ -20,176 +20,72 @@ Usage example in a route:
 """
 
 from __future__ import annotations
-
+from asyncio import exceptions
+import asyncio
 import json
 
 from basis.server.tree_builder import html_to_element_tree
-from basis.server.server_component import ServerComponent
 from basis.shared.store import Store
 from basis.shared.element import Element, DocumentType
 
-
-def render_page(
-    component_cls,
-    *,
-    title: str = "Basis App",
+def _get_all_stores(
+    page_cls,
+    root_component_cls,
     stores: dict | None = None,
-    entry_module: str = "/main.py",
-    pyscript_src: str = "/pyscript",
-    pyscript_json_url: str = "/pyscript.json",
-    extra_head: str = "",
-    **kwargs,
-) -> str:
-    """
-    Render a full HTML page with:
+    global_stores: list | None = None
+) -> dict[str, Store]:
+    """Collect all stores from Page, Component, and global configurations."""
+    all_stores = stores or {}
+    for cls in [page_cls, root_component_cls]:
+        if hasattr(cls, '__basis_stores__'):
+            for cfg in cls.__basis_stores__:
+                name = cfg['name']
+                if name not in all_stores:
+                    if name not in Store._registry:
+                        Store(name)
+                    all_stores[name] = Store._registry[name]
 
-    - Fully server-resolved component HTML (via ServerComponent.render())
-    - PyScript offline bootstrap
-    - <script id="basis-initial-state"> JSON block for Store hydration
-    - <py-config> pointing at pyscript.json
+    if global_stores:
+        for cfg in global_stores:
+            name = cfg['name']
+            if name not in all_stores:
+                if name not in Store._registry:
+                    Store(name)
+                all_stores[name] = Store._registry[name]
+    return all_stores
 
-    Parameters
-    ----------
-    component_cls:
-        A ServerComponent subclass to render.
-    title:
-        Page <title>.
-    stores:
-        Dict mapping store name → Store instance whose state should be embedded
-        as the initial-state JSON block.  WebSocketStore on the client reads this
-        automatically on startup.
-    entry_module:
-        URL path of the PyScript entry point (the .py file that calls mount_app
-        or the new hydrate path).
-    pyscript_src:
-        URL for the offline PyScript core.js bundle.
-    pyscript_json_url:
-        URL for pyscript.json (the file-map used by PyScript to fetch Python modules).
-    extra_head:
-        Any additional raw HTML to inject inside <head>.
-    **kwargs:
-        Keyword arguments forwarded to ``component_cls.render(**kwargs)``.
-    """
-    # 1. Render the component tree to an HTML fragment
-    #component_html = component_cls.render(**kwargs)
-    #component_html = component_cls().__element__.__html__()
-    
-    # 2. Serialise store state
+def _serialize_initial_state(all_stores: dict[str, Store]) -> str:
+    """Serialize the current state of all collected stores."""
     initial_state: dict[str, dict] = {}
-    if stores:
-        for store_name, store_instance in stores.items():
-            initial_state[store_name] = store_instance.serialize()
+    for store_name, store_instance in all_stores.items():
+        initial_state[store_name] = store_instance.serialize()
+    return json.dumps(initial_state, indent=2)
 
-    initial_state_json = json.dumps(initial_state, indent=2)
-
-    # 3. Assemble the full page
-    page_template = f"""
-<html>
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>{title}</title>
-
-        <!-- PyScript offline bundle -->
-        <link rel="stylesheet" href="{pyscript_src}/core.css" />
-        <script type="module" src="{pyscript_src}/core.js" onload="window.pyscript = this.module;"></script>
-        
-        <script src="./basis/components/component.js"></script>
-
-        <!-- Basis SSR: initial store state for client hydration -->
-        <script id="basis-initial-state" type="application/json">
-            {initial_state_json}
-        </script>
-        {extra_head}
-    </head>
-    <body>
-        <div id="basis-ssr-root">
-        </div>
-        <!-- PyScript entry point: mounts/hydrates the application -->
-        <script type="py" src="{entry_module}" config="{pyscript_json_url}"></script>
-    </body>
-</html>
-"""
-    
-    page_tree = html_to_element_tree(page_template)
-
-    page = page_tree['component']
-
-    doctype = DocumentType(name="html")
-
-    body = page.children[1]
-    basis_ssr_root = body.children[0]
-
-    app = component_cls.mount_app(basis_ssr_root)
-
-    level = 0
-    
-    app.__element__._depth_level = level
-
-    current_element = app.__element__
-
+def _apply_hydration_logic(app, root_component_plus_child_components):
+    """Apply hydration IDs and component IDs to the DOM tree."""
     def map_hydration_ids(root_element):
-        """
-        Traverses an Element tree and assigns deterministic IDs.
-        Structure: 'r' (root) followed by indices: r:0, r:0:1, r:0:1:0, etc.
-        """
-        # Each entry: (element, path_as_tuple, index_at_current_level)
-        # We start with the root at the first position (index 0) of the 'r' path.
-
         stack = [(root_element, 0, [0])]
-        
         stack_return = []
-
         while stack:
-                obj, depth, path = stack.pop()
-                path_str = ":".join(map(str, path))
-                path_str = "r:" + path_str
-                stack_return.append((obj, depth, path_str))
-                #print(f"Depth {depth} (Path: {path_str}): {obj}")
-                
-
-                children = getattr(obj, 'children', [])
-                # Filter out comments to ensure they don't shift hydration indices
-                valid_children = [c for c in children if type(c).__name__ != 'Comment']
-                
-                for i, child in reversed(list(enumerate(valid_children))):
-                    # Concatenate current path with the new index
-                    stack.append((child, depth + 1, path + [i]))
-
-
-        print("stack_return", stack_return)
-
-        id_map = {}
-
-        for obj, depth, path_str in iter(stack_return):
-            id_map[path_str] = obj
-
-        return id_map
+            obj, depth, path = stack.pop()
+            path_str = "r:" + ":".join(map(str, path))
+            stack_return.append((obj, depth, path_str))
+            children = getattr(obj, 'children', [])
+            valid_children = [c for c in children if type(c).__name__ != 'Comment']
+            for i, child in reversed(list(enumerate(valid_children))):
+                stack.append((child, depth + 1, path + [i]))
+        return {hid: obj for obj, depth, hid in stack_return}
 
     hydration_ids_dict = map_hydration_ids(app.__element__)
-
-    child_bindings_recursive = [cb for cb  in app.get_child_bindings(recursive=True)]
-    
-    child_component_instances = [cb.childinstance for cb  in child_bindings_recursive]
-
-    root_component_plus_child_components = [app, *child_component_instances]
-
     root_component_plus_child_nodes = [comp.__element__ for comp in root_component_plus_child_components]
-
-    all_bindings_recursive = [cb for cb  in app.get_bindings(recursive=True)]
     
-    all_bindings_nodes = [b.node for b in all_bindings_recursive]
-
+    all_bindings_recursive = list(app.get_bindings(recursive=True))
     all_bindings_nodes_for_hydration = []
-    
     for b in all_bindings_recursive:
         all_bindings_nodes_for_hydration.extend(b.marked_for_hydration())
 
     for hid, node in hydration_ids_dict.items():
-        #print(hid, node)
         try:
-            # Use identity check (is) instead of value equality (in) 
-            # to avoid matching structurally identical but different elements.
             if any(node is target for target in all_bindings_nodes_for_hydration):
                 node.setAttribute("data-hydration-id", hid)
             if any(node is target for target in root_component_plus_child_nodes):
@@ -197,137 +93,125 @@ def render_page(
         except:
             pass
 
-    page_html = doctype.__html__() + page.__html__()
-
-    return page_html
-
-async def render_page_async(
-    component_cls,
+def render_page(
+    root_component_cls,
     *,
+    page_cls = None,
     title: str = "Basis App",
     stores: dict | None = None,
+    global_stores: list | None = None,
     entry_module: str = "/main.py",
     pyscript_src: str = "/pyscript",
     pyscript_json_url: str = "/pyscript.json",
     extra_head: str = "",
     **kwargs,
 ) -> str:
-    """Async version of render_page that supports server_load lifecycle."""
-    import asyncio
+    """
+    Render a full HTML page using a Page shell and a root component.
+    """
+    if page_cls is None:
+        from basis.shared.page import Page
+        page_cls = Page
     
-    # 1. Serialise store state (initial pass)
-    initial_state: dict[str, dict] = {}
-    if stores:
-        for store_name, store_instance in stores.items():
-            initial_state[store_name] = store_instance.serialize()
+    # 1. Collect stores
+    all_stores = _get_all_stores(page_cls, root_component_cls, stores, global_stores)
 
-    initial_state_json = json.dumps(initial_state, indent=2)
-
-    # 2. Assemble the full page
-    page_template = f"""
-<html>
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>{title}</title>
-
-        <!-- PyScript offline bundle -->
-        <link rel="stylesheet" href="{pyscript_src}/core.css" />
-        <script type="module" src="{pyscript_src}/core.js" onload="window.pyscript = this.module;"></script>
-        
-        <script src="./basis/components/component.js"></script>
-
-        <!-- Basis SSR: initial store state for client hydration -->
-        <script id="basis-initial-state" type="application/json">
-            {initial_state_json}
-        </script>
-        {extra_head}
-    </head>
-    <body>
-        <div id="basis-ssr-root">
-        </div>
-        <!-- PyScript entry point: mounts/hydrates the application -->
-        <script type="py" src="{entry_module}" config="{pyscript_json_url}"></script>
-    </body>
-</html>
-"""
+    # 2. Setup Page instance
+    page_instance = page_cls.load()
+    page_instance.title = title
+    page_instance.entry_module = entry_module
+    page_instance.pyscript_src = pyscript_src
+    page_instance.pyscript_json_url = pyscript_json_url
     
-    page_tree = html_to_element_tree(page_template)
-    page = page_tree['component']
-    doctype = DocumentType(name="html")
-    body = page.children[1]
-    basis_ssr_root = body.children[0]
-    app = component_cls.mount_app(basis_ssr_root)
+    # 3. Mount App
+    basis_ssr_root = None
+    for node in page_instance.__element__.descendants:
+        if hasattr(node, 'getAttribute') and node.getAttribute('id') == 'basis-ssr-root':
+            basis_ssr_root = node
+            break
+            
+    if not basis_ssr_root:
+        raise Exception("Could not find <div id='basis-ssr-root'> in page shell template")
 
-    level = 0
-    app.__element__._depth_level = level
+    app = root_component_cls.mount_app(basis_ssr_root)
 
-    def map_hydration_ids(root_element):
-        stack = [(root_element, 0, [0])]
-        stack_return = []
-        while stack:
-            obj, depth, path = stack.pop()
-            path_str = ":".join(map(str, path))
-            path_str = "r:" + path_str
-            stack_return.append((obj, depth, path_str))
-            children = getattr(obj, 'children', [])
-            valid_children = [c for c in children if type(c).__name__ != 'Comment']
-            for i, child in reversed(list(enumerate(valid_children))):
-                stack.append((child, depth + 1, path + [i]))
-        id_map = {}
-        for obj, depth, path_str in iter(stack_return):
-            id_map[path_str] = obj
-        return id_map
+    # 4. Apply Hydration
+    child_bindings = list(app.get_child_bindings(recursive=True))
+    child_components = [cb.childinstance for cb in child_bindings]
+    all_components = [app] + child_components
+    
+    _apply_hydration_logic(app, all_components)
 
-    hydration_ids_dict = map_hydration_ids(app.__element__)
-    child_bindings_recursive = [cb for cb  in app.get_child_bindings(recursive=True)]
-    child_component_instances = [cb.childinstance for cb  in child_bindings_recursive]
-    root_component_plus_child_components = [app, *child_component_instances]
+    # 5. Final render
+    initial_state_json = _serialize_initial_state(all_stores)
+    return page_instance.render_full_page(initial_state_json=initial_state_json)
 
-    # --- NEW: Async Preload Phase ---
+
+async def render_page_async(
+    root_component_cls,
+    *,
+    page_cls = None,
+    title: str = "Basis App",
+    stores: dict | None = None,
+    global_stores: list | None = None,
+    entry_module: str = "/main.py",
+    pyscript_src: str = "/pyscript",
+    pyscript_json_url: str = "/pyscript.json",
+    extra_head: str = "",
+    **kwargs,
+) -> str:
+    """
+    Async version of render_page that supports server_load lifecycle.
+    """
+    if page_cls is None:
+        from basis.shared.page import Page
+        page_cls = Page
+    
+    # 1. Collect stores
+    all_stores = _get_all_stores(page_cls, root_component_cls, stores, global_stores)
+
+    # 2. Setup Page instance
+    page_instance = page_cls.load()
+    page_instance.title = title
+    page_instance.entry_module = entry_module
+    page_instance.pyscript_src = pyscript_src
+    page_instance.pyscript_json_url = pyscript_json_url
+    
+    # 3. Mount App
+    basis_ssr_root = None
+    for node in page_instance.__element__.descendants:
+        if hasattr(node, 'getAttribute') and node.getAttribute('id') == 'basis-ssr-root':
+            basis_ssr_root = node
+            break
+            
+    if not basis_ssr_root:
+        raise Exception("Could not find <div id='basis-ssr-root'> in page shell template")
+
+    app = root_component_cls.mount_app(basis_ssr_root)
+
+    # 4. Async Preload Phase
+    child_bindings = list(app.get_child_bindings(recursive=True))
+    child_components = [cb.childinstance for cb in child_bindings]
+    all_components = [app] + child_components
+
     preload_tasks = []
-    for comp in root_component_plus_child_components:
+    for comp in all_components:
         if hasattr(comp, 'server_load') and asyncio.iscoroutinefunction(comp.server_load):
             preload_tasks.append(comp.server_load())
             
     if preload_tasks:
         await asyncio.gather(*preload_tasks)
         
-        if stores:
-            for store_name, store_instance in stores.items():
-                initial_state[store_name] = store_instance.serialize()
+        # Re-check Store registry in case server_load created new stores
         for store_name, store_instance in Store._registry.items():
-            if store_name not in initial_state:
-                initial_state[store_name] = store_instance.serialize()
-                
-        new_json = json.dumps(initial_state, indent=2)
-        
-        head = page.children[0]
-        script_node = None
-        for c in head.children:
-            if hasattr(c, 'attributes') and c.attributes.get('id') == 'basis-initial-state':
-                script_node = c
-                break
-        if script_node and script_node.children:
-            script_node.children[0].text = f"\n            {new_json}\n        "
+            if store_name not in all_stores:
+                all_stores[store_name] = store_instance
 
-    root_component_plus_child_nodes = [comp.__element__ for comp in root_component_plus_child_components]
-    all_bindings_recursive = [cb for cb  in app.get_bindings(recursive=True)]
-    all_bindings_nodes = [b.node for b in all_bindings_recursive]
-    all_bindings_nodes_for_hydration = []
-    
-    for b in all_bindings_recursive:
-        all_bindings_nodes_for_hydration.extend(b.marked_for_hydration())
+    # 5. Apply Hydration
+    _apply_hydration_logic(app, all_components)
 
-    for hid, node in hydration_ids_dict.items():
-        try:
-            if any(node is target for target in all_bindings_nodes_for_hydration):
-                node.setAttribute("data-hydration-id", hid)
-            if any(node is target for target in root_component_plus_child_nodes):
-                node.setAttribute("data-component-hydration-id", hid)
-        except:
-            pass
+    # 6. Final render
+    initial_state_json = _serialize_initial_state(all_stores)
+    return page_instance.render_full_page(initial_state_json=initial_state_json)
 
-    page_html = doctype.__html__() + page.__html__()
-    return page_html
 

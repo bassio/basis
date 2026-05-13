@@ -581,22 +581,29 @@ class LoopBinding(NodeBinding):
         for i in collection_value:
             cloned_element = self._new_clone()
             
-            updated_child_node_attrs = self._child_node_attrs_dict()
+            updated_child_node_attrs = self._child_node_attrs_dict(i)
             
             if '-' in (tag:=str.lower(self.clone.tagName)):
                 childcomponent_py = self.component_instance.__class__._registry[tag]
+                custom_child_instance = childcomponent_py.mount(cloned_element, replace=False, **updated_child_node_attrs)
+                target_node = cloned_element
+                setattr(target_node, '__basis_instance__', custom_child_instance)
             else:
                 quick_component = self.component_instance.__class__.from_template(cloned_element.outerHTML)
                 childcomponent_py = quick_component
+                custom_child_instance = childcomponent_py.mount(fragment, replace=False, **updated_child_node_attrs)
+                target_node = custom_child_instance.__element__
                     
             new_cb = ChildBinding(component_instance=self.component_instance,
-                                  node=cloned_element,
+                                  node=target_node,
                                   childclass=childcomponent_py,
+                                  childinstance=custom_child_instance,
                                   loop_binding=self)
             self.component_instance.add_binding(new_cb)
 
-            custom_child_instance = childcomponent_py.mount(fragment, replace=False, **updated_child_node_attrs)
-            new_cb.childinstance = custom_child_instance
+            if target_node.parentNode != fragment:
+                fragment.appendChild(target_node)
+        
         
 
         # delete old child bindings for this loop
@@ -771,10 +778,14 @@ class KeyedLoopBinding(NodeBinding):
                     with child_instance.refrain() as refrained:
                         setattr(refrained, k, v)
 
-                child_instance.__element__.setAttribute('data-item-key', k_val)
+                # Find the node from the existing ChildBinding
+                existing_cb = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.childinstance == child_instance][0]
+                target_node = existing_cb.node
+
+                target_node.setAttribute('data-item-key', k_val)
                 new_instances[k_val] = child_instance
 
-                fragment.appendChild(child_instance.__element__)
+                fragment.appendChild(target_node)
 
             else:
                 # New creation
@@ -784,18 +795,28 @@ class KeyedLoopBinding(NodeBinding):
 
                 childcomponent_py = self._child_component_class(**updated_child_node_attrs)
                 
-                child_instance = childcomponent_py.mount(fragment, replace=False, **updated_child_node_attrs)
+                if '-' in (tag:=str.lower(cloned_element.tagName)):
+                    child_instance = childcomponent_py.mount(cloned_element, replace=False, **updated_child_node_attrs)
+                    target_node = cloned_element
+                    setattr(target_node, '__basis_instance__', child_instance)
+                else:
+                    child_instance = childcomponent_py.mount(fragment, replace=False, **updated_child_node_attrs)
+                    target_node = child_instance.__element__
+
                 print("child_instance", child_instance)
-                child_instance.__element__.setAttribute('data-item-key', k_val)
+                target_node.setAttribute('data-item-key', k_val)
                 new_instances[k_val] = child_instance
 
 
                 new_cb = ChildBinding(component_instance=self.component_instance,
-                                      node=child_instance.__element__,
+                                      node=target_node,
                                       childclass=childcomponent_py,
                                       childinstance=child_instance,
                                       loop_binding=self)
                 self.component_instance.add_binding(new_cb)
+                
+                if target_node.parentNode != fragment:
+                    fragment.appendChild(target_node)
                 
 
         # Cleanup old child bindings that are removed
@@ -889,30 +910,43 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
                 
                 sources[i] = old_key_to_idx[k_val]
                 new_instances_map[k_val] = child_instance
+                
+                # Ensure data-item-key is set on the correct node
+                existing_cb = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.childinstance == child_instance][0]
+                existing_cb.node.setAttribute('data-item-key', str(k_val))
             else:
                 # New creation — mount immediately after the template node (self.node)
                 # so items appear in insertion order without a separate reorder pass.
+                cloned_element = self._new_clone()
                 updated_child_node_attrs = self._child_node_attrs_dict(item)
                 childcomponent_py = self._child_component_class(**updated_child_node_attrs)
 
-                # Use a temporary fragment then insertBefore to place correctly
-                fragment = self.component_instance._create_document_fragment()
-                child_instance = childcomponent_py.mount(fragment, replace=False, **updated_child_node_attrs)
-                child_instance.__element__.setAttribute('data-item-key', str(k_val))
+                if '-' in (tag:=str.lower(cloned_element.tagName)):
+                    child_instance = childcomponent_py.mount(cloned_element, replace=False, **updated_child_node_attrs)
+                    target_node = cloned_element
+                    setattr(target_node, '__basis_instance__', child_instance)
+                else:
+                    # Use a temporary fragment then insertBefore to place correctly
+                    fragment = self.component_instance._create_document_fragment()
+                    child_instance = childcomponent_py.mount(fragment, replace=False, **updated_child_node_attrs)
+                    target_node = child_instance.__element__
+
+                target_node.setAttribute('data-item-key', str(k_val))
                 
                 # Find anchor: after the last-inserted item, or before _after_node for the first
                 if new_instances_list:
-                    insert_after = new_instances_list[-1].__element__
-                    # insert after last item = insertBefore its nextSibling
+                    # Search for the ChildBinding to get the node
+                    last_cb = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.childinstance == new_instances_list[-1]][0]
+                    insert_after = last_cb.node
                     anchor = insert_after.nextSibling
                 else:
                     # First item: insert at the slot where the template was
                     anchor = getattr(self, '_after_node', None)
 
-                self.parent.insertBefore(child_instance.__element__, anchor)
+                self.parent.insertBefore(target_node, anchor)
                 
                 new_cb = ChildBinding(component_instance=self.component_instance,
-                                      node=child_instance.__element__,
+                                      node=target_node,
                                       childclass=childcomponent_py,
                                       childinstance=child_instance,
                                       loop_binding=self)
@@ -945,7 +979,9 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
             next_node = last_item_node.nextSibling
             for i in range(len(new_keys) - 1, -1, -1):
                 instance = new_instances_list[i]
-                node = instance.__element__
+                # Find the node from the existing ChildBinding
+                cb = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.childinstance == instance][0]
+                node = cb.node
                 
                 # Only move existing items that are not in their stable position
                 if sources[i] != -1 and i not in lis_indices_in_new_list:

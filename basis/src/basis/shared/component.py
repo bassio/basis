@@ -27,13 +27,15 @@ else:
     Basis = Basis
 
 
-def client(func):
+from basis.shared.base_component import include_store
 
+
+def client(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         if IS_CLIENT:
             return func(*args, **kwargs)
-
     return wrapper
 
-__all__ = ['Component', 'IS_CLIENT', 'IS_SERVER', 'Basis', 'client']
+
+__all__ = ['Component', 'IS_CLIENT', 'IS_SERVER', 'Basis', 'client', 'include_store']

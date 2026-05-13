@@ -14,6 +14,23 @@ from basis.shared.store import Store
 from basis.shared.dag import DependencyGraph, StateNode, ComputedNode, EffectNode, computed
 
 
+def include_store(name: str, url: str = None, target: str = None):
+    """
+    Decorator to include a reactive store in a Page or Component.
+    """
+    def decorator(cls):
+        if not hasattr(cls, '__basis_stores__'):
+            cls.__basis_stores__ = []
+        if not any(s['name'] == name for s in cls.__basis_stores__):
+            cls.__basis_stores__.append({
+                'name': name,
+                'url': url,
+                'target': target
+            })
+        return cls
+    return decorator
+
+
 class BaseComponent(object):
 
     _registry = {}
@@ -325,8 +342,8 @@ class BaseComponent(object):
             element = node
 
             tag_name = element.tagName.lower()
-            if tag_name in ['style', 'script'] and not element.hasAttribute('text-content'):
-                return []
+            #if tag_name in ['style', 'script'] and not element.hasAttribute('text-content'):
+            #    return []
 
             element_attrs = list(element.getAttributeNames())
             event_attrs = [a for a in element_attrs if a.startswith("on")]
@@ -483,8 +500,11 @@ class BaseComponent(object):
 
         elif node.nodeName == '#text':
             parent = getattr(node, 'parentNode', None) or getattr(node, 'parentElement', None)
-            if parent and hasattr(parent, 'tagName') and parent.tagName.lower() in ['style', 'script']:
-                return []
+            if parent and hasattr(parent, 'tagName'):
+                if parent.tagName.lower() == 'style':
+                    return []
+                elif parent.tagName.lower() == 'script' and parent.getAttribute('type') != "application/json":
+                    return []
                 
             text_content = node.textContent
             fieldnames, trees_dict = extract_dependencies(text_content, ALLOWED_BUILTINS)
@@ -707,7 +727,7 @@ class BaseComponent(object):
                 return super().__getattribute__(name)
 
         except Exception as e:
-            print(f"Error in __getattribute__ for {name}: {e}")
+            # print(f"Error in __getattribute__ for {name}: {e}")
             return super().__getattribute__(name)
 
     def __setattr__(self, name, value):
@@ -791,6 +811,17 @@ class BaseComponent(object):
 
     @classmethod
     def mount_app(cls, container, replace=False):
+        # Handle @include_store decorators
+        if hasattr(cls, '__basis_stores__'):
+            try:
+                from basis.ui.store_provider import StoreProvider
+                for store_cfg in cls.__basis_stores__:
+                    StoreProvider.mount(container, 
+                                      name=store_cfg['name'], 
+                                      url=store_cfg['url'],
+                                      target=store_cfg.get('target'))
+            except ImportError:
+                pass
         
         new_instance = cls.mount(container, replace)
 
