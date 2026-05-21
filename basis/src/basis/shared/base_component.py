@@ -538,7 +538,7 @@ class BaseComponent(object):
                 if binding:
                     self.add_binding(binding)
 
-        print(f"Bindings of {self.__class__}:", self.__bindings__)
+        #print(f"Bindings of {self.__class__}:", self.__bindings__)
         
         # add to component instance registry if it is has an id
         self_element = self.__element__
@@ -702,7 +702,11 @@ class BaseComponent(object):
 
             named_children_to_insert = named_children.get(slot_name, [])
 
-            slot_node.replaceWith(*named_children_to_insert)
+            if named_children_to_insert:
+                slot_node.replaceWith(*named_children_to_insert)
+            #else:
+            #    # Fallback to slot's own child nodes
+            #    slot_node.replaceWith(*slot_node.children)
             
         # Fill each <slot> in order
         for sb in default_slot_bindings:
@@ -710,7 +714,11 @@ class BaseComponent(object):
 
             default_children_to_insert = default_children
             
-            slot_node.replaceWith(*default_children_to_insert)
+            if default_children_to_insert:
+                slot_node.replaceWith(*default_children_to_insert)
+            #else:
+            #    # Fallback to slot's own child nodes
+            #    slot_node.replaceWith(*slot_node.children)
 
 
     def __getattribute__(self, name):

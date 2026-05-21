@@ -440,6 +440,7 @@ class EventBinding(NodeBinding):
         if node.hasAttribute(event):
             node.removeAttribute(event)
 
+        print("######## SETTING EVENT BINDING:", target_fn, "on", component_instance.__class__)
         setattr(node, event, handler)
 
         instance = cls(
@@ -802,6 +803,7 @@ class KeyedLoopBinding(NodeBinding):
                 else:
                     child_instance = childcomponent_py.mount(fragment, replace=False, **updated_child_node_attrs)
                     target_node = child_instance.__element__
+                    setattr(target_node, '__basis_instance__', child_instance)
 
                 print("child_instance", child_instance)
                 target_node.setAttribute('data-item-key', k_val)
@@ -830,7 +832,7 @@ class KeyedLoopBinding(NodeBinding):
         self.instances = new_instances
 
     def marked_for_hydration(self):
-        return [self.node, self.parent]
+        return [self.node, self.parent, *[inst.__element__ for inst in self.instances.values() if inst.__element__ is not None]]
 
     @classmethod
     def from_blueprint(cls, component_instance, node, blueprint):

@@ -88,6 +88,14 @@ class Store:
             sub for sub in self._subscriptions if sub != (component_instance, attr_name)
         ]
 
+    def update(self, new_state: dict):
+        """
+        Apply a dictionary of updates to the store.
+        Each update triggers reactivity via __setattr__.
+        """
+        for k, v in new_state.items():
+            setattr(self, k, v)
+
     def __setattr__(self, key, value):
         try:
             old_value = self.__dict__.get(key)

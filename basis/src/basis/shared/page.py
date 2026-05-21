@@ -1,5 +1,42 @@
+import asyncio
+import json
 from basis.shared.component import Component
-from basis.shared.element import Element, ServerFragment, DocumentType
+from basis.shared.element import Element, DocumentType
+from basis.shared.store import Store
+
+
+def _apply_hydration_logic(app, root_component_plus_child_components):
+    """Apply hydration IDs and component IDs to the DOM tree."""
+    def map_hydration_ids(root_element):
+        stack = [(root_element, 0, [0])]
+        stack_return = []
+        while stack:
+            obj, depth, path = stack.pop()
+            path_str = "r:" + ":".join(map(str, path))
+            stack_return.append((obj, depth, path_str))
+            children = getattr(obj, 'children', [])
+            valid_children = [c for c in children if type(c).__name__ != 'Comment']
+            for i, child in reversed(list(enumerate(valid_children))):
+                stack.append((child, depth + 1, path + [i]))
+        return {hid: obj for obj, depth, hid in stack_return}
+
+    hydration_ids_dict = map_hydration_ids(app.__element__)
+    root_component_plus_child_nodes = [comp.__element__ for comp in root_component_plus_child_components]
+    
+    all_bindings_recursive = list(app.get_bindings(recursive=True))
+    all_bindings_nodes_for_hydration = []
+    for b in all_bindings_recursive:
+        all_bindings_nodes_for_hydration.extend(b.marked_for_hydration())
+
+    for hid, node in hydration_ids_dict.items():
+        try:
+            if any(node is target for target in all_bindings_nodes_for_hydration):
+                node.setAttribute("data-hydration-id", hid)
+            if any(node is target for target in root_component_plus_child_nodes):
+                node.setAttribute("data-component-hydration-id", hid)
+        except:
+            pass
+
 
 class Page(Component):
     doctype: DocumentType = DocumentType("html")
@@ -8,11 +45,13 @@ class Page(Component):
     pyscript_src: str = "/pyscript"
     pyscript_json_url: str = "/pyscript.json"
     initial_state_json: str = "{}"
-
+    entrypoint_components = []
+    entrypoint_stores = []
+    
     @classmethod
-    def load(cls):
+    def load(cls, ssr=False):
 
-        container = Element("html", {}, [])
+        container = Element("html", {}, list())
         
         attributes = {"title": cls.title,
                       "entry_module": cls.entry_module,
@@ -20,11 +59,10 @@ class Page(Component):
                       "pyscript_json_url": cls.pyscript_json_url,
                       "initial_state_json": cls.initial_state_json}
 
-        instance = cls.mount(container, replace=False, **attributes)
-
-        instance.__element__ = container
+        page_instance = cls.mount(container, replace=False, **attributes)
+        page_instance.__element__ = container.children[0]
         
-        return instance
+        return page_instance
 
     def head(self):
         """Override to add custom head content."""
@@ -48,6 +86,9 @@ class Page(Component):
         
         <script src="./basis/components/component.js"></script>
 
+        <!-- PyScript entry point: mounts/hydrates the application -->
+        <script type="py" src="{entry_module}" config="{pyscript_json_url}"></script>
+
         <!-- Basis SSR: initial store state for client hydration -->
         <script id="basis-initial-state" type="application/json">
             {initial_state_json}
@@ -55,19 +96,112 @@ class Page(Component):
         
     </head>
     <body>
-        <div id="basis-ssr-root">
-            
-        </div>
-        <!-- PyScript entry point: mounts/hydrates the application -->
-        <script type="py" src="{entry_module}" config="{pyscript_json_url}"></script>
+        <div id="basis-ssr-root"></div>
     </body>
 </html>
 """
 
-    def render_full_page(self, initial_state_json="{}"):
+    def _prepare_full_page(self, request, initial_state_json=None):
+
+        if initial_state_json is None:
+            initial_state = {}
+            for store in getattr(self.__class__, "entrypoint_stores", []):
+                initial_state[store.get_store_name()] = store.serialize()
+            if initial_state:
+                initial_state_json = json.dumps(initial_state)
+
+        self.initial_state_json = initial_state_json
+
+        # 1. Collect modules to import on the client side
+        entrypoint_imports = {}
+        
+        page_module_file = request.app.get_component_pyscript_vfs_path(self.__class__)
+
+        if page_module_file and page_module_file != "basis.shared.page":
+            entrypoint_imports[self.__class__.__name__] = page_module_file
+
+        # 2. Append the imports JSON configuration script in the <head>
+        if entrypoint_imports:
+            head_node = None
+            for node in self.__element__.descendants:
+                if hasattr(node, "tagName") and node.tagName.lower() == "head":
+                    head_node = node
+                    break
+
+            if head_node:
+                from basis.shared.element import Element, ElementString
+
+                json_str = json.dumps(entrypoint_imports)
+                imports_script = Element("script", {
+                    "id": "basis-entrypoint-imports",
+                    "type": "application/json"
+                }, [ElementString(json_str)])
+
+                head_node.appendChild(imports_script)
+
+        return self
+
+    def render_full_page(self, request, initial_state_json=None):
         """
         Assembles the full HTML document with doctype.
         """
+        self._prepare_full_page(request, initial_state_json)
+        return self.doctype.__html__() + "\n" + self.__element__.outerHTML
+
+    async def render_full_page_ssr(self, request, initial_state_json=None):
+        
+        self._prepare_full_page(request, initial_state_json)
+
+        mounted_apps = []
+
+        basis_ssr_root = None
+        for node in self.__element__.descendants:
+            if hasattr(node, 'getAttribute') and node.getAttribute('id') == 'basis-ssr-root':
+                basis_ssr_root = node
+                break
+                
+        if not basis_ssr_root:
+            raise Exception("Could not find <div id='basis-ssr-root'> in page shell template")
+            basis_ssr_root = self.__element__.children[1]
+
+        for comp_cls in self.entrypoint_components:
+            app = comp_cls.mount_app(basis_ssr_root, replace=False)
+            mounted_apps.append(app)
+
+        # Collect components for server_load (pre-data collection)
+        all_components = []
+        for app in mounted_apps:
+            child_bindings = list(app.get_child_bindings(recursive=True))
+            child_components = [cb.childinstance for cb in child_bindings]
+            all_components.extend([app] + child_components)
+
+        # Run server_load FIRST so stores get populated and reactive loops create nodes
+        preload_tasks = []
+        for comp in all_components:
+            if hasattr(comp, 'server_load') and asyncio.iscoroutinefunction(comp.server_load):
+                preload_tasks.append(comp.server_load())
+                
+        if preload_tasks:
+            await asyncio.gather(*preload_tasks)
+
+        # Apply Hydration AFTER server_load — the tree now contains loop-generated nodes
+        for app in mounted_apps:
+            child_bindings = list(app.get_child_bindings(recursive=True))
+            child_components = [cb.childinstance for cb in child_bindings]
+            island_components = [app] + child_components
+            _apply_hydration_logic(app, island_components)
+
+        # Serialize ALL stores (including ones created by StoreProvider) into initial state
+        initial_state = {}
+        for store_name, store_instance in Store._registry.items():
+            initial_state[store_name] = store_instance.serialize()
+
+        if initial_state:
+            initial_state_json = json.dumps(initial_state)
+        else:
+            initial_state_json = json.dumps({})
+
         self.initial_state_json = initial_state_json
-        print(self.__fields__)
+        
+        # Final render with initial state JSON
         return self.doctype.__html__() + "\n" + self.__element__.outerHTML

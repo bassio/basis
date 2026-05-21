@@ -64,7 +64,9 @@ class Component(BaseComponent):
 
     @classmethod
     def _register_custom_element(cls):
-        print("_register_custom_element", cls.__tag__)
+        
+        #print("_register_custom_element", cls.__tag__)
+        
         if "-" in cls.__tag__ \
         and cls.__tag__ not in cls._registry:
             templatestr = cls.__templatestr__
@@ -267,7 +269,6 @@ class Component(BaseComponent):
         
         shadow_element_div = document.createElement("div")
         shadow = shadow_element_div.attachShadow({ 'mode': 'open' })
-        shadow = shadow_element_div
 
         mounted_app_component = cls.mount_app(shadow, replace)
         client_id_to_node_map = mounted_app_component._set_nodes_with_client_ids(element=mounted_app_component.__element__)
