@@ -21,13 +21,11 @@ app = Basis()
 @app.entrypoint
 class HelloBasis(Component):
     """
-    <div style="font-family: sans-serif; max-width: 400px; margin: 40px auto; padding: 24px; border-radius: 8px; border: 1px solid #cbd5e1;">
-        <h2>Interactive Input</h2>
-        <input bind="{name}" placeholder="Type here..." style="width: 100%; padding: 8px; margin-bottom: 12px;" />
-        <h1>Hello, {name}!</h1>
-    </div>
+    <div><input bind="{name}" placeholder="Type your name..." />Hello {name}!</div>
     """
+
     name = "World"
+
 ```
 
 ### 3. Run the Development Server
