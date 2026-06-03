@@ -6,7 +6,7 @@ IS_CLIENT = "pyscript" in sys.modules
 IS_SERVER = not IS_CLIENT
 
 if IS_CLIENT:
-    from basis.components.component import Component as ClientComponent
+    from basis.client.component import Component as ClientComponent
 
     Component = ClientComponent
 

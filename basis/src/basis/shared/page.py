@@ -84,7 +84,7 @@ class Page(Component):
         <link rel="stylesheet" href="{pyscript_src}/core.css" />
         <script type="module" src="{pyscript_src}/core.js" onload="window.pyscript = this.module;"></script>
         
-        <script src="./basis/components/component.js"></script>
+        <script src="./basis/client/component.js"></script>
 
         <!-- PyScript entry point: mounts/hydrates the application -->
         <script type="py" src="{entry_module}" config="{pyscript_json_url}"></script>

@@ -57,7 +57,7 @@ The framework is structured into distinct tiers to support its full-stack nature
 - **`basis/shared/dag.py`**: The reactive engine power by a Dependency Graph.
 - **`basis/shared/bindings.py`**: High-performance DOM binding classes (`Text`, `Attribute`, `Loop`, `SmartKeyedLoop`).
 - **`basis/shared/base_component.py`**: The foundational class for both SSR and CSR components, managing hydration and state.
-- **`basis/components/`**: Browser-side modules for Custom Element registration and PyScript integration.
+- **`basis/client/`**: Browser-side modules for Custom Element registration and PyScript integration.
 - **`basis/server/`**: FastAPI-based server that handles SSR and dynamic asset delivery.
 - **`basis/shared/hmr.py`**: Client-side HMR logic for WebSocket-based updates.
 

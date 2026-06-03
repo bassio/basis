@@ -1,15 +1,13 @@
 import json
 import importlib
 from pyscript import document
-from basis.components.component import Component
+from basis.client.component import Component
 from basis.shared.hmr import start_hmr
 
-print("[Basis] Zero-Config SSR Entrypoint started.")
-
+print("[Basis] Zero-Config CSR Entrypoint started.")
 
 # 1. Parse and import specifically registered entrypoint / page components
 imports_element = document.getElementById("basis-entrypoint-imports")
-
 if imports_element:
     try:
         modules_dict = json.loads(imports_element.innerText)
@@ -31,20 +29,10 @@ if imports_element:
                             print(f"[Basis] Error registering store {store}: {store_err}")
 
                 for entrypoint_component in page_cls_from_module.entrypoint_components:
-                    entrypoint_component.mount_app_ssr(document.body.querySelector("#basis-ssr-root"))
+                    entrypoint_component.mount_app(document.body)
 
             except Exception as e:
                 print(f"[Basis] Error loading {module_path}: {e}")
 
     except Exception as e:
         print(f"[Basis] Error parsing entrypoint imports: {e}")
-
-
-# Start HMR
-'''
-try:
-    print("[Basis] Starting HMR service...")
-    start_hmr()
-except Exception as e:
-    print(f"[Basis] HMR service could not be started: {e}")
-'''

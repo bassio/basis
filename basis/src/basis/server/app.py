@@ -33,11 +33,11 @@ async def pyscript_json(request:Request):
 
     files_dict["{DOMAIN}"] = base_url.removesuffix("/")
 
-    # add client side code (currently under /components but we may change it in the future to /client)
-    files_dict["{DOMAIN}/basis/components/component.py"] = "./basis/components/component.py"
-    files_dict["{DOMAIN}/basis/components/component.js"] = "./basis/components/component.js"
-    files_dict["{DOMAIN}/basis/components/entrypoint_csr.py"] = "./basis/components/entrypoint_csr.py"
-    files_dict["{DOMAIN}/basis/components/entrypoint_ssr.py"] = "./basis/components/entrypoint_ssr.py"
+    # add client side code (currently under /client)
+    files_dict["{DOMAIN}/basis/client/component.py"] = "./basis/client/component.py"
+    files_dict["{DOMAIN}/basis/client/component.js"] = "./basis/client/component.js"
+    files_dict["{DOMAIN}/basis/client/entrypoint_csr.py"] = "./basis/client/entrypoint_csr.py"
+    files_dict["{DOMAIN}/basis/client/entrypoint_ssr.py"] = "./basis/client/entrypoint_ssr.py"
 
     #add shared
     files_dict["{DOMAIN}/basis/shared/store.py"] = "./basis/shared/store.py"
@@ -275,18 +275,18 @@ class Basis(FastAPI, DBAppMixin):
         uvicorn.run(self, host=host, port=port)
 
     def include_framework(self):
-        components_route = None
+        client_route = None
         shared_route = None
 
         for r in self.routes:
-            if r.name == 'basis_components':
-                components_route = r
+            if r.name == 'basis_client':
+                client_route = r
             elif r.name == 'basis_shared':
                 shared_route = r
 
-        if not components_route:
-            components_mount = Mount("/basis/components", BasisStaticFiles(packages=[('basis', 'components')]), name='basis_components')
-            self.routes.append(components_mount)
+        if not client_route:
+            client_mount = Mount("/basis/client", BasisStaticFiles(packages=[('basis', 'client')]), name='basis_client')
+            self.routes.append(client_mount)
 
         if not shared_route:
             shared_mount = Mount("/basis/shared", BasisStaticFiles(packages=[('basis', 'shared')]), name='basis_shared')
