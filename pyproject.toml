@@ -1,15 +1,31 @@
-[tool.uv.workspace]
-members = [
-    "basis",
-    "packages/jotter"
+[project]
+name = "basis"
+version = "0.1.0"
+description = "A full-stack python reactive web components framework"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "beautifulsoup4>=4.14.3",
+    "fastapi[standard]>=0.127.0",
 ]
 
-[tool.uv.sources]
-basis = { path = "./basis" }
-jotter = { path = "./packages/jotter" }
+[project.optional-dependencies]
+db = [
+    "sqlmodel>=0.0.38",
+]
 
 [dependency-groups]
 dev = [
+    "ipykernel>=7.1.0",
+    "jupyter>=1.1.1",
+    "notebook>=7.5.1",
     "fastapi[standard]>=0.127.0",
     "uvicorn>=0.40.0",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/basis"]

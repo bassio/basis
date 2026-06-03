@@ -8,3 +8,11 @@ wheels/
 
 # Virtual environments
 .venv
+
+# VS Code and Node
+.vscode/
+node_modules/
+
+# Development / Scratchpads
+scratch/
+notebooks/
