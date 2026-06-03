@@ -1,0 +1,90 @@
+# The Page Component
+
+`Page` is a specialized `Component` subclass that generates the outer HTML shell for your application. It produces the `<!DOCTYPE html>` declaration, the `<head>` with PyScript assets, and the `<body>` with the SSR root container.
+
+You don't normally interact with `Page` directly — Basis uses it automatically when rendering SSR routes. You only need to subclass it when you want to customize the document shell (fonts, meta tags, additional stylesheets).
+
+---
+
+## The default template
+
+Here is the template `Page` renders, showing the actual structure from `page.py`:
+
+```html
+<html>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>{title}</title>
+
+        <!-- PyScript offline bundle -->
+        <link rel="stylesheet" href="{pyscript_src}/core.css" />
+        <script type="module" src="{pyscript_src}/core.js" onload="window.pyscript = this.module;"></script>
+
+        <script src="./basis/client/component.js"></script>
+
+        <!-- PyScript entry point: mounts/hydrates the application -->
+        <script type="py" src="{entry_module}" config="{pyscript_json_url}"></script>
+
+        <!-- Initial store state for client hydration -->
+        <script id="basis-initial-state" type="application/json">
+            {initial_state_json}
+        </script>
+    </head>
+    <body>
+        <div id="basis-ssr-root"></div>
+    </body>
+</html>
+```
+
+Your reactive components mount inside `<div id="basis-ssr-root">` during both server rendering and client hydration.
+
+---
+
+## Page attributes
+
+| Attribute | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `title` | `str` | `"Basis App"` | Browser tab title. |
+| `entry_module` | `str` | `"/main.py"` | URL path to the Python file PyScript executes on load. |
+| `pyscript_src` | `str` | `"/pyscript"` | Base path for the offline PyScript bundle. |
+| `pyscript_json_url` | `str` | `"/pyscript.json"` | URL of the manifest PyScript uses to resolve imports. |
+| `initial_state_json` | `str` | `"{}"` | Serialized store state injected during SSR; read by the client at boot. |
+
+`initial_state_json` is populated automatically during server-side rendering — you should not set it manually.
+
+---
+
+## Customizing the page shell
+
+To add custom fonts, meta tags, or stylesheets, subclass `Page` and pass the subclass to `include_ssr_page()`:
+
+```python
+from basis.shared.page import Page
+from basis.shared.component import Basis
+
+class MyPage(Page):
+    title = "My App"
+
+app = Basis()
+
+app.include_ssr_page(
+    "/dashboard",
+    DashboardComponent,
+    page_cls=MyPage,
+)
+```
+
+If you need to inject additional `<head>` elements, subclass `Page` and add them by appending to the document tree inside an overridden method. The `head()` method exists on `Page` as a placeholder but is not currently consumed by the renderer — direct DOM manipulation on the page instance is the reliable approach for now.
+
+---
+
+## State injection and hydration
+
+Before generating the final HTML string, the SSR renderer:
+
+1. Runs any `server_load()` coroutines on your components, allowing them to fetch data and populate stores.
+2. Collects all registered `Store` instances and serializes their state to JSON.
+3. Writes that JSON into the `<script id="basis-initial-state">` block.
+
+When the page loads in the browser, the client-side Store constructor reads this element and pre-populates itself from the serialized data. This means your stores on the client already hold the server's data before any reactive bindings fire — no flash of stale content, no duplicate fetch requests.

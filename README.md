@@ -1,6 +1,6 @@
 # Basis: Full-Stack Reactive Python Framework
 
-Basis is a full-stack web framework for building interactive, stateful web applications entirely in Python. It runs FastAPI on the server for initial Server-Side Rendering (SSR) and PyScript in the browser for Client-Side Hydration (CSH), providing a reactive, component-based developer experience with no JavaScript.
+Basis is an experimental full-stack web framework for building interactive, stateful web applications entirely in Python. It runs FastAPI on the server for initial Server-Side Rendering (SSR) and PyScript in the browser for Client-Side Hydration (CSH), providing a reactive, component-based developer experience with no JavaScript.
 
 ---
 
