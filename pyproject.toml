@@ -1,5 +1,5 @@
 [project]
-name = "basis"
+name = "basis-framework"
 version = "0.1.0"
 description = "A full-stack python reactive web components framework"
 readme = "README.md"
