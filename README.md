@@ -1,26 +1,62 @@
 # Basis: Full-Stack Reactive Python Framework
 
-Basis is a modern, high-performance web framework that allows you to build interactive, stateful web applications entirely in Python. By leveraging **FastAPI** on the backend and **PyScript** on the frontend, Basis enables a "0% JavaScript" developer experience while maintaining the reactive, component-based architecture familiar to React or Vue developers.
+Basis is a full-stack web framework for building interactive, stateful web applications entirely in Python. It runs FastAPI on the server for initial Server-Side Rendering (SSR) and PyScript in the browser for Client-Side Hydration (CSH), providing a reactive, component-based developer experience with no JavaScript.
+
+---
+
+## Quickstart
+
+### 1. Installation
+Install the framework alongside FastAPI and Uvicorn:
+```bash
+pip install fastapi uvicorn basis-framework
+```
+
+### 2. Create a minimal Basis App (`app.py`)
+```python
+from basis.shared.component import Basis, Component
+
+app = Basis()
+
+@app.entrypoint
+class HelloBasis(Component):
+    """
+    <div style="font-family: sans-serif; max-width: 400px; margin: 40px auto; padding: 24px; border-radius: 8px; border: 1px solid #cbd5e1;">
+        <h2>Interactive Input</h2>
+        <input bind="{name}" placeholder="Type here..." style="width: 100%; padding: 8px; margin-bottom: 12px;" />
+        <h1>Hello, {name}!</h1>
+    </div>
+    """
+    name = "World"
+```
+
+### 3. Run the Development Server
+```bash
+uvicorn app:app --reload
+```
+Navigate to `http://localhost:8000` to interact with the application.
+
+---
 
 ## Core Philosophy
 
-- **Python Everywhere**: UI logic, state management, and backend services are all written in Python.
-- **Native Custom Elements**: Components are compiled into standard Web Components (Custom Elements), ensuring native browser performance.
-- **Fine-Grained Reactivity**: No Virtual DOM. Basis uses a Dependency Graph to surgically update only the parts of the DOM that changed.
-- **SSR + CSR Hybrid**: Seamless transition from Server-Side Rendering to Client-Side Hydration.
+- **Python Everywhere** — Write backend services, business logic, component templates, and client-side reactive state in pure Python.
+- **Native Custom Elements** — Components map to standard hyphenated HTML custom tags, keeping styling and markup aligned with web standards.
+- **Fine-Grained Reactivity** — No Virtual DOM. Basis uses a Directed Acyclic Graph (DAG) to track dependencies and update only the targeted DOM nodes when state changes.
+- **Isomorphic Hydration** — Server renders fully-formed, SEO-friendly HTML, which the client hydrates in-place without flashes of unstyled content or layout shifts.
 
 ---
 
 ## Key Features
 
 ### 1. DAG-Based Reactivity
-Basis employs a **Directed Acyclic Graph (DAG)** to manage state propagation. Instead of flat re-rendering, the framework tracks:
-- **StateNodes**: Raw source-of-truth attributes.
-- **ComputedNodes**: Derived values that automatically update when their dependencies change.
-- **EffectNodes**: Side-effects like DOM updates that react to state or computed changes.
+Basis manages state propagation using a Directed Acyclic Graph (DAG) with three node types:
+- **`StateNode`**: The root state sources (raw component attributes).
+- **`ComputedNode`**: Derived values that cache results and recalculate only when their upstream dependencies change.
+- **`EffectNode`**: Leaves of the graph representing DOM updates (bindings) that react to state or computed mutations.
 
 ### 2. Computed Properties
-Use the `@computed` decorator to define derived state. Basis automatically analyzes the AST of your function to detect dependencies, ensuring memoized and efficient updates.
+Use the `@computed` decorator to define derived state. Basis parses the function's Abstract Syntax Tree (AST) to automatically detect dependency attributes:
 
 ```python
 @computed
@@ -29,47 +65,33 @@ def full_name(self):
 ```
 
 ### 3. Smart Keyed Reconciliation
-The `SmartKeyedLoopBinding` uses the **Longest Increasing Subsequence (LIS)** algorithm to perform granular DOM updates on lists.
-- **Focus Preservation**: Moving items in a list won't cause them to lose input focus or local state.
-- **Minimal Mutation**: Only moved, added, or removed nodes are touched in the DOM.
-- **Performance**: Drastically reduces the overhead of large list updates compared to standard `replaceChildren` approaches.
+The `SmartKeyedLoopBinding` uses a Longest Increasing Subsequence (LIS) algorithm to dynamically reorder and update DOM list items in-place. This preserves browser input focus, scroll position, and CSS animations during list sorting or updates.
 
-### 4. Cross-Boundary State (DSL)
-Basis introduces a simple DSL to link reactivity across component boundaries:
-- **`$store.field`**: Bind directly to a shared `Store` instance.
-- **`#component_id.field`**: Bind to an attribute of another component instance in the DOM.
+### 4. Cross-Boundary References
+The template braces syntax supports special prefixes to bind reactive state across boundaries:
+- **`$store_name.field`**: Subscribes directly to a shared, global `Store` instance.
+- **`#component_id.field`**: Subscribes to the attribute of another component in the DOM by its HTML `id`.
 
 ```html
-<p>Store Value: {$my_store.count}</p>
-<child-comp id="child" message="Hello"></child-comp>
-<p>Child said: {#child.reply}</p>
+<p>Store Value: {$session.count}</p>
+<child-comp id="child"></child-comp>
+<p>Child status: {#child.status}</p>
 ```
 
-### 5. Hot Module Replacement (HMR)
-Experience lightning-fast development with built-in HMR. Basis can hot-swap component logic, templates, and styles in the browser without a full page reload, preserving the current application state.
+---
+
+## Codebase Structure
+
+The framework codebase is structured as follows:
+
+- `basis/src/basis/shared/dag.py` — The reactive dependency graph engine.
+- `basis/src/basis/shared/bindings.py` — DOM bindings (Text, Attribute, Loops, Slots).
+- `basis/src/basis/shared/base_component.py` — Base component lifecycle, state mapping, and setup.
+- `basis/src/basis/client/` — Browser-side component mounting and PyScript entrypoint.
+- `basis/src/basis/server/` — FastAPI application wrapper, static file servers, and RPC router.
 
 ---
 
-## Project Structure
+## Documentation
 
-The framework is structured into distinct tiers to support its full-stack nature:
-
-- **`basis/shared/dag.py`**: The reactive engine power by a Dependency Graph.
-- **`basis/shared/bindings.py`**: High-performance DOM binding classes (`Text`, `Attribute`, `Loop`, `SmartKeyedLoop`).
-- **`basis/shared/base_component.py`**: The foundational class for both SSR and CSR components, managing hydration and state.
-- **`basis/client/`**: Browser-side modules for Custom Element registration and PyScript integration.
-- **`basis/server/`**: FastAPI-based server that handles SSR and dynamic asset delivery.
-- **`basis/shared/hmr.py`**: Client-side HMR logic for WebSocket-based updates.
-
----
-
-## How it Works
-
-1.  **Template Analysis**: At class definition time (using `__init_subclass__`), Basis parses your HTML template, extracts Python expressions, and builds **Blueprints** for every binding.
-2.  **SSR**: The server renders the initial HTML using these Blueprints, ensuring fast first-contentful paint.
-3.  **Hydration**: In the browser, PyScript takes over. The component "hydrates" by connecting the pre-rendered DOM to a live Python instance.
-4.  **Reactivity**: When a Python attribute is modified (via overridden `__setattr__`), the DAG triggers only the relevant `EffectNodes`, which surgically mutate the DOM.
-
-## Getting Started
-
-Check out the `test_smart_loop.py` or `test_hmr.py` for live examples of the latest reactive features.
+For a comprehensive guide, architecture diagrams, and detailed API breakdowns of stores, bindings, and hydration, browse the files in the **`docs/`** directory starting with **[docs/index.md](docs/index.md)**.
