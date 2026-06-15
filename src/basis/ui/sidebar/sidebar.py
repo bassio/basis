@@ -270,7 +270,6 @@ class SidebarTrigger(Component):
     target = ""
     
     def toggle(self, event):
-        print("TOGGLING SIDEBAR", self.target)
         sidebar = None
         if self.target:
             from pyscript import document
@@ -278,7 +277,6 @@ class SidebarTrigger(Component):
         else:
             sidebar = self.node.closest("ui-sidebar")
 
-        print(sidebar)
 
         if sidebar:
             state = sidebar.getAttribute("data-state") or "expanded"

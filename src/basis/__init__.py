@@ -1,1 +1,3 @@
-from .server import Basis
+from .server import Basis, BasisPlugin
+
+__all__ = ["Basis", "BasisPlugin"]

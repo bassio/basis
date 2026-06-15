@@ -123,7 +123,7 @@ class StoreProvider(Component):
             print(f"Failed to fetch data for {self.name} from {self.url}: {e}")
 
     def style(self):
-        return """
+        """
         ui-store-provider {
             display: contents;
         }

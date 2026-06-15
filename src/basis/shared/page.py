@@ -49,7 +49,14 @@ class Page(Component):
     entrypoint_stores = []
     
     @classmethod
-    def load(cls, ssr=False):
+    def load(cls, ssr=False, request=None):
+        if ssr:
+            # Instantiate fresh versions of the entrypoint stores for this request if not already present
+            for store in getattr(cls, "entrypoint_stores", []):
+                if store.get_store_name() not in Store._registry:
+                    store_instance = store.__class__(store.get_store_name())
+                    if store.get_store_name() == "router" and request and hasattr(request, "url"):
+                        store_instance.current_path = request.url.path
 
         container = Element("html", {}, list())
         
@@ -149,7 +156,13 @@ class Page(Component):
         return self.doctype.__html__() + "\n" + self.__element__.outerHTML
 
     async def render_full_page_ssr(self, request, initial_state_json=None):
-        
+        from basis.shared.store import Store
+
+        # Ensure the router's current path is up-to-date for this request
+        router_store = Store._registry.get("router")
+        if router_store and hasattr(request, "url"):
+            router_store.current_path = request.url.path
+
         self._prepare_full_page(request, initial_state_json)
 
         mounted_apps = []
@@ -168,40 +181,76 @@ class Page(Component):
             app = comp_cls.mount_app(basis_ssr_root, replace=False)
             mounted_apps.append(app)
 
-        # Collect components for server_load (pre-data collection)
-        all_components = []
-        for app in mounted_apps:
-            child_bindings = list(app.get_child_bindings(recursive=True))
-            child_components = [cb.childinstance for cb in child_bindings]
-            all_components.extend([app] + child_components)
+        session_token = None
+        session_generator = None
+        db_session = None
 
-        # Run server_load FIRST so stores get populated and reactive loops create nodes
-        preload_tasks = []
-        for comp in all_components:
-            if hasattr(comp, 'server_load') and asyncio.iscoroutinefunction(comp.server_load):
-                preload_tasks.append(comp.server_load())
+        if hasattr(request, "app") and hasattr(request.app, "get_session") and request.app.get_session is not None:
+            import inspect
+            from basis.shared.context import db_session_var
+            get_session_func = request.app.get_session
+            
+            if inspect.isgeneratorfunction(get_session_func):
+                session_generator = get_session_func()
+                try:
+                    db_session = next(session_generator)
+                except StopIteration:
+                    pass
+            else:
+                db_session = get_session_func()
                 
-        if preload_tasks:
-            await asyncio.gather(*preload_tasks)
+            if db_session is not None:
+                session_token = db_session_var.set(db_session)
 
-        # Apply Hydration AFTER server_load — the tree now contains loop-generated nodes
-        for app in mounted_apps:
-            child_bindings = list(app.get_child_bindings(recursive=True))
-            child_components = [cb.childinstance for cb in child_bindings]
-            island_components = [app] + child_components
-            _apply_hydration_logic(app, island_components)
+        try:
+            # Collect components for server_load (pre-data collection)
+            all_components = []
+            for app in mounted_apps:
+                child_bindings = list(app.get_child_bindings(recursive=True))
+                child_components = [cb.childinstance for cb in child_bindings]
+                all_components.extend([app] + child_components)
+                if hasattr(app, '_mounted_providers'):
+                    for provider in app._mounted_providers:
+                        if provider not in all_components:
+                            all_components.append(provider)
 
-        # Serialize ALL stores (including ones created by StoreProvider) into initial state
-        initial_state = {}
-        for store_name, store_instance in Store._registry.items():
-            initial_state[store_name] = store_instance.serialize()
+            # Run server_load FIRST so stores get populated and reactive loops create nodes
+            preload_tasks = []
+            for comp in all_components:
+                if hasattr(comp, 'server_load') and asyncio.iscoroutinefunction(comp.server_load):
+                    preload_tasks.append(comp.server_load())
+                    
+            if preload_tasks:
+                await asyncio.gather(*preload_tasks)
 
-        if initial_state:
-            initial_state_json = json.dumps(initial_state)
-        else:
-            initial_state_json = json.dumps({})
+            # Apply Hydration AFTER server_load — the tree now contains loop-generated nodes
+            for app in mounted_apps:
+                child_bindings = list(app.get_child_bindings(recursive=True))
+                child_components = [cb.childinstance for cb in child_bindings]
+                island_components = [app] + child_components
+                _apply_hydration_logic(app, island_components)
 
-        self.initial_state_json = initial_state_json
-        
-        # Final render with initial state JSON
-        return self.doctype.__html__() + "\n" + self.__element__.outerHTML
+            # Serialize ALL stores (including ones created by StoreProvider) into initial state
+            initial_state = {}
+            for store_name, store_instance in Store._registry.items():
+                initial_state[store_name] = store_instance.serialize()
+
+            if initial_state:
+                initial_state_json = json.dumps(initial_state)
+            else:
+                initial_state_json = json.dumps({})
+
+            self.initial_state_json = initial_state_json
+            
+            # Final render with initial state JSON
+            return self.doctype.__html__() + "\n" + self.__element__.outerHTML
+
+        finally:
+            if session_token is not None:
+                from basis.shared.context import db_session_var
+                db_session_var.reset(session_token)
+            if session_generator is not None:
+                try:
+                    next(session_generator)
+                except StopIteration:
+                    pass

@@ -1,4 +1,5 @@
 import json
+from typing import Any
 
 try:
     from pyscript import WebSocket, document
@@ -8,6 +9,10 @@ except ImportError:
     document = None
 
 from basis.shared.bindings import ComponentSubscription
+
+from basis.shared.db import _make_serializable
+
+
 
 class Store:
     _registry = {}
@@ -34,8 +39,9 @@ class Store:
             if callable(v):
                 continue
             try:
-                json.dumps(v)     # quick serialisability check
-                state[k] = v
+                serializable_v = _make_serializable(v)
+                json.dumps(serializable_v)     # quick serialisability check
+                state[k] = serializable_v
             except (TypeError, ValueError):
                 pass
         return state
@@ -97,13 +103,13 @@ class Store:
             setattr(self, k, v)
 
     def __setattr__(self, key, value):
-        try:
-            old_value = self.__dict__.get(key)
-        except KeyError:
-            old_value = None
+        
+        exists = key in self.__dict__
+        
+        old_value = self.__dict__.get(key)
 
         # On update, trigger react() on all subscribed components
-        if value != old_value:
+        if not exists or value != old_value:
 
             super().__setattr__(key, value)
             
@@ -154,3 +160,330 @@ class ReactiveCollection(list):
     def set_items(self, items):
         self.clear()
         self.extend(items)
+
+
+import re
+
+def _get_item_id(x: Any) -> Any:
+    if isinstance(x, dict):
+        return x.get("id")
+    return getattr(x, "id", None)
+
+
+def _resolve_url_and_params(url_pattern: str, kwargs: dict) -> tuple[str, dict]:
+    placeholders = re.findall(r"\{([^}]+)\}", url_pattern)
+    params = {}
+    for p in placeholders:
+        if p not in kwargs:
+            raise ValueError(f"Missing required path parameter '{p}' for URL pattern '{url_pattern}'")
+        params[p] = kwargs[p]
+            
+    resolved_url = url_pattern
+    for p, val in params.items():
+        resolved_url = resolved_url.replace(f"{{{p}}}", str(val))
+            
+    return resolved_url, params
+
+
+def _matches_params(x: Any, params: dict) -> bool:
+    if not params:
+        return False
+    for k, v in params.items():
+        if isinstance(x, dict):
+            val = x.get(k)
+        else:
+            val = getattr(x, k, None)
+        if str(val) != str(v):
+            return False
+    return True
+
+
+class ModelStore(Store):
+    def __init__(self, name: str, model: Any, url: str | None = None):
+        super().__init__(name)
+        self.model = model
+        self.model_name = getattr(model, "__name__", str(model))
+        self.custom_url = url
+        self.items = []
+        self.loading = False
+        self.error = None
+
+    def _find_endpoint(self, method: str, one: bool) -> str | None:
+        if self.custom_url:
+            if one:
+                return f"{self.custom_url.rstrip('/')}/{{id}}"
+            return self.custom_url
+        
+        urls = getattr(self.model, "__endpoints__", {})
+        return urls.get((method.upper(), one))
+
+    async def fetch_all(self, **kwargs) -> list:
+        try:
+            from pyodide.http import pyfetch
+        except ImportError:
+            from basis.shared.context import db_session_var
+            session = db_session_var.get()
+            if session:
+                from sqlmodel import select
+                statement = select(self.model)
+                for k, v in kwargs.items():
+                    if hasattr(self.model, k) and v is not None:
+                        statement = statement.where(getattr(self.model, k) == v)
+                self.items = list(session.exec(statement).all())
+            return self.items
+
+        url = self._find_endpoint("GET", one=False)
+        if not url:
+            print(f"Error: No GET endpoint found for {self.model_name}")
+            return self.items
+
+        resolved_url, params = _resolve_url_and_params(url, kwargs)
+        query_params = {k: v for k, v in kwargs.items() if k not in params and v is not None}
+        if query_params:
+            from urllib.parse import urlencode
+            resolved_url = f"{resolved_url}?{urlencode(query_params)}"
+
+        self.loading = True
+        try:
+            response = await pyfetch(resolved_url)
+            if response.ok:
+                data = await response.json()
+                hydrated = [self.model.model_validate(item) if hasattr(self.model, "model_validate") else item for item in data]
+                self.items = hydrated
+                self.error = None
+                return self.items
+            else:
+                self.error = f"Fetch failed: {response.status}"
+        except Exception as e:
+            self.error = str(e)
+        finally:
+            self.loading = False
+        return self.items
+
+    async def fetch_one(self, **kwargs) -> Any:
+        url = self._find_endpoint("GET", one=True)
+        if not url:
+            print(f"Error: No GET (single) endpoint found for {self.model_name}")
+            return None
+        
+        resolved_url, params = _resolve_url_and_params(url, kwargs)
+
+        try:
+            from pyodide.http import pyfetch
+        except ImportError:
+            # Server: use db_session_var if available
+            from basis.shared.context import db_session_var
+            session = db_session_var.get()
+            item = None
+            if session:
+                from sqlmodel import select
+                statement = select(self.model)
+                for k, v in params.items():
+                    if hasattr(self.model, k):
+                        statement = statement.where(getattr(self.model, k) == v)
+                for k, v in kwargs.items():
+                    if hasattr(self.model, k) and k not in params:
+                        statement = statement.where(getattr(self.model, k) == v)
+                item = session.exec(statement).first()
+            else:
+                for x in self.items:
+                    if _matches_params(x, params):
+                        item = x
+                        break
+            if item:
+                # Spread fields flat
+                for k, v in item.__dict__.items():
+                    if not k.startswith("_"):
+                        setattr(self, k, v)
+            return item
+
+        self.loading = True
+        try:
+            response = await pyfetch(resolved_url)
+            if response.ok:
+                data = await response.json()
+                item = self.model.model_validate(data) if hasattr(self.model, "model_validate") else data
+                idx = -1
+                for i, existing in enumerate(self.items):
+                    if _matches_params(existing, params):
+                        idx = i
+                        break
+                if idx != -1:
+                    new_items = list(self.items)
+                    new_items[idx] = item
+                    self.items = new_items
+                else:
+                    self.items = self.items + [item]
+                self.error = None
+                
+                # Spread fields flat onto store
+                for k, v in (item.__dict__ if hasattr(item, "__dict__") else item).items():
+                    if not k.startswith("_"):
+                        setattr(self, k, v)
+                        
+                return item
+            else:
+                self.error = f"Fetch failed: {response.status}"
+        except Exception as e:
+            self.error = str(e)
+        finally:
+            self.loading = False
+        return None
+
+    async def create(self, data: Any) -> Any:
+        url = self._find_endpoint("POST", one=False)
+        if not url:
+            print(f"Error: No POST endpoint found for {self.model_name}")
+            return None
+
+        payload = data
+        if hasattr(data, "model_dump"):
+            payload = data.model_dump()
+        elif hasattr(data, "__dict__"):
+            payload = {k: v for k, v in data.__dict__.items() if not k.startswith("_")}
+
+        old_items = list(self.items)
+
+        temp_item = self.model.model_validate(payload) if hasattr(self.model, "model_validate") else payload
+        if hasattr(temp_item, "id") and getattr(temp_item, "id") is None:
+            setattr(temp_item, "id", "temp-" + str(len(self.items)))
+        elif isinstance(temp_item, dict) and "id" not in temp_item:
+            temp_item["id"] = "temp-" + str(len(self.items))
+        
+        self.items = self.items + [temp_item]
+
+        try:
+            from pyodide.http import pyfetch
+        except ImportError:
+            # Server: return the temp/locally created item
+            return temp_item
+
+        try:
+            response = await pyfetch(
+                url,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+                body=json.dumps(payload)
+            )
+            if response.ok:
+                res_data = await response.json()
+                saved_item = self.model.model_validate(res_data) if hasattr(self.model, "model_validate") else res_data
+                new_items = [saved_item if (str(_get_item_id(x)) == str(_get_item_id(temp_item))) else x for x in old_items]
+                self.items = new_items + [saved_item]
+                self.error = None
+                return saved_item
+            else:
+                self.error = f"Create failed: {response.status}"
+                self.items = old_items
+        except Exception as e:
+            self.error = str(e)
+            self.items = old_items
+        return None
+
+    async def update(self, *, data: Any = None, **kwargs) -> Any:
+        url = self._find_endpoint("PATCH", one=True) or self._find_endpoint("PUT", one=True)
+        if not url:
+            print(f"Error: No PATCH/PUT endpoint found for {self.model_name}")
+            return None
+
+        resolved_url, params = _resolve_url_and_params(url, kwargs)
+
+        payload = data
+        if hasattr(data, "model_dump"):
+            payload = data.model_dump()
+        elif hasattr(data, "__dict__"):
+            payload = {k: v for k, v in data.__dict__.items() if not k.startswith("_")}
+
+        old_items = list(self.items)
+
+        new_items = []
+        for x in self.items:
+            if _matches_params(x, params):
+                if hasattr(x, "model_dump"):
+                    dumped = x.model_dump()
+                    dumped.update(payload)
+                    new_items.append(self.model.model_validate(dumped))
+                elif isinstance(x, dict):
+                    updated_dict = dict(x)
+                    updated_dict.update(payload)
+                    new_items.append(updated_dict)
+                else:
+                    new_items.append(x)
+            else:
+                new_items.append(x)
+        self.items = new_items
+
+        try:
+            from pyodide.http import pyfetch
+        except ImportError:
+            # Server: return updated item locally
+            match = None
+            for x in self.items:
+                if _matches_params(x, params):
+                    match = x
+                    break
+            return match
+
+        try:
+            method = "PATCH" if self._find_endpoint("PATCH", one=True) else "PUT"
+            response = await pyfetch(
+                resolved_url,
+                method=method,
+                headers={"Content-Type": "application/json"},
+                body=json.dumps(payload)
+            )
+            if response.ok:
+                res_data = await response.json()
+                updated_item = self.model.model_validate(res_data) if hasattr(self.model, "model_validate") else res_data
+                
+                final_items = []
+                for x in old_items:
+                    if _matches_params(x, params):
+                        final_items.append(updated_item)
+                    else:
+                        final_items.append(x)
+                self.items = final_items
+                self.error = None
+                return updated_item
+            else:
+                self.error = f"Update failed: {response.status}"
+                self.items = old_items
+        except Exception as e:
+            self.error = str(e)
+            self.items = old_items
+        return None
+
+    async def delete(self, **kwargs) -> bool:
+        url = self._find_endpoint("DELETE", one=True)
+        if not url:
+            print(f"Error: No DELETE endpoint found for {self.model_name}")
+            return False
+
+        resolved_url, params = _resolve_url_and_params(url, kwargs)
+        old_items = list(self.items)
+
+        new_items = []
+        for x in self.items:
+            if not _matches_params(x, params):
+                new_items.append(x)
+        self.items = new_items
+
+        try:
+            from pyodide.http import pyfetch
+        except ImportError:
+            # Server: success locally
+            return True
+
+        try:
+            response = await pyfetch(resolved_url, method="DELETE")
+            if response.ok:
+                self.error = None
+                return True
+            else:
+                self.error = f"Delete failed: {response.status}"
+                self.items = old_items
+        except Exception as e:
+            self.error = str(e)
+            self.items = old_items
+            return False
+        return False

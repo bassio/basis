@@ -31,6 +31,25 @@ def include_store(name: str, url: str = None, target: str = None):
     return decorator
 
 
+def include_model(model: type, name: str, one: bool = False, target: str = "items", **kwargs):
+    """
+    Decorator to include a model-backed store in a Page or Component.
+    """
+    def decorator(cls):
+        if not hasattr(cls, '__basis_models__'):
+            cls.__basis_models__ = []
+        if not any(s['name'] == name for s in cls.__basis_models__):
+            cls.__basis_models__.append({
+                'model': model,
+                'name': name,
+                'one': one,
+                'target': target,
+                'kwargs': kwargs
+            })
+        return cls
+    return decorator
+
+
 class BaseComponent(object):
 
     _registry = {}
@@ -105,6 +124,9 @@ class BaseComponent(object):
 
     @classmethod
     def _register_component_subclass(cls):
+        if cls.__name__.endswith("Subclass"):
+            return
+
         if hasattr(cls, '__tag__') and "-" in cls.__tag__:
             tag = cls.__tag__
         else:
@@ -208,6 +230,9 @@ class BaseComponent(object):
 
         new_instance = new_cls()
 
+        for k, v in kwargs.items():
+            new_instance.__dict__[k] = v
+
         new_instance.__init_selfbinding__()
 
         #new_instance.__init_self_attr_bindings__(**kwargs)
@@ -220,9 +245,9 @@ class BaseComponent(object):
 
         new_instance.__init_fields__()
 
-        with new_instance.refrain() as refrained:
-            for k, v in kwargs.items():
-                setattr(refrained, k, v)
+        #with new_instance.refrain() as refrained:
+        #    for k, v in kwargs.items():
+        #        setattr(refrained, k, v)
 
         return new_instance
 
@@ -819,19 +844,50 @@ class BaseComponent(object):
 
     @classmethod
     def mount_app(cls, container, replace=False):
-        # Handle @include_store decorators
-        if hasattr(cls, '__basis_stores__'):
-            try:
-                from basis.ui.store_provider import StoreProvider
-                for store_cfg in cls.__basis_stores__:
-                    StoreProvider.mount(container, 
-                                      name=store_cfg['name'], 
-                                      url=store_cfg['url'],
-                                      target=store_cfg.get('target'))
-            except ImportError:
-                pass
-        
+        # 1. Collect all stores/models from all registered components
+        mounted_stores = set()
+        mounted_models = set()
+        mounted_providers = []
+
+        all_component_classes = [cls] + list(cls._registry.values())
+
+        for comp_cls in all_component_classes:
+            # Handle @include_store decorators
+            if hasattr(comp_cls, '__basis_stores__'):
+                try:
+                    from basis.ui.store_provider import StoreProvider
+                    for store_cfg in comp_cls.__basis_stores__:
+                        name = store_cfg['name']
+                        if name not in mounted_stores:
+                            mounted_stores.add(name)
+                            provider = StoreProvider.mount(container, 
+                                              name=name, 
+                                              url=store_cfg['url'],
+                                              target=store_cfg.get('target'))
+                            mounted_providers.append(provider)
+                except ImportError:
+                    pass
+                    
+            # Handle @include_model decorators
+            if hasattr(comp_cls, '__basis_models__'):
+                try:
+                    from basis.ui.model_store_provider import ModelStoreProvider
+                    for model_cfg in comp_cls.__basis_models__:
+                        name = model_cfg['name']
+                        if name not in mounted_models:
+                            mounted_models.add(name)
+                            provider = ModelStoreProvider.mount(container,
+                                                   name=name,
+                                                   model=model_cfg['model'],
+                                                   one=model_cfg['one'],
+                                                   target=model_cfg['target'],
+                                                   **model_cfg['kwargs'])
+                            mounted_providers.append(provider)
+                except ImportError:
+                    pass
+
         new_instance = cls.mount(container, replace)
+        new_instance._mounted_providers = mounted_providers
 
         #client
         for c_tag, c in cls._registry.items():
@@ -991,31 +1047,8 @@ class BaseComponent(object):
             raise Exception("Please pass only a list of strings to react().")
 
         print(f"In react({names}) of {self}")
-        print(self._dag.nodes)
+
         # Integration with DAG: trigger the graph
         self._dag.trigger_batch(names)
-
-        # The following logic is mostly for manual/legacy cross-component propagation 
-        # if not already handled by DAG EffectNodes (ComponentSubscription)
-        # But since we added ComponentSubscription as an EffectNode, this might be redundant.
-        # However, we'll keep a simplified version for any non-DAG cases if they exist.
-        
-        '''
-        subscriptions_to_update = []
-        dependencies = set(names).intersection(set(self._deps.keys()))
-        
-        for name in dependencies:
-            for sub in self.__dict__['_subscriptions']:
-                if name == sub.attr:
-                    subscriptions_to_update.append(sub)
-                
-        for sub in subscriptions_to_update:
-            # If the DAG already handled it, this might be a double update.
-            # But DAG nodes mark themselves as not stale after update, 
-            # and ComponentSubscription.update calls subscriber.react()
-            # so it should be fine.
-            if hasattr(sub, 'update'):
-                sub.update()
-        '''
         
 ALLOWED_BUILTINS['BaseComponent'] = BaseComponent

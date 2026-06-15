@@ -17,26 +17,19 @@ class Toggle(Component):
                                        field=field_to_update))
 
     def on_change(self, event):
-        print("Toggle:inside on_change")
 
         #client
         checkbox = self.__element__.querySelector('.toggle-checkbox')
         
         is_checked = checkbox.checked
         
-        print("is_checked", is_checked)
-        print("event target value", event.target.value)
-
         if not is_checked:
             value_to_set = self.first
         else:
             value_to_set = self.second
 
-        print("value_to_set", value_to_set)
-
         if self.update:
             field_to_update = self.update
-            print("field_to_update", field_to_update)
             setattr(self, field_to_update, value_to_set)
 
     def style(self):

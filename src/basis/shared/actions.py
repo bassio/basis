@@ -24,7 +24,7 @@ def server_action(func: T) -> T:
     @wraps(func)
     async def wrapper(*args, **kwargs):
         if IS_CLIENT:
-            from basis.shared.actions_client import call_server_action
+            from basis.client.actions import call_server_action
             
             # If it's a method on a Store, we need to pass the store name
             store_name = None

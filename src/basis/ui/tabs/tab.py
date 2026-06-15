@@ -37,7 +37,7 @@ class Tab(Component):
         event.preventDefault()
         # Emit custom event
         detail = ffi.to_js({"value": self.value})
-        self.__element__.dispatchEvent(window.CustomEvent.new("tab-close", ffi.to_js({"detail": detail})))
+        self.__element__.dispatchEvent(window.CustomEvent.new("tab-close", ffi.to_js({"detail": detail, "bubbles": True})))
 
     def on_dragstart(self, event):
         self.__element__.classList.add("dragging")

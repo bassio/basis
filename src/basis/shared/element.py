@@ -21,7 +21,7 @@ class Node(object):
 
     def after(self, *nodes):
         parent = self.parentNode
-        #print("inside after::", self, parent, parent.children)
+
         try:
             index = parent.children.index(self)
         except ValueError:
@@ -368,8 +368,6 @@ class Element(Node):
 
         new_node.remove()
         
-        print(self.children)
-        print(reference_node)
         
         idx = self.children.index(reference_node)
         

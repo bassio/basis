@@ -14,6 +14,7 @@ from fastapi import Request
 from basis.server.tree_builder import html_to_element_tree
 from basis.shared.store import Store
 from basis.shared.element import Element, DocumentType
+from basis.shared.base_component import BaseComponent
 
 def _get_all_stores(
     page_cls,
@@ -98,17 +99,24 @@ async def render_page_async(
     if page_cls is None:
         from basis.shared.page import Page
         page_cls = Page
-    
-    # 1. Collect stores
-    all_stores = _get_all_stores(page_cls, root_component_cls, stores, global_stores)
 
-    # 2. Setup Page instance
-    page_instance = page_cls.load()
+    from basis.shared.router import Route
+
+    # Reset global registries to isolate per-request SSR state and avoid DetachedInstanceError
+    Store._registry.clear()
+    Store._pending_subscriptions.clear()
+    BaseComponent._instance_registry.clear()
+    BaseComponent._pending_subscriptions.clear()
+    Route._route_registry.clear()
+
+    # 1. Setup Page instance
+    page_instance = page_cls.load(ssr=True, request=request)
     page_instance.title = title
     page_instance.entry_module = entry_module
     page_instance.pyscript_src = pyscript_src
     page_instance.pyscript_json_url = pyscript_json_url
-    
+    # 2. Collect stores
+    all_stores = _get_all_stores(page_cls, root_component_cls, stores, global_stores)
     # 3. Mount App
     basis_ssr_root = None
     for node in page_instance.__element__.descendants:
@@ -146,6 +154,9 @@ async def render_page_async(
     _apply_hydration_logic(app, fresh_all_components)
 
     # 6. Final render
+    for store_name, store_instance in Store._registry.items():
+        if store_name not in all_stores:
+            all_stores[store_name] = store_instance
     initial_state_json = _serialize_initial_state(all_stores)
     return page_instance.render_full_page(request=request, initial_state_json=initial_state_json)
 
@@ -170,6 +181,22 @@ async def render_page_async_slots(
     if page_cls is None:
         from basis.shared.page import Page
         page_cls = Page
+
+    from basis.shared.store import Store
+    from basis.shared.router import Route
+
+    # Reset global registries to isolate per-request SSR state and avoid DetachedInstanceError
+    Store._registry.clear()
+    Store._pending_subscriptions.clear()
+    BaseComponent._instance_registry.clear()
+    BaseComponent._pending_subscriptions.clear()
+    Route._route_registry.clear()
+
+    # Instantiate fresh versions of the entrypoint stores for this request
+    for store in getattr(page_cls, "entrypoint_stores", []):
+        store_instance = store.__class__(store.get_store_name())
+        if store.get_store_name() == "router" and hasattr(request, "url"):
+            store_instance.current_path = request.url.path
 
     # 1. Standardize inputs to slots dictionary
     if isinstance(root_component_or_slots, dict):
@@ -223,7 +250,7 @@ async def render_page_async_slots(
                 all_stores[store_name] = store_instance
 
     # 6. Load Page and compose layout via fill_slots
-    page_instance = page_cls.load()
+    page_instance = page_cls.load(ssr=True, request=request)
     page_instance.title = title
     page_instance.entry_module = entry_module
     page_instance.pyscript_src = pyscript_src
@@ -237,5 +264,8 @@ async def render_page_async_slots(
         _apply_hydration_logic(app, island_components)
 
     # 8. Final render with initial state JSON
+    for store_name, store_instance in Store._registry.items():
+        if store_name not in all_stores:
+            all_stores[store_name] = store_instance
     initial_state_json = _serialize_initial_state(all_stores)
     return page_instance.render_full_page(request=request, initial_state_json=initial_state_json)

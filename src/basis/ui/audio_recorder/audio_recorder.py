@@ -250,7 +250,7 @@ class AudioRecorder(Component):
             # Dispatch event
             self.__element__.dispatchEvent(window.CustomEvent.new(
                 "recording-start", 
-                ffi.to_js({"detail": {"session_id": self.current_session_id}})
+                ffi.to_js({"detail": {"session_id": self.current_session_id}, "bubbles": True})
             ))
             
         except Exception as e:
@@ -298,7 +298,8 @@ class AudioRecorder(Component):
                         "index": chunk_idx,
                         "session_id": self.current_session_id,
                         "local_cached": True
-                    }
+                    },
+                    "bubbles": True
                 })
             ))
 
@@ -315,12 +316,13 @@ class AudioRecorder(Component):
                     "index": index,
                     "session_id": session_id,
                     "content_type": content_type
-                }
+                },
+                "bubbles": True
             })
         ))
         
         try:
-            from basis.shared.actions_client import call_server_action
+            from basis.client.actions import call_server_action
             path = "basis.ui.audio_recorder.audio_recorder.save_audio_chunk"
             
             res = await call_server_action(path, None, session_id, index, base64_data, content_type)
@@ -362,7 +364,8 @@ class AudioRecorder(Component):
                 "detail": {
                     "session_id": session_id,
                     "total_chunks": total_chunks
-                }
+                },
+                "bubbles": True
             })
         ))
         
@@ -383,7 +386,7 @@ class AudioRecorder(Component):
 
             self.status_text = "Merging audio..."
             try:
-                from basis.shared.actions_client import call_server_action
+                from basis.client.actions import call_server_action
                 path = "basis.ui.audio_recorder.audio_recorder.combine_audio_chunks"
 
                 res = await call_server_action(path, None, session_id)
@@ -402,7 +405,8 @@ class AudioRecorder(Component):
                             "detail": {
                                 "session_id": session_id,
                                 "file_path": file_path
-                            }
+                            },
+                            "bubbles": True
                         })
                     ))
                 else:

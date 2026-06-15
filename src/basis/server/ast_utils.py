@@ -9,23 +9,22 @@ class ServerActionStripper(ast.NodeTransformer):
     and replaces their body with 'pass'.
     """
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
-        # Check if '@server_action' is in the decorator list
-        # It could be 'server_action' or 'basis.shared.actions.server_action'
+        # Check if '@server_action' or '@plugin.action' is in the decorator list
         is_server_action = False
         for decorator in node.decorator_list:
-            if isinstance(decorator, ast.Name) and decorator.id == 'server_action':
+            if isinstance(decorator, ast.Name) and decorator.id in ('server_action', 'action'):
                 is_server_action = True
                 break
-            elif isinstance(decorator, ast.Attribute) and decorator.attr == 'server_action':
+            elif isinstance(decorator, ast.Attribute) and decorator.attr in ('server_action', 'action'):
                 is_server_action = True
                 break
             elif isinstance(decorator, ast.Call):
-                # Handle @server_action()
+                # Handle @server_action(...) or @plugin.action(...)
                 func = decorator.func
-                if isinstance(func, ast.Name) and func.id == 'server_action':
+                if isinstance(func, ast.Name) and func.id in ('server_action', 'action'):
                     is_server_action = True
                     break
-                elif isinstance(func, ast.Attribute) and func.attr == 'server_action':
+                elif isinstance(func, ast.Attribute) and func.attr in ('server_action', 'action'):
                     is_server_action = True
                     break
 
@@ -33,7 +32,7 @@ class ServerActionStripper(ast.NodeTransformer):
             # Hollow out the function body
             # We replace it with 'pass'
             node.body = [ast.Pass()]
-            logger.debug(f"AST: Stripped body of server action: {node.name}")
+            logger.debug(f"AST: Stripped body of server/plugin action: {node.name}")
             
         return self.generic_visit(node)
 

@@ -11,9 +11,11 @@ else:
 
 class RouterStore(Store):
     current_path: str = ""
+    params: dict = {}
     
     def __init__(self, name):
         super().__init__(name)
+        self.params = {}
         if window:
             self.current_path = window.location.pathname
             
@@ -148,6 +150,7 @@ class Route(Component):
 
             if self.path != "*":
                 matched_groups = match.groupdict()
+                self.router.params = matched_groups
                 with self.refrain() as refrained:
                     for k, v in matched_groups.items():
                         if k not in self.__fields__:

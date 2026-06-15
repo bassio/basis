@@ -242,6 +242,23 @@ class AttributeBinding(NodeBinding):
         if self.is_boolean:
             bool_val = bool(evaluated_val) if is_single_expr else str(final_dom_val).lower() == 'true'
             self.node.toggleAttribute(self.attr, bool_val)
+
+            # special cases
+            if self.attr == 'selected' \
+            and str.lower(getattr(self.node, 'tagName', '')) == 'option':
+                self.node.selected = bool_val
+            elif self.attr == 'checked' \
+            and str.lower(getattr(self.node, 'tagName', '')) == 'input':
+                self.node.checked = bool_val
+            elif self.attr == 'disabled' and hasattr(self.node, 'disabled'):
+                self.node.disabled = bool_val
+            elif self.attr == 'readonly' and hasattr(self.node, 'readOnly'):
+                self.node.readOnly = bool_val
+            elif self.attr == 'required' and hasattr(self.node, 'required'):
+                self.node.required = bool_val
+            elif self.attr == 'hidden' and hasattr(self.node, 'hidden'):
+                self.node.hidden = bool_val
+
         else:
             self.node.setAttribute(self.attr, str(final_dom_val))
 
@@ -293,21 +310,22 @@ class SelfAttributeBinding(AttributeBinding):
             if self.is_boolean:
                 bool_val = str(final_val).lower() == 'true'
                 # following line was causing circular updates in react()
-                # setattr(self.component_instance, self.attr, bool_val)
+                setattr(self.component_instance, self.attr, bool_val)
                 # replaced with below
-                self.component_instance.__dict__[self.attr] = final_val
+                #self.component_instance.__dict__[self.attr] = final_val
             else:
                 # following line was causing circular updates in react()
-                # setattr(self.component_instance, self.attr, final_val)
+                setattr(self.component_instance, self.attr, final_val)
                 # replaced with below
-                self.component_instance.__dict__[self.attr] = final_val
+                #self.component_instance.__dict__[self.attr] = final_val
 
         else:
             formatter = Formatter()
             _, fname, _, _ = next(iter(formatter.parse(self.content)))
             evaluated_val = safe_eval(fname, context, ALLOWED_BUILTINS, tree=self.ast_trees.get(fname))
             final_val = json.dumps(evaluated_val)
-            self.component_instance.__dict__[self.attr] = final_val
+            #self.component_instance.__dict__[self.attr] = final_val
+            setattr(self.component_instance, self.attr, final_val)
 
     @classmethod
     def from_blueprint(cls, component_instance, node, blueprint):
@@ -345,7 +363,7 @@ class TextContentAttributeBinding(AttributeBinding):
             ast_trees=self.ast_trees
         )
 
-        print("IN TextContentAttributeBinding : final_dom_val", final_dom_val)
+        #print("IN TextContentAttributeBinding : final_dom_val", final_dom_val)
 
         self.node.textContent = str(final_dom_val)
 
@@ -441,8 +459,13 @@ class EventBinding(NodeBinding):
             node.removeAttribute(event)
 
         print("######## SETTING EVENT BINDING:", target_fn, "on", component_instance.__class__)
-        setattr(node, event, handler)
-
+        if hasattr(node, "addEventListener"):
+            # on the client
+            node.addEventListener(event.removeprefix("on"), handler)
+        else:
+            # on the server (no addEventListener on server Element instances)
+            setattr(node, event, handler)
+        
         instance = cls(
             component_instance=component_instance,
             node=node,
@@ -553,10 +576,18 @@ class LoopBinding(NodeBinding):
             updated_child_node_attrs = {c: self.clone.getAttribute(c) for c in self.clone.getAttributeNames()}
 
         else:
-            rest_of_fields = [f for f in self.component_instance.__fields__ \
-                              if (f != item_attr_name) \
-                                and (not inspect.isfunction(getattr(self.component_instance, f))) \
-                                and (not f in ["for", "in", "key"])]
+            rest_of_fields = []
+            for f in self.component_instance.__fields__:
+                try:
+                    if f == item_attr_name:
+                        continue
+                    if f in ["for", "in", "key"]:
+                        continue
+                    if inspect.isfunction(getattr(self.component_instance, f)):
+                        continue
+                    rest_of_fields.append(f)
+                except AttributeError:
+                    continue
             
             for field in rest_of_fields:
                 updated_child_node_attrs[field] = getattr(self.component_instance, field)
@@ -575,8 +606,10 @@ class LoopBinding(NodeBinding):
                                 and cb.loop_binding == self]
 
         collection_value = getattr(self.component_instance, self.collection, [])
+
         if collection_value is None:
             collection_value = []
+        
         fragment = self.component_instance._create_document_fragment()
 
         for i in collection_value:
@@ -709,7 +742,6 @@ class KeyedLoopBinding(NodeBinding):
 
     def _child_component_class(self, **kwargs):
         cloned_element = self._new_clone()
-        print("cloned_element.tagName", cloned_element.tagName)
         if '-' in (tag:=str.lower(cloned_element.tagName)):
             childcomponent_py = self.component_instance.__class__._registry[tag]
         else:
@@ -720,12 +752,10 @@ class KeyedLoopBinding(NodeBinding):
 
     def get_collection_keys(self):
 
-        print("self.collection", self.collection)
-
         collection_value = getattr(self.component_instance, self.collection, [])
+
         if collection_value is None:
             collection_value = []
-
 
         keys = []
 
@@ -745,6 +775,7 @@ class KeyedLoopBinding(NodeBinding):
     
     def get_collection_items(self):
         collection_value = getattr(self.component_instance, self.collection, [])
+        
         if collection_value is None:
             collection_value = []
 
@@ -875,9 +906,15 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
 
         for r_key in removed_keys:
             old_instance = self.instances[r_key]
-            # Remove from DOM
-            if old_instance.__element__ and old_instance.__element__.parentNode:
-                old_instance.__element__.remove()
+            # Remove from DOM (handling custom elements by removing the wrapper node)
+            cb_list = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.childinstance == old_instance]
+            if cb_list:
+                node_to_remove = cb_list[0].node
+                if node_to_remove and node_to_remove.parentNode:
+                    node_to_remove.remove()
+            else:
+                if old_instance.__element__ and old_instance.__element__.parentNode:
+                    old_instance.__element__.remove()
             
             # Remove associated bindings from the parent component
             bindings_to_rem = [cb for cb in self.component_instance.__bindings__ 
@@ -975,9 +1012,10 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
                         lis_indices_in_new_list.add(i)
                     j += 1
 
-            # 5. Reorder existing items in DOM (backwards for stable insertBefore)
+            # 5. Reorder items in DOM (backwards for stable insertBefore)
             # Start anchor from the end of our known item block
-            last_item_node = new_instances_list[-1].__element__
+            last_cb = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.childinstance == new_instances_list[-1]][0]
+            last_item_node = last_cb.node
             next_node = last_item_node.nextSibling
             for i in range(len(new_keys) - 1, -1, -1):
                 instance = new_instances_list[i]
@@ -985,9 +1023,10 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
                 cb = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.childinstance == instance][0]
                 node = cb.node
                 
-                # Only move existing items that are not in their stable position
-                if sources[i] != -1 and i not in lis_indices_in_new_list:
-                    self.parent.insertBefore(node, next_node)
+                # Move if it is a new item (sources[i] == -1) OR an existing item not in LIS
+                if sources[i] == -1 or i not in lis_indices_in_new_list:
+                    if node.nextSibling != next_node:
+                        self.parent.insertBefore(node, next_node)
                 
                 next_node = node
 
@@ -1099,13 +1138,19 @@ def _eval_ast(node, context, allowed_builtins):
 
         elif isinstance(node, ast.BoolOp):
             if isinstance(node.op, ast.And):
+                last_val = None
                 for val in node.values:
-                    if not _eval(val): return False
-                return True
+                    last_val = _eval(val)
+                    if not last_val:
+                        return last_val
+                return last_val
             elif isinstance(node.op, ast.Or):
+                last_val = None
                 for val in node.values:
-                    if _eval(val): return True
-                return False
+                    last_val = _eval(val)
+                    if last_val:
+                        return last_val
+                return last_val
 
         else:
             raise ValueError(f"Unsupported AST node type: {type(node).__name__}")
@@ -1120,6 +1165,8 @@ def safe_eval(expr_str, context, allowed_builtins, tree=None):
     if tree is None:
         try:
             tree = ast.parse(expr_str, mode='eval')
+            #desugared = desugar_expression(expr_str)
+            #tree = ast.parse(desugared, mode='eval')
         except Exception as e:
             print(f"Failed to parse {expr_str}: {e}")
             return f"[Error: {expr_str}]"
@@ -1127,7 +1174,7 @@ def safe_eval(expr_str, context, allowed_builtins, tree=None):
     try:
         return _eval_ast(tree.body if isinstance(tree, ast.Expression) else tree, context, allowed_builtins)
     except Exception as e:
-        #print(f"Error evaluating '{expr_str}': {e}", context)
+        print(f"Error evaluating expression '{expr_str}': {e}", context)
         return f"[Error: {expr_str}]"
 
 def safe_format(template_str, context, allowed_builtins):
@@ -1195,7 +1242,7 @@ def extract_dependencies(template_str, allowed_builtins=ALLOWED_BUILTINS):
         # Handle cases where template_str is not a valid format string (e.g. CSS)
         return [], {}
     
-    fnames = [fname for _, fname, _, _ in parsed_template]
+    fnames = [fname for _, fname, _, _ in parsed_template if fname is not None]
     
     has_expr = any(fnames)
 
@@ -1263,7 +1310,6 @@ def _process_standard_attr_bindings(component_instance, element, attribute_names
 
     bindings = []
     fields = []
-    #print("_process_standard_attr_bindings", component_instance, element, attribute_names)
 
     for other_attr in attribute_names:
         if other_attr.startswith("{") and other_attr.endswith("}"):

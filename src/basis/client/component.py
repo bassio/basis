@@ -116,6 +116,9 @@ class Component(BaseComponent):
 
     @client
     def _create_function_proxy(self, f):
+        if not getattr(f, "__is_py_event__", False):
+            from basis.shared.component import py_event
+            f = py_event(f)
         return ffi.create_proxy(f)
 
     @client   
@@ -142,15 +145,15 @@ class Component(BaseComponent):
             matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{eb_node_cid}']")
             if matched_ssr_node:
                 eb_node_new = matched_ssr_node
-                print(f"MATCHED event binding's {eb.event} node: {eb_node_new.outerHTML}")
+                #print(f"MATCHED event binding's {eb.event} node: {eb_node_new.outerHTML}")
             elif ssr_root.getAttribute("data-hydration-id") == eb_node_cid:
                 eb_node_new = ssr_root
-                print(f"MATCHED event binding's {eb.event} node: {eb_node_new.outerHTML}")
+                #print(f"MATCHED event binding's {eb.event} node: {eb_node_new.outerHTML}")
             else:
                 eb_node_new = eb.node #just keep the old node then !
                 # this addresses an error that elements hidden because of an IfBinding will not be assigned a client id
                 # because they are not in the shadow dom tree in the first place !!
-                print(f"DID NOT MATCH event binding's {eb.event} node with client_id {eb_node_cid}: {eb_node_new.outerHTML}")
+                #print(f"DID NOT MATCH event binding's {eb.event} node with client_id {eb_node_cid}: {eb_node_new.outerHTML}")
 
             eb.node = eb_node_new
 
@@ -159,11 +162,15 @@ class Component(BaseComponent):
                 event_method_final = self._create_function_proxy(event_method)
                 eb.node.removeAttribute(eb.event)
                 setattr(eb.node, eb.event, event_method_final)
+                if hasattr(eb.node, "addEventListener"):
+                    eb.node.addEventListener(eb.event.removeprefix("on"), event_method_final)
             else:
                 self_event_method = eb.target_fn
                 eb.node.removeAttribute(eb.event)
                 setattr(eb.node, eb.event, self_event_method)
-
+                if hasattr(eb.node, "addEventListener"):
+                    eb.node.addEventListener(eb.event.removeprefix("on"), self_event_method)
+                
         for ib in if_bindings:
             ib_node_cid = ib.node.getAttribute("data-client-id")
             matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{ib_node_cid}']")
@@ -273,7 +280,7 @@ class Component(BaseComponent):
         mounted_app_component = cls.mount_app(shadow, replace)
         client_id_to_node_map = mounted_app_component._set_nodes_with_client_ids(element=mounted_app_component.__element__)
         
-        print("client_id_to_node_map", client_id_to_node_map)
+        #print("client_id_to_node_map", client_id_to_node_map)
         
         child_bindings_recursive = [cb for cb  in mounted_app_component.get_child_bindings(recursive=True)]
         child_component_instances = [cb.childinstance for cb  in child_bindings_recursive]
@@ -282,13 +289,12 @@ class Component(BaseComponent):
 
         client_ids_dict = {}
 
-        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
 
         for child_instance in root_plus_child_component_instances:
             child_client_id = child_instance.__element__.getAttribute("data-client-id")
             client_ids_dict[child_client_id] = child_instance
             
-        print("client_ids_dict keys:", [k for k in client_ids_dict.keys()])
+        #print("client_ids_dict keys:", [k for k in client_ids_dict.keys()])
 
         if not ssr_root:
             ssr_root = document.body
@@ -298,8 +304,8 @@ class Component(BaseComponent):
         
         marked_for_hydration_ids = [k for k in marked_for_hydration_dict.keys()]
         #print("marked_for_hydration", marked_for_hydration_ids)
-        print("marked_for_hydration_dict", marked_for_hydration_dict)
-        print("mismatch", [x for x in marked_for_hydration_ids if x not in [k for k in client_ids_dict.keys()]])
+        #print("marked_for_hydration_dict", marked_for_hydration_dict)
+        #print("mismatch", [x for x in marked_for_hydration_ids if x not in [k for k in client_ids_dict.keys()]])
         
         for child_instance in root_plus_child_component_instances:
             cid = child_instance.client_id
@@ -309,7 +315,8 @@ class Component(BaseComponent):
                 child_instance.initialize_ssr(corresponding_ssr_root_node)
             else:
                 # Component is not in the SSR tree (e.g. hidden by IfBinding)
-                print(f"Skipping hydration for hidden component: {child_instance} (id: {cid})")
+                #print(f"Skipping hydration for hidden component: {child_instance} (id: {cid})")
+                pass
     
     @client
     def _find_elements_marked_for_hydration(self, element=None):
