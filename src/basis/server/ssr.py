@@ -9,6 +9,8 @@ from asyncio import exceptions
 import asyncio
 import json
 
+from typing import Any
+
 from fastapi import Request
 
 from basis.server.tree_builder import html_to_element_tree
@@ -44,9 +46,31 @@ def _get_all_stores(
 
 def _serialize_initial_state(all_stores: dict[str, Store]) -> str:
     """Serialize the current state of all collected stores."""
-    initial_state: dict[str, dict] = {}
+    initial_state: dict[str, Any] = {}
     for store_name, store_instance in all_stores.items():
         initial_state[store_name] = store_instance.serialize()
+        
+    ssr_params = {}
+    ssr_url = {}
+    
+    for store_name, store_instance in all_stores.items():
+        params = getattr(store_instance, '_ssr_params', None)
+        if params is not None:
+            ssr_params[store_name] = params
+            
+        url = getattr(store_instance, '_ssr_url', None)
+        if url is not None:
+            ssr_url[store_name] = url
+            
+    basis_meta = {}
+    if ssr_params:
+        basis_meta["ssr_params"] = ssr_params
+    if ssr_url:
+        basis_meta["ssr_url"] = ssr_url
+        
+    if basis_meta:
+        initial_state["__basis_meta__"] = basis_meta
+        
     return json.dumps(initial_state, indent=2)
 
 def _apply_hydration_logic(app, root_component_plus_child_components):

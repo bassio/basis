@@ -37,12 +37,46 @@ class ServerComponent(BaseComponent):
                     cls.__binding_blueprints__.extend(blueprints)
 
     @classmethod
-    def _get_nodes(cls, element):
+    def _get_nodes_all(cls, element):
         nodes = []
         if element:
             for d in element.descendants:
                 nodes.append(d)
         return nodes
+
+    @classmethod
+    def _get_nodes_skip_loops(cls, element):
+        nodes = []
+        if element:
+            def walk(node):
+                if isinstance(node, Element):
+                    yield node
+                    # Skip descending into loop subtrees
+                    if 'for' in node.attrs and 'in' in node.attrs:
+                        return
+                    for c in node.children:
+                        yield from walk(c)
+                
+                elif isinstance(node, ServerFragment):
+                    # ServerFragments are virtual containers: walk children but do not yield self
+                    for c in node.children:
+                        yield from walk(c)
+                
+                else:
+                    # Text/Comment nodes: yield self (no children to walk)
+                    yield node
+            
+            for n in walk(element):
+                nodes.append(n)
+        
+        return nodes
+
+    @classmethod
+    def _get_nodes(cls, element, skip_loop_descendants=True):
+        if skip_loop_descendants:
+            return cls._get_nodes_skip_loops(element)
+        return cls._get_nodes_all(element)
+
 
     @classmethod
     def clone_blueprint(cls):

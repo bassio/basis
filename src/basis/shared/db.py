@@ -45,6 +45,10 @@ else:
             # Automatically apply the dataclass decorator to the user's model
             dataclasses.dataclass(cls, kw_only=True)
 
+        @classmethod
+        def model_fields(cls):
+            return {f.name: f for f in dataclasses.fields(cls)}
+        
         def model_dump(self) -> dict:
             """Mimic Pydantic/SQLModel dict export using dataclasses."""
             return dataclasses.asdict(self)

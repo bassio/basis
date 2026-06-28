@@ -269,14 +269,13 @@ class SidebarTrigger(Component):
     __tag__ = "ui-sidebar-trigger"
     target = ""
     
-    def toggle(self, event):
+    def toggle_sidebar(self, event):
         sidebar = None
         if self.target:
             from pyscript import document
             sidebar = document.querySelector(self.target)
         else:
-            sidebar = self.node.closest("ui-sidebar")
-
+            sidebar = self.__element__.closest("ui-sidebar")
 
         if sidebar:
             state = sidebar.getAttribute("data-state") or "expanded"
@@ -307,7 +306,7 @@ class SidebarTrigger(Component):
 
     def template(self):
         """
-        <button type="button" class="ui-sidebar-trigger" onclick="{toggle}">
+        <button type="button" class="ui-sidebar-trigger" onclick="{toggle_sidebar}">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-panel-left"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
         </button>
         """

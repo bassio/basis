@@ -118,7 +118,9 @@ def create_expose_wrapper(modelcls, method: str = "GET", one: bool = False, rela
             session.add(db_record)
             session.commit()
             session.refresh(db_record)
+
             return _make_serializable(db_record)
+            
         return put_wrapper
 
     elif method == "DELETE":

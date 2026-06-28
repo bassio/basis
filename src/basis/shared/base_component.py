@@ -12,9 +12,11 @@ from basis.shared.bindings import BindingBlueprint, Binding, SelfBinding, TextBi
 from basis.shared.bindings import extract_dependencies
 from basis.shared.store import Store
 from basis.shared.dag import DependencyGraph, StateNode, ComputedNode, EffectNode, computed
+from basis.shared.context import ContextVarProxyDict
 
 
 def include_store(name: str, url: str = None, target: str = None):
+
     """
     Decorator to include a reactive store in a Page or Component.
     """
@@ -53,12 +55,13 @@ def include_model(model: type, name: str, one: bool = False, target: str = "item
 class BaseComponent(object):
 
     _registry = {}
-    _instance_registry = {}
+    _instance_registry = ContextVarProxyDict("component_instance_registry")
     _live_instances = weakref.WeakSet()
-    _pending_subscriptions = {}
+    _pending_subscriptions = ContextVarProxyDict("component_pending_subscriptions")
 
     S = Store._registry
     C = _instance_registry
+
 
     @classmethod
     def from_template(cls, templatestr, **kwargs):
@@ -297,7 +300,7 @@ class BaseComponent(object):
     
 
     @classmethod
-    def _get_nodes(cls, element):
+    def _get_nodes(cls, element, skip_loop_descendants=False):
         raise NotImplementedError()
 
     def _create_function_proxy(self, f):
@@ -855,7 +858,7 @@ class BaseComponent(object):
             # Handle @include_store decorators
             if hasattr(comp_cls, '__basis_stores__'):
                 try:
-                    from basis.ui.store_provider import StoreProvider
+                    from basis.shared.store_provider import StoreProvider
                     for store_cfg in comp_cls.__basis_stores__:
                         name = store_cfg['name']
                         if name not in mounted_stores:
@@ -871,7 +874,7 @@ class BaseComponent(object):
             # Handle @include_model decorators
             if hasattr(comp_cls, '__basis_models__'):
                 try:
-                    from basis.ui.model_store_provider import ModelStoreProvider
+                    from basis.shared.store_provider import ModelStoreProvider
                     for model_cfg in comp_cls.__basis_models__:
                         name = model_cfg['name']
                         if name not in mounted_models:

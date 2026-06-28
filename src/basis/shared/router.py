@@ -1,6 +1,7 @@
 import re
 from basis.shared.store import Store
 from basis.shared.component import Component, IS_CLIENT, client
+from basis.shared.context import ContextVarProxyDict
 
 if IS_CLIENT:
     from pyscript import window, ffi
@@ -32,7 +33,7 @@ class RouterStore(Store):
 
 class Route(Component):
     __tag__ = "basis-route"
-    _route_registry = {}
+    _route_registry = ContextVarProxyDict("route_registry")
     path: str = ""
     is_match: bool = False
     exact: bool = True

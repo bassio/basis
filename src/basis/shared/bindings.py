@@ -40,6 +40,19 @@ ALLOWED_BUILTINS = {'False': False,
                     'zip': zip}
 
 
+class MissingStore:
+    def __getattr__(self, name):
+        return None
+    def __getitem__(self, key):
+        return None
+    def __bool__(self):
+        return False
+    def __str__(self):
+        return ""
+    def __repr__(self):
+        return "MissingStore"
+
+
 def desugar_expression(expr: str) -> str:
     """Transform Basis DSL ($store, #comp) into valid Python (BaseComponent.S['store'], BaseComponent.C['comp'])."""
     if not expr:
@@ -571,30 +584,42 @@ class LoopBinding(NodeBinding):
         
         updated_child_node_attrs = {item_attr_name: item}
                 
+        rest_of_fields = []
+        for f in self.component_instance.__fields__:
+            try:
+                if f in ["for", "in", "key"]:
+                    continue
+                elif f == item_attr_name:
+                    continue
+                elif f.startswith("#"):
+                    continue
+                elif f.startswith("$"):
+                    continue
+                elif inspect.isfunction(getattr(self.component_instance, f)):
+                    continue
+                else:
+                    rest_of_fields.append(f)
+            except:
+                continue
+        
+        for field in rest_of_fields:
+            updated_child_node_attrs[field] = getattr(self.component_instance, field)
 
         if '-' in (tag:=str.lower(self.clone.tagName)):
-            updated_child_node_attrs = {c: self.clone.getAttribute(c) for c in self.clone.getAttributeNames()}
+            formatter = Formatter()
+            for c_attr in self.clone.getAttributeNames():
+                if c_attr not in updated_child_node_attrs:
+                    c_attr_value = self.clone.getAttribute(c_attr)
+                    has_expr = any(fname is not None for _, fname, _, _ in formatter.parse(c_attr_value))
+                    if has_expr:
+                        val = safe_format(c_attr_value, updated_child_node_attrs, ALLOWED_BUILTINS)
+                        updated_child_node_attrs[c_attr] = val
+                    else:
+                        updated_child_node_attrs[c_attr] = c_attr_value
 
-        else:
-            rest_of_fields = []
-            for f in self.component_instance.__fields__:
-                try:
-                    if f == item_attr_name:
-                        continue
-                    if f in ["for", "in", "key"]:
-                        continue
-                    if inspect.isfunction(getattr(self.component_instance, f)):
-                        continue
-                    rest_of_fields.append(f)
-                except AttributeError:
-                    continue
-            
-            for field in rest_of_fields:
-                updated_child_node_attrs[field] = getattr(self.component_instance, field)
-
-        updated_child_node_attrs.pop('for', None)
-        updated_child_node_attrs.pop('in', None)
-        updated_child_node_attrs.pop('key', None)
+            updated_child_node_attrs.pop('for', None)
+            updated_child_node_attrs.pop('in', None)
+            updated_child_node_attrs.pop('key', None)
 
         return updated_child_node_attrs
 
@@ -1072,6 +1097,11 @@ def _eval_ast(node, context, allowed_builtins):
                 key = _eval(node.slice.value)
             else:
                 key = _eval(node.slice)
+            
+            base_comp = allowed_builtins.get('BaseComponent')
+            if base_comp and val is getattr(base_comp, 'S', None):
+                if key not in val:
+                    return MissingStore()
             return val[key]
 
         elif isinstance(node, ast.Call):
@@ -1210,7 +1240,11 @@ def safe_format_with_stores(template_str, context, allowed_builtins, store_regis
                     val = safe_eval(fname, context, allowed_builtins, tree=ast_tree)
                 elif fname.startswith("$"):
                     store_name, attr_name = fname.strip("$").split(".")
-                    val = getattr(store_registry[store_name], attr_name)
+                    store = store_registry.get(store_name)
+                    if store is None:
+                        val = None
+                    else:
+                        val = getattr(store, attr_name, None)
                 elif fname.startswith("#"):
                     component_name, attr_name = fname.strip("#").split(".")
                     if component_name in component_instance_registry:
@@ -1220,6 +1254,9 @@ def safe_format_with_stores(template_str, context, allowed_builtins, store_regis
                 else:
                     val = safe_eval(fname, context, allowed_builtins)
             
+            if val is None:
+                val = ""
+                
             if format_spec:
                 result += format(val, format_spec)
             else:

@@ -1,22 +1,27 @@
+import dataclasses
 import json
+import sys
 from typing import Any
 
-try:
+IS_CLIENT = "pyscript" in sys.modules
+IS_SERVER = not IS_CLIENT
+
+if IS_CLIENT:
     from pyscript import WebSocket, document
-except ImportError:
-    # Handle the backend environment gracefully
+    from pyodide.http import pyfetch
+else:
     WebSocket = None
     document = None
+    pyfetch = None
 
 from basis.shared.bindings import ComponentSubscription
-
+from basis.shared.context import ContextVarProxyDict
 from basis.shared.db import _make_serializable
 
 
-
 class Store:
-    _registry = {}
-    _pending_subscriptions = {}
+    _registry = ContextVarProxyDict("store_registry")
+    _pending_subscriptions = ContextVarProxyDict("store_pending_subscriptions")
 
     @classmethod
     def from_dict(cls, name:str, init_dict:dict):
@@ -46,9 +51,23 @@ class Store:
                 pass
         return state
 
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith('_'):
+            raise AttributeError(name)
+
+        _first_load_completed = self.__dict__.get('_first_load_completed', False)
+        if not _first_load_completed:
+            return None
+            
+        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+
     def __init__(self, name: str):
         self.__dict__['_subscriptions'] = []
         self.__dict__['_name'] = name
+        self.__dict__['_hydrated_from_ssr'] = False
+        self.__dict__['_first_load_completed'] = False
+        self.__dict__['loading'] = False
+        self.__dict__['error'] = None
 
         # Register in the global registry
         Store._registry[name] = self
@@ -71,17 +90,29 @@ class Store:
                 try:
                     state_data = json.loads(initial_state_script.textContent)
                     if name in state_data:
-                        print("HYDRATING FROM initial_state_script")
+                        print(f"HYDRATING store {name} FROM basis-initial-state")
                         for k, v in state_data[name].items():
                             setattr(self, k, v)
+                        
+                        self.__dict__['_hydrated_from_ssr'] = True
+                        self.__dict__['_first_load_completed'] = True
+                        
+                        # Populate metadata if present under __basis_meta__
+                        basis_meta = state_data.get("__basis_meta__", {})
+                        if basis_meta:
+                            ssr_params = basis_meta.get("ssr_params", {})
+                            if name in ssr_params:
+                                self.__dict__["_ssr_params"] = ssr_params[name]
+                                
+                            ssr_url = basis_meta.get("ssr_url", {})
+                            if name in ssr_url:
+                                self.__dict__["_ssr_url"] = ssr_url[name]
+
                 except Exception as e:
-                    print(f"Failed to hydrate store '{name}': {e}")
+                    print(f"Error: Failed to hydrate store '{name}': {e}")
 
     def get_store_name(self):
         return self.__dict__['_name']
-    
-    #def __getitem__(self, item):
-    #    return Store._registry[item]
 
     def add_subscription(self, component_instance, attr_name:str):
         if (component_instance, attr_name) not in self._subscriptions:
@@ -176,7 +207,10 @@ def _resolve_url_and_params(url_pattern: str, kwargs: dict) -> tuple[str, dict]:
     for p in placeholders:
         if p not in kwargs:
             raise ValueError(f"Missing required path parameter '{p}' for URL pattern '{url_pattern}'")
-        params[p] = kwargs[p]
+        val = kwargs[p]
+        if val is None or val == "" or val == "None":
+            return "", {}
+        params[p] = val
             
     resolved_url = url_pattern
     for p, val in params.items():
@@ -204,9 +238,27 @@ class ModelStore(Store):
         self.model = model
         self.model_name = getattr(model, "__name__", str(model))
         self.custom_url = url
-        self.items = []
-        self.loading = False
-        self.error = None
+        if 'items' not in self.__dict__:
+            self.__dict__['items'] = []
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith('_'):
+            raise AttributeError(name)
+        
+        # Check fields
+        model = self.__dict__.get("model")
+        if model is None:
+            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+            
+        if IS_SERVER:
+            if name in model.model_fields:
+                return None
+        else:
+            if name in [f.name for f in dataclasses.fields(model)]:
+                return None
+        
+        # If not a valid field, it's a typo
+        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
     def _find_endpoint(self, method: str, one: bool) -> str | None:
         if self.custom_url:
@@ -218,9 +270,8 @@ class ModelStore(Store):
         return urls.get((method.upper(), one))
 
     async def fetch_all(self, **kwargs) -> list:
-        try:
-            from pyodide.http import pyfetch
-        except ImportError:
+        
+        if IS_SERVER:
             from basis.shared.context import db_session_var
             session = db_session_var.get()
             if session:
@@ -238,12 +289,16 @@ class ModelStore(Store):
             return self.items
 
         resolved_url, params = _resolve_url_and_params(url, kwargs)
+        if not resolved_url:
+            return self.items
+
         query_params = {k: v for k, v in kwargs.items() if k not in params and v is not None}
         if query_params:
             from urllib.parse import urlencode
             resolved_url = f"{resolved_url}?{urlencode(query_params)}"
 
         self.loading = True
+
         try:
             response = await pyfetch(resolved_url)
             if response.ok:
@@ -251,6 +306,8 @@ class ModelStore(Store):
                 hydrated = [self.model.model_validate(item) if hasattr(self.model, "model_validate") else item for item in data]
                 self.items = hydrated
                 self.error = None
+                self.__dict__['_first_load_completed'] = True
+                self.loading = False
                 return self.items
             else:
                 self.error = f"Fetch failed: {response.status}"
@@ -267,10 +324,10 @@ class ModelStore(Store):
             return None
         
         resolved_url, params = _resolve_url_and_params(url, kwargs)
+        if not resolved_url:
+            return None
 
-        try:
-            from pyodide.http import pyfetch
-        except ImportError:
+        if IS_SERVER:
             # Server: use db_session_var if available
             from basis.shared.context import db_session_var
             session = db_session_var.get()
@@ -297,7 +354,9 @@ class ModelStore(Store):
                         setattr(self, k, v)
             return item
 
+
         self.loading = True
+
         try:
             response = await pyfetch(resolved_url)
             if response.ok:
@@ -314,14 +373,17 @@ class ModelStore(Store):
                     self.items = new_items
                 else:
                     self.items = self.items + [item]
-                self.error = None
                 
                 # Spread fields flat onto store
                 for k, v in (item.__dict__ if hasattr(item, "__dict__") else item).items():
                     if not k.startswith("_"):
                         setattr(self, k, v)
-                        
+                
+                self.error = None
+                self.__dict__['_first_load_completed'] = True
+                self.loading = False
                 return item
+
             else:
                 self.error = f"Fetch failed: {response.status}"
         except Exception as e:
@@ -352,11 +414,10 @@ class ModelStore(Store):
         
         self.items = self.items + [temp_item]
 
-        try:
-            from pyodide.http import pyfetch
-        except ImportError:
-            # Server: return the temp/locally created item
+        if IS_SERVER:
             return temp_item
+
+        self.__dict__["loading"] = True
 
         try:
             response = await pyfetch(

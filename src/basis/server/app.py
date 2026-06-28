@@ -48,19 +48,21 @@ def initialize_pyscript_registry(app: FastAPI):
     files_dict["{DOMAIN}/basis/client/plugins.py"] = "./basis/client/plugins.py"
 
     # add shared
-    files_dict["{DOMAIN}/basis/shared/store.py"] = "./basis/shared/store.py"
     files_dict["{DOMAIN}/basis/shared/bindings.py"] = "./basis/shared/bindings.py"
+    files_dict["{DOMAIN}/basis/shared/dag.py"] = "./basis/shared/dag.py"
     files_dict["{DOMAIN}/basis/shared/base_component.py"] = "./basis/shared/base_component.py"
     files_dict["{DOMAIN}/basis/shared/element.py"] = "./basis/shared/element.py"
     files_dict["{DOMAIN}/basis/shared/component.py"] = "./basis/shared/component.py"
     files_dict["{DOMAIN}/basis/shared/page.py"] = "./basis/shared/page.py"
+    files_dict["{DOMAIN}/basis/shared/store.py"] = "./basis/shared/store.py"
+    files_dict["{DOMAIN}/basis/shared/store_provider.py"] = "./basis/shared/store_provider.py"
     files_dict["{DOMAIN}/basis/shared/context.py"] = "./basis/shared/context.py"
-    files_dict["{DOMAIN}/basis/shared/dag.py"] = "./basis/shared/dag.py"
     files_dict["{DOMAIN}/basis/shared/hmr.py"] = "./basis/shared/hmr.py"
     files_dict["{DOMAIN}/basis/shared/actions.py"] = "./basis/shared/actions.py"
     files_dict["{DOMAIN}/basis/shared/plugin.py"] = "./basis/shared/plugin.py"
     files_dict["{DOMAIN}/basis/shared/router.py"] = "./basis/shared/router.py"
     files_dict["{DOMAIN}/basis/shared/db.py"] = "./basis/shared/db.py"
+    files_dict["{DOMAIN}/basis/shared/basis_await.py"] = "./basis/shared/basis_await.py"
 
     for i, m in enumerate(app._component_routes, 1):
         cdir_n_label = '{' + f'COMPONENTS_DIR_{i}' + '}'

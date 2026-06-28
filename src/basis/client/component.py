@@ -10,7 +10,7 @@ except ImportError:
 
     PYSCRIPT = False
 
-from basis.shared.bindings import SelfBinding, ChildBinding, EventBinding, IfBinding, TextBinding, KeyedLoopBinding
+from basis.shared.bindings import SelfBinding, ChildBinding, EventBinding, IfBinding, TextBinding, KeyedLoopBinding, LoopBinding
 
 from basis.shared.base_component import BaseComponent
 from basis.shared.hmr import start_hmr
@@ -90,7 +90,7 @@ class Component(BaseComponent):
 
 
     @classmethod
-    def _get_nodes(cls, element):
+    def _get_nodes_all(cls, element):
 
         walker = document.createTreeWalker(element, window.NodeFilter.SHOW_ELEMENT | window.NodeFilter.SHOW_TEXT | window.NodeFilter.SHOW_COMMENT)
 
@@ -101,6 +101,44 @@ class Component(BaseComponent):
             current_node = walker.nextNode()
 
         return nodes
+
+    @classmethod
+    def _get_nodes_skip_loops(cls, element):
+
+        walker = document.createTreeWalker(element, window.NodeFilter.SHOW_ELEMENT | window.NodeFilter.SHOW_TEXT | window.NodeFilter.SHOW_COMMENT)
+
+        nodes = []
+        current_node = walker.nextNode()
+        while current_node:
+            nodes.append(current_node)
+
+            is_loop = False
+            if current_node.nodeType == 1:  # Element node
+                try:
+                    if current_node.hasAttribute('for') and current_node.hasAttribute('in'):
+                        is_loop = True
+                except:
+                    pass
+
+            if is_loop:
+                next_node = walker.nextSibling()
+                while not next_node:
+                    parent = walker.parentNode()
+                    if not parent or parent == element:
+                        next_node = None
+                        break
+                    next_node = walker.nextSibling()
+                current_node = next_node
+            else:
+                current_node = walker.nextNode()
+
+        return nodes
+
+    @classmethod
+    def _get_nodes(cls, element, skip_loop_descendants=True):
+        if skip_loop_descendants:
+            return cls._get_nodes_skip_loops(element)
+        return cls._get_nodes_all(element)
 
     @client
     def _create_comment(self, comment_text):
@@ -134,26 +172,25 @@ class Component(BaseComponent):
         event_bindings = [eb for eb in all_bindings if isinstance(eb, EventBinding)]
         if_bindings = [ib for ib in all_bindings if isinstance(ib, IfBinding)]
         text_bindings = [tb for tb in all_bindings if isinstance(tb, TextBinding)]
-        keyed_loop_bindings = [klb for klb in all_bindings if isinstance(klb, KeyedLoopBinding)]
+        loop_bindings = [lb for lb in all_bindings if isinstance(lb, (LoopBinding, KeyedLoopBinding))]
         child_bindings = [eb for eb in all_bindings if isinstance(eb, ChildBinding)]
-        other_bindings = [ob for ob in all_bindings if ob not in event_bindings + if_bindings + text_bindings + keyed_loop_bindings + child_bindings]
+        other_bindings = [ob for ob in all_bindings if ob not in event_bindings + if_bindings + text_bindings + loop_bindings + child_bindings]
 
 
+        print(f"DEBUG HYDRATION: initialize_ssr for {self.__class__.__name__}, bindings count: {len(all_bindings)}")
         for eb in event_bindings:
             
             eb_node_cid = eb.node.getAttribute("data-client-id")
             matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{eb_node_cid}']")
             if matched_ssr_node:
                 eb_node_new = matched_ssr_node
-                #print(f"MATCHED event binding's {eb.event} node: {eb_node_new.outerHTML}")
+                print(f"DEBUG HYDRATION: MATCHED event binding's {eb.event} ({eb.target_fn}) node: {eb_node_new.outerHTML}")
             elif ssr_root.getAttribute("data-hydration-id") == eb_node_cid:
                 eb_node_new = ssr_root
-                #print(f"MATCHED event binding's {eb.event} node: {eb_node_new.outerHTML}")
+                print(f"DEBUG HYDRATION: MATCHED event binding root node's {eb.event} ({eb.target_fn})")
             else:
                 eb_node_new = eb.node #just keep the old node then !
-                # this addresses an error that elements hidden because of an IfBinding will not be assigned a client id
-                # because they are not in the shadow dom tree in the first place !!
-                #print(f"DID NOT MATCH event binding's {eb.event} node with client_id {eb_node_cid}: {eb_node_new.outerHTML}")
+                print(f"DEBUG HYDRATION: DID NOT MATCH event binding's {eb.event} ({eb.target_fn}) node with client_id {eb_node_cid}")
 
             eb.node = eb_node_new
 
@@ -161,23 +198,27 @@ class Component(BaseComponent):
                 event_method = getattr(self, eb.target_fn)
                 event_method_final = self._create_function_proxy(event_method)
                 eb.node.removeAttribute(eb.event)
-                setattr(eb.node, eb.event, event_method_final)
                 if hasattr(eb.node, "addEventListener"):
                     eb.node.addEventListener(eb.event.removeprefix("on"), event_method_final)
+                else:
+                    setattr(eb.node, eb.event, event_method_final)
             else:
                 self_event_method = eb.target_fn
                 eb.node.removeAttribute(eb.event)
-                setattr(eb.node, eb.event, self_event_method)
                 if hasattr(eb.node, "addEventListener"):
                     eb.node.addEventListener(eb.event.removeprefix("on"), self_event_method)
-                
+                else:
+                    setattr(eb.node, eb.event, self_event_method)
+            
+            eb.node.setAttribute("data-hydrated", "true")
+            
         for ib in if_bindings:
             ib_node_cid = ib.node.getAttribute("data-client-id")
             matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{ib_node_cid}']")
             if matched_ssr_node:
                 ib.node = matched_ssr_node
                 ib.is_visible = True
-            elif ib_node_cid and ssr_root.getAttribute("data-hydration-id") == ib_node_cid:
+            elif ib_node_cid and (ssr_root.getAttribute("data-hydration-id") == ib_node_cid):
                 ib.node = ssr_root
                 ib.is_visible = True
             else:
@@ -188,7 +229,7 @@ class Component(BaseComponent):
             matched_ssr_anchor = ssr_root.querySelector(f"[data-hydration-id='{anchor_cid}']")
             if matched_ssr_anchor:
                 ib.anchor = matched_ssr_anchor
-            elif anchor_cid and ssr_root.getAttribute("data-hydration-id") == anchor_cid:
+            elif anchor_cid and (ssr_root.getAttribute("data-hydration-id") == anchor_cid):
                 ib.anchor = ssr_root
             
 
@@ -196,7 +237,7 @@ class Component(BaseComponent):
             tb_node_parent_cid = tb.node.parentNode.getAttribute("data-client-id")
             matched_ssr_node_parent = ssr_root.querySelector(f"[data-hydration-id='{tb_node_parent_cid}']")
             if not matched_ssr_node_parent \
-            and tb_node_parent_cid and ssr_root.getAttribute("data-hydration-id") == tb_node_parent_cid:
+            and tb_node_parent_cid and (ssr_root.getAttribute("data-hydration-id") == tb_node_parent_cid):
                 matched_ssr_node_parent = ssr_root
 
             position_in_shadow = None
@@ -211,17 +252,20 @@ class Component(BaseComponent):
                         if i == position_in_shadow:
                             tb.node = childNode
                         
-        for klb in keyed_loop_bindings:
-            klb.parent
-            klb_child_bindings = [cb for cb in child_bindings if cb.loop_binding is klb]
-            for cb in klb_child_bindings:
+        print(f"DEBUG HYDRATION: loop_bindings count: {len(loop_bindings)}")
+        for lb in loop_bindings:
+            lb.parent
+            lb_child_bindings = [cb for cb in child_bindings if cb.loop_binding is lb]
+            print(f"DEBUG HYDRATION: loop_binding {lb.collection}, child_bindings count: {len(lb_child_bindings)}")
+            for cb in lb_child_bindings:
                 klb_child_node_cid = cb.node.getAttribute("data-client-id")
                 matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{klb_child_node_cid}']")
+                print(f"DEBUG HYDRATION:   child component {cb.childinstance.__class__.__name__}, client_id: {klb_child_node_cid}, matched_ssr_node: {matched_ssr_node is not None}")
                 if matched_ssr_node:
                     cb.node = matched_ssr_node
                     # CRITICAL: Attach the component instance for loop items
                     setattr(matched_ssr_node, '__basis_instance__', cb.childinstance)
-                    klb.parent = matched_ssr_node.parentNode
+                    lb.parent = matched_ssr_node.parentNode
 
         for cb in child_bindings:
             if cb.loop_binding:
@@ -233,7 +277,7 @@ class Component(BaseComponent):
                 cb.node = matched_ssr_node
                 # CRITICAL: Attach the component instance so parent AttributeBindings can sync props
                 setattr(matched_ssr_node, '__basis_instance__', cb.childinstance)
-            elif cb_node_cid and ssr_root.getAttribute("data-hydration-id") == cb_node_cid:
+            elif cb_node_cid and (ssr_root.getAttribute("data-hydration-id") == cb_node_cid):
                 cb.node = ssr_root
                 setattr(ssr_root, '__basis_instance__', cb.childinstance)
 
@@ -242,7 +286,7 @@ class Component(BaseComponent):
             matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{ob_node_cid}']")
             if matched_ssr_node:
                 ob.node = matched_ssr_node
-            elif ob_node_cid and ssr_root.getAttribute("data-hydration-id") == ob_node_cid:
+            elif ob_node_cid and (ssr_root.getAttribute("data-hydration-id") == ob_node_cid):
                 ob.node = ssr_root
 
         with self.refrain() as refrained:
@@ -300,7 +344,11 @@ class Component(BaseComponent):
             ssr_root = document.body
 
         marked_for_hydration = ssr_root.querySelectorAll("[data-hydration-id]")
-        marked_for_hydration_dict = {x.getAttribute("data-hydration-id"):x for x in marked_for_hydration}
+        marked_for_hydration_dict = {}
+        for x in marked_for_hydration:
+            hid = x.getAttribute("data-hydration-id")
+            if hid:
+                marked_for_hydration_dict[hid] = x
         
         marked_for_hydration_ids = [k for k in marked_for_hydration_dict.keys()]
         #print("marked_for_hydration", marked_for_hydration_ids)
