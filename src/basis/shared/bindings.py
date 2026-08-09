@@ -5,7 +5,38 @@ import json
 import operator
 import re
 from string import Formatter
+import sys
 from typing import Any
+
+from basis.shared.validation import validate_field, validate_model, ValidationError
+
+
+# Module-level singleton — Formatter is stateless, no need to re-instantiate
+_FORMATTER = Formatter()
+
+# Module-level operator lookup dicts for _eval_ast (avoid rebuilding per-expression)
+_BINOP_MAP = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+    ast.FloorDiv: operator.floordiv,
+}
+
+_CMPOP_MAP = {
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
+    ast.Is: operator.is_,
+    ast.IsNot: operator.is_not,
+    ast.In: operator.contains,
+}
+
 
 
 ALLOWED_BUILTINS = {'False': False,
@@ -39,6 +70,15 @@ ALLOWED_BUILTINS = {'False': False,
                     'tuple': tuple,
                     'zip': zip}
 
+
+IS_CLIENT = "pyscript" in sys.modules
+
+if IS_CLIENT:
+    from pyscript import ffi, document, window
+else:
+    ffi = None
+    document = None
+    window = None
 
 class MissingStore:
     def __getattr__(self, name):
@@ -213,27 +253,28 @@ class AttributeBinding(NodeBinding):
     content:str
     fields:list[str]
     is_boolean:bool = False
-    
+    _is_single_expr:bool = field(default=False, init=False, repr=False)
+    _single_fname:str = field(default=None, init=False, repr=False)
+
+    def __post_init__(self):
+        # Pre-compute whether this is a single expression like "{val}" vs interpolation "count: {val}"
+        try:
+            parsed = list(_FORMATTER.parse(self.content))
+        except ValueError:
+            parsed = []
+        self._is_single_expr = len(parsed) == 1 and parsed[0][1] is not None and not parsed[0][0]
+        if self._is_single_expr:
+            self._single_fname = parsed[0][1]
+
     def update(self):
         # Always evaluate in the context of the component that owns the binding (the parent)
         context = self.component_instance
         store_registry = self.component_instance.__class__.S
         instance_registry = self.component_instance.__class__._instance_registry
 
-        # Detect if it's a single expression like "{val}" or an interpolation like "count: {val}"
-        formatter = Formatter()
-        try:
-            parsed = list(formatter.parse(self.content))
-        except ValueError:
-            # Handle cases where content is not a valid format string
-            parsed = []
-
-        is_single_expr = len(parsed) == 1 and parsed[0][1] is not None and not parsed[0][0]
-        
-        if is_single_expr:
-            fname = parsed[0][1]
-            ast_tree = self.ast_trees.get(fname)
-            evaluated_val = safe_eval(fname, context, ALLOWED_BUILTINS, tree=ast_tree)
+        if self._is_single_expr:
+            ast_tree = self.ast_trees.get(self._single_fname)
+            evaluated_val = safe_eval(self._single_fname, context, ALLOWED_BUILTINS, tree=ast_tree)
             
             # For the DOM attribute, we convert to string/JSON
             if isinstance(evaluated_val, (list, dict)):
@@ -253,7 +294,7 @@ class AttributeBinding(NodeBinding):
 
         # Update the DOM node
         if self.is_boolean:
-            bool_val = bool(evaluated_val) if is_single_expr else str(final_dom_val).lower() == 'true'
+            bool_val = bool(evaluated_val) if self._is_single_expr else str(final_dom_val).lower() == 'true'
             self.node.toggleAttribute(self.attr, bool_val)
 
             # special cases
@@ -333,8 +374,7 @@ class SelfAttributeBinding(AttributeBinding):
                 #self.component_instance.__dict__[self.attr] = final_val
 
         else:
-            formatter = Formatter()
-            _, fname, _, _ = next(iter(formatter.parse(self.content)))
+            _, fname, _, _ = next(iter(_FORMATTER.parse(self.content)))
             evaluated_val = safe_eval(fname, context, ALLOWED_BUILTINS, tree=self.ast_trees.get(fname))
             final_val = json.dumps(evaluated_val)
             #self.component_instance.__dict__[self.attr] = final_val
@@ -446,6 +486,329 @@ class ModelBinding(NodeBinding):
 
         return instance
 
+
+def get_input_value(node, name=None):
+    tag_name = node.tagName.lower() if hasattr(node, "tagName") else ""
+    if tag_name == "input":
+        input_type = node.getAttribute("type") if node.hasAttribute("type") else "text"
+        if input_type == "checkbox":
+            return node.checked
+        if input_type == "radio" and name:
+            form = node.form or (node.closest("form") if hasattr(node, "closest") else None)
+            if form:
+                checked_radio = form.querySelector(f"input[type='radio'][name='{name}']:checked")
+                return checked_radio.value if checked_radio else None
+            return node.value if node.checked else None
+        return node.value
+    elif tag_name in ("select", "textarea"):
+        return node.value
+    else:
+        inst = getattr(node, "__basis_instance__", None)
+        if inst and hasattr(inst, "value"):
+            return inst.value
+        if hasattr(node, "value"):
+            return node.value
+        return node.getAttribute("value")
+
+def set_input_value(node, val):
+    tag_name = node.tagName.lower() if hasattr(node, "tagName") else ""
+    if tag_name == "input":
+        input_type = node.getAttribute("type") if node.hasAttribute("type") else "text"
+        if input_type == "checkbox":
+            node.checked = bool(val)
+        elif input_type == "radio":
+            node.checked = (str(node.value) == str(val))
+        else:
+            node.value = str(val) if val is not None else ""
+    elif tag_name in ("select", "textarea"):
+        node.value = str(val) if val is not None else ""
+    else:
+        inst = getattr(node, "__basis_instance__", None)
+        if inst and hasattr(inst, "value"):
+            inst.value = val
+        elif hasattr(node, "value"):
+            node.value = val
+        else:
+            node.setAttribute("value", str(val) if val is not None else "")
+
+
+def instantiate_model(model_class: Any) -> Any:
+    try:
+        return model_class()
+    except Exception:
+        # Construct with type-based default arguments to bypass required field validation
+        init_args = {}
+        if hasattr(model_class, "model_fields"):
+            for f_name, f_info in model_class.model_fields.items():
+                annotation = f_info.annotation
+                if annotation is str:
+                    init_args[f_name] = ""
+                elif annotation in (int, float):
+                    init_args[f_name] = 0
+                else:
+                    init_args[f_name] = None
+        elif dataclasses.is_dataclass(model_class):
+            for f in dataclasses.fields(model_class):
+                if f.type is str:
+                    init_args[f.name] = ""
+                elif f.type in (int, float):
+                    init_args[f.name] = 0
+                else:
+                    init_args[f.name] = None
+        try:
+            return model_class(**init_args)
+        except Exception:
+            return None
+
+
+@dataclass(kw_only=True)
+class FormModelBinding(NodeBinding):
+    target_expression: str
+    validate_on: str = "input"
+
+    def __post_init__(self):
+        self._node = self.node
+        self.errors_expression = ""
+        if self.target_expression.startswith("$"):
+            parts = self.target_expression.split(".")
+            self.errors_expression = f"{parts[0]}.{parts[1]}_errors"
+        else:
+            self.errors_expression = f"{self.target_expression}_errors"
+            
+        self._add_listeners(self._node)
+
+    @property
+    def node(self):
+        return self._node
+
+    @node.setter
+    def node(self, val):
+        if hasattr(self, "_node") and self._node:
+            self._remove_listeners(self._node)
+        self._node = val
+        if val:
+            self._add_listeners(val)
+
+    @property
+    def fields(self):
+        return [self.target_expression]
+
+    def _add_listeners(self, node):
+        if not node:
+            return
+        self._input_proxy = self.component_instance._create_function_proxy(self.handle_input)
+        self._blur_proxy = self.component_instance._create_function_proxy(self.handle_blur)
+        self._submit_proxy = self.component_instance._create_function_proxy(self.handle_submit)
+        
+        if hasattr(node, "addEventListener"):
+            node.addEventListener("input", self._input_proxy)
+            node.addEventListener("change", self._input_proxy)
+            node.addEventListener("blur", self._blur_proxy)
+            node.addEventListener("submit", self._submit_proxy)
+        else:
+            setattr(node, "oninput", self._input_proxy)
+            setattr(node, "onchange", self._input_proxy)
+            setattr(node, "onblur", self._blur_proxy)
+            setattr(node, "onsubmit", self._submit_proxy)
+
+    def _remove_listeners(self, node):
+        if not node:
+            return
+        if hasattr(node, "removeEventListener"):
+            if hasattr(self, "_input_proxy"):
+                node.removeEventListener("input", self._input_proxy)
+                node.removeEventListener("change", self._input_proxy)
+            if hasattr(self, "_blur_proxy"):
+                node.removeEventListener("blur", self._blur_proxy)
+            if hasattr(self, "_submit_proxy"):
+                node.removeEventListener("submit", self._submit_proxy)
+
+    def get_target_model(self) -> Any:
+        context = self.component_instance
+        store_registry = self.component_instance.__class__.S
+        instance_registry = self.component_instance.__class__._instance_registry
+        
+        try:
+            ast_tree = self.ast_trees.get(self.target_expression)
+            target_obj = safe_eval(
+                self.target_expression,
+                context,
+                ALLOWED_BUILTINS,
+                tree=ast_tree
+            )
+        except Exception:
+            target_obj = None
+
+        if target_obj is None:
+            if self.target_expression.startswith("$"):
+                store_name, attr_name = self.target_expression.strip("$").split(".")
+                store_instance = store_registry[store_name]
+                model_class = getattr(store_instance, "model", None)
+                if model_class:
+                    target_obj = instantiate_model(model_class)
+                    if target_obj is not None:
+                        setattr(store_instance, attr_name, target_obj)
+            else:
+                model_class = None
+                cls = self.component_instance.__class__
+                if hasattr(cls, "__annotations__") and self.target_expression in cls.__annotations__:
+                    model_class = cls.__annotations__[self.target_expression]
+                if model_class:
+                    target_obj = instantiate_model(model_class)
+                    if target_obj is not None:
+                        setattr(self.component_instance, self.target_expression, target_obj)
+        return target_obj
+
+    def get_errors_dict(self) -> dict:
+        if not self.target_expression.startswith("$"):
+            if not hasattr(self.component_instance, self.errors_expression):
+                setattr(self.component_instance, self.errors_expression, {})
+            return getattr(self.component_instance, self.errors_expression)
+        else:
+            store_name, attr_name = self.target_expression.strip("$").split(".")
+            store_instance = self.component_instance.__class__.S[store_name]
+            errors_attr = f"{attr_name}_errors"
+            if not hasattr(store_instance, errors_attr):
+                setattr(store_instance, errors_attr, {})
+            return getattr(store_instance, errors_attr)
+
+    def set_errors_dict(self, errors: dict):
+        if not self.target_expression.startswith("$"):
+            setattr(self.component_instance, self.errors_expression, errors)
+        else:
+            store_name, attr_name = self.target_expression.strip("$").split(".")
+            store_instance = self.component_instance.__class__.S[store_name]
+            errors_attr = f"{attr_name}_errors"
+            setattr(store_instance, errors_attr, errors)
+
+    def _collect_inputs(self) -> list[tuple[str, Any]]:
+        inputs = []
+        form_node = self.node
+        if not form_node:
+            return inputs
+
+        def walk(node):
+            if node != form_node:
+                tag_name = node.tagName.lower() if hasattr(node, "tagName") else ""
+                is_custom = "-" in tag_name
+                
+                if is_custom:
+                    if node.hasAttribute("name") and not node.hasAttribute("bind"):
+                        inputs.append((node.getAttribute("name"), node))
+                    return
+                    
+            if node != form_node and hasattr(node, "tagName"):
+                tag_name = node.tagName.lower()
+                if tag_name in ("input", "select", "textarea"):
+                    if node.hasAttribute("name") and not node.hasAttribute("bind"):
+                        inputs.append((node.getAttribute("name"), node))
+                        
+            if hasattr(node, "childNodes"):
+                for child in node.childNodes:
+                    is_element = (child.nodeType == 1) if hasattr(child, "nodeType") else hasattr(child, "tagName")
+                    if is_element:
+                        walk(child)
+
+        walk(form_node)
+        return inputs
+
+    def handle_input_change(self, field_name: str, raw_value: Any, trigger_validation: bool):
+        target_obj = self.get_target_model()
+        if not target_obj:
+            return
+
+        coerced, err_msg = validate_field(target_obj.__class__, field_name, raw_value)
+        errors = self.get_errors_dict()
+        
+        if trigger_validation:
+            if err_msg:
+                errors[field_name] = err_msg
+            else:
+                errors.pop(field_name, None)
+        else:
+            if not err_msg:
+                errors.pop(field_name, None)
+
+        if not err_msg:
+            setattr(target_obj, field_name, coerced)
+
+        self.set_errors_dict(errors)
+        self.component_instance.react([self.target_expression, self.errors_expression])
+
+    def handle_input(self, event):
+        target = event.target
+        name = target.getAttribute("name")
+        if not name:
+            return
+        if target.hasAttribute("bind"):
+            return
+
+        val = get_input_value(target, name)
+        input_type = target.getAttribute("type") if target.hasAttribute("type") else ""
+        is_instant = input_type in ("checkbox", "radio") or target.tagName.lower() == "select"
+        
+        trigger_val = (self.validate_on == "input") or is_instant
+        self.handle_input_change(name, val, trigger_validation=trigger_val)
+
+    def handle_blur(self, event):
+        target = event.target
+        name = target.getAttribute("name")
+        if not name:
+            return
+        if target.hasAttribute("bind"):
+            return
+
+        val = get_input_value(target, name)
+        trigger_val = (self.validate_on == "blur")
+        self.handle_input_change(name, val, trigger_validation=trigger_val)
+
+    def handle_submit(self, event):
+        target_obj = self.get_target_model()
+        if not target_obj:
+            return
+
+        if self.node and self.node.hasAttribute("novalidate"):
+            return
+
+        errors = {}
+        try:
+            validate_model(target_obj)
+        except ValidationError as e:
+            errors = {err["loc"][0]: err["msg"] for err in e.errors()}
+
+        self.set_errors_dict(errors)
+        self.component_instance.react([self.target_expression, self.errors_expression])
+
+        if errors:
+            event.preventDefault()
+            if IS_CLIENT and hasattr(self.node, "dispatchEvent"):
+                detail = ffi.to_js({"errors": errors})
+                event_options = {"detail": detail, "bubbles": True, "cancelable": True}
+                custom_event = window.CustomEvent.new("invalid", ffi.to_js(event_options))
+                self.node.dispatchEvent(custom_event)
+
+    def update(self):
+        target_obj = self.get_target_model()
+        if not target_obj:
+            return
+
+        inputs = self._collect_inputs()
+        for name, el in inputs:
+            if hasattr(target_obj, name):
+                val = getattr(target_obj, name)
+                set_input_value(el, val)
+
+    @classmethod
+    def from_blueprint(cls, component_instance, node, blueprint):
+        instance = cls(
+            component_instance=component_instance,
+            node=node,
+            ast_trees=blueprint.ast_trees,
+            **blueprint.kwargs
+        )
+        return instance
+
+
 @dataclass(kw_only=True)
 class EventBinding(NodeBinding):
     event:str
@@ -471,7 +834,7 @@ class EventBinding(NodeBinding):
         if node.hasAttribute(event):
             node.removeAttribute(event)
 
-        print("######## SETTING EVENT BINDING:", target_fn, "on", component_instance.__class__)
+        # print("######## SETTING EVENT BINDING:", target_fn, "on", component_instance.__class__)
         if hasattr(node, "addEventListener"):
             # on the client
             node.addEventListener(event.removeprefix("on"), handler)
@@ -560,145 +923,16 @@ class ChildBinding(NodeBinding):
 
 @dataclass(kw_only=True)
 class LoopBinding(NodeBinding):
-    item:str
-    collection:str
-    clone:object
-    parent:object
-    ast_trees: dict = field(default_factory=dict, repr=False)
-
-    @property
-    def fields(self):
-        return [self.collection]
-    
-    def _new_clone(self):
-        # New creation
-        cloned_element = self.clone.cloneNode(True)
-        cloned_element.removeAttribute('for')
-        cloned_element.removeAttribute('in')
-
-        return cloned_element
-    
-    def _child_node_attrs_dict(self, item):
-        
-        item_attr_name = self.item # the "for={single_item}"
-        
-        updated_child_node_attrs = {item_attr_name: item}
-                
-        rest_of_fields = []
-        for f in self.component_instance.__fields__:
-            try:
-                if f in ["for", "in", "key"]:
-                    continue
-                elif f == item_attr_name:
-                    continue
-                elif f.startswith("#"):
-                    continue
-                elif f.startswith("$"):
-                    continue
-                elif inspect.isfunction(getattr(self.component_instance, f)):
-                    continue
-                else:
-                    rest_of_fields.append(f)
-            except:
-                continue
-        
-        for field in rest_of_fields:
-            updated_child_node_attrs[field] = getattr(self.component_instance, field)
-
-        if '-' in (tag:=str.lower(self.clone.tagName)):
-            formatter = Formatter()
-            for c_attr in self.clone.getAttributeNames():
-                if c_attr not in updated_child_node_attrs:
-                    c_attr_value = self.clone.getAttribute(c_attr)
-                    has_expr = any(fname is not None for _, fname, _, _ in formatter.parse(c_attr_value))
-                    if has_expr:
-                        val = safe_format(c_attr_value, updated_child_node_attrs, ALLOWED_BUILTINS)
-                        updated_child_node_attrs[c_attr] = val
-                    else:
-                        updated_child_node_attrs[c_attr] = c_attr_value
-
-            updated_child_node_attrs.pop('for', None)
-            updated_child_node_attrs.pop('in', None)
-            updated_child_node_attrs.pop('key', None)
-
-        return updated_child_node_attrs
-
-    def update(self):
-
-        # keep a reference to child bindings for this loop binding
-        bindings_to_delete = [cb for cb in self.component_instance.__bindings__ \
-                              if isinstance(cb, ChildBinding) \
-                                and cb.loop_binding == self]
-
-        collection_value = getattr(self.component_instance, self.collection, [])
-
-        if collection_value is None:
-            collection_value = []
-        
-        fragment = self.component_instance._create_document_fragment()
-
-        for i in collection_value:
-            cloned_element = self._new_clone()
-            
-            updated_child_node_attrs = self._child_node_attrs_dict(i)
-            
-            if '-' in (tag:=str.lower(self.clone.tagName)):
-                childcomponent_py = self.component_instance.__class__._registry[tag]
-                custom_child_instance = childcomponent_py.mount(cloned_element, replace=False, **updated_child_node_attrs)
-                target_node = cloned_element
-                setattr(target_node, '__basis_instance__', custom_child_instance)
-            else:
-                quick_component = self.component_instance.__class__.from_template(cloned_element.outerHTML)
-                childcomponent_py = quick_component
-                custom_child_instance = childcomponent_py.mount(fragment, replace=False, **updated_child_node_attrs)
-                target_node = custom_child_instance.__element__
-                    
-            new_cb = ChildBinding(component_instance=self.component_instance,
-                                  node=target_node,
-                                  childclass=childcomponent_py,
-                                  childinstance=custom_child_instance,
-                                  loop_binding=self)
-            self.component_instance.add_binding(new_cb)
-
-            if target_node.parentNode != fragment:
-                fragment.appendChild(target_node)
-        
-        
-
-        # delete old child bindings for this loop
-        # we essentially delete all the bindings non-selectively as we have rebuilt new ones
-        for rem in bindings_to_delete:
-            self.component_instance.remove_binding(rem)
-        
-        #do the replace
-        self.parent.replaceChildren(fragment)
-
-    def marked_for_hydration(self):
-        return [self.node, self.parent]
-
-    @classmethod
-    def from_blueprint(cls, component_instance, node, blueprint):
-        cloned_node = node.cloneNode(True)
-        
-        instance = cls(
-            component_instance=component_instance, 
-            node=node,
-            clone=cloned_node,
-            parent=node.parentNode,
-            ast_trees=blueprint.ast_trees,
-            **blueprint.kwargs,
-        )
-        
-        return instance
-
-@dataclass(kw_only=True)
-class KeyedLoopBinding(NodeBinding):
-    item:str
-    collection:str
-    clone:object
-    parent:object
-    key:str
-    instances:dict = field(default_factory=dict)
+    """
+    High-performance loop reconciliation using the Longest Increasing Subsequence (LIS) algorithm.
+    Supports explicit keyed reconciliation (key="id") and index-based fallback reconciliation (0, 1, 2...).
+    """
+    item: str
+    collection: str
+    clone: object
+    parent: object
+    key: str | None = None
+    instances: dict = field(default_factory=dict)
     ast_trees: dict = field(default_factory=dict, repr=False)
 
     @property
@@ -714,45 +948,41 @@ class KeyedLoopBinding(NodeBinding):
 
         return cloned_element
 
+    def _get_rest_of_fields(self):
+        """Cache the list of passthrough fields — it doesn't change between update cycles."""
+        if not hasattr(self, '_cached_rest_of_fields'):
+            item_attr_name = self.item
+            rest = []
+            for f in self.component_instance.__fields__:
+                try:
+                    if f in ("for", "in", "key"):
+                        continue
+                    elif f == item_attr_name:
+                        continue
+                    elif f.startswith(("#", "$")):
+                        continue
+                    elif inspect.isfunction(getattr(self.component_instance, f)):
+                        continue
+                    else:
+                        rest.append(f)
+                except:
+                    continue
+            self._cached_rest_of_fields = rest
+        return self._cached_rest_of_fields
+
     def _child_node_attrs_dict(self, item):
-        
         item_attr_name = self.item # the "for={single_item}"
-        
         updated_child_node_attrs = {item_attr_name: item}
 
-
-        rest_of_fields = []
-        
-        for f in self.component_instance.__fields__:
-            try:
-                if f in ["for", "in", "key"]:
-                    continue
-                elif f == item_attr_name:
-                    continue
-                elif f.startswith("#"):
-                    continue
-                elif f.startswith("$"):
-                    continue
-                elif inspect.isfunction(getattr(self.component_instance, f)):
-                    continue
-                else:
-                    rest_of_fields.append(f)
-            except:
-                continue
-
-
-        for field in rest_of_fields:
+        for field in self._get_rest_of_fields():
             updated_child_node_attrs[field] = getattr(self.component_instance, field)
 
-
         if '-' in (tag:=str.lower(self.clone.tagName)):
-
-            formatter = Formatter()
-
-            for c_attr in self.clone.getAttributeNames():
+            c_attr_names = self.clone.getAttributeNames()
+            for c_attr in c_attr_names:
                 if c_attr not in updated_child_node_attrs:
                     c_attr_value = self.clone.getAttribute(c_attr)
-                    has_expr = any(fname is not None for _, fname, _, _ in formatter.parse(c_attr_value))
+                    has_expr = any(fname is not None for _, fname, _, _ in _FORMATTER.parse(c_attr_value))
                     if has_expr:
                         val = safe_format(c_attr_value, updated_child_node_attrs, ALLOWED_BUILTINS)
                         updated_child_node_attrs[c_attr] = val
@@ -776,151 +1006,37 @@ class KeyedLoopBinding(NodeBinding):
         return childcomponent_py
 
     def get_collection_keys(self):
-
         collection_value = getattr(self.component_instance, self.collection, [])
-
         if collection_value is None:
             collection_value = []
 
         keys = []
-
-        for i in collection_value:
-            if isinstance(i, dict): #i.e. list of dicts
-                k_val = i[self.key]
-            else:
-                try:
-                    k_val = getattr(i, self.key) #i.e. list of objects that has "key" as attribute
-                except AttributeError:
-                    k_val = getattr(i, 'get', lambda k: None)(self.key)
-            
-
-            keys.append(k_val)
+        if self.key is not None:
+            for i in collection_value:
+                if isinstance(i, dict):
+                    k_val = i.get(self.key)
+                else:
+                    try:
+                        k_val = getattr(i, self.key)
+                    except AttributeError:
+                        k_val = getattr(i, 'get', lambda k: None)(self.key)
+                keys.append(k_val)
+        else:
+            keys = list(range(len(collection_value)))
 
         return keys
-    
+
     def get_collection_items(self):
         collection_value = getattr(self.component_instance, self.collection, [])
-        
         if collection_value is None:
             collection_value = []
 
         return collection_value
-    
 
     def update(self):
+        # Build ChildBinding lookup map for O(1) lookups
+        _cb_by_instance = {id(cb.childinstance): cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.loop_binding is self}
 
-        # keep a reference to child bindings for this loop binding
-        related_child_bindings = [cb for cb in self.component_instance.__bindings__ \
-                                if isinstance(cb, ChildBinding) \
-                                and cb.loop_binding == self]
-
-        
-        new_instances = {}
-        fragment = self.component_instance._create_document_fragment()
-        
-        keys = self.get_collection_keys()
-        items = self.get_collection_items()
-
-        existing_instances_keys = [ik for ik in self.instances.keys()]
-        
-        for k_val, i in zip(keys, items):            
-            if k_val in existing_instances_keys:
-                # Reuse
-                child_instance = self.instances[k_val]
-                
-                updated_child_node_attrs = self._child_node_attrs_dict(i)
-                
-                # Update props and component reacts
-                for k, v in updated_child_node_attrs.items():
-                    with child_instance.refrain() as refrained:
-                        setattr(refrained, k, v)
-
-                # Find the node from the existing ChildBinding
-                existing_cb = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.childinstance == child_instance][0]
-                target_node = existing_cb.node
-
-                target_node.setAttribute('data-item-key', k_val)
-                new_instances[k_val] = child_instance
-
-                fragment.appendChild(target_node)
-
-            else:
-                # New creation
-                cloned_element = self._new_clone()
-                updated_child_node_attrs = self._child_node_attrs_dict(i)
-                print("updated_child_node_attrs", updated_child_node_attrs)
-
-                childcomponent_py = self._child_component_class(**updated_child_node_attrs)
-                
-                if '-' in (tag:=str.lower(cloned_element.tagName)):
-                    child_instance = childcomponent_py.mount(cloned_element, replace=False, **updated_child_node_attrs)
-                    target_node = cloned_element
-                    setattr(target_node, '__basis_instance__', child_instance)
-                else:
-                    child_instance = childcomponent_py.mount(fragment, replace=False, **updated_child_node_attrs)
-                    target_node = child_instance.__element__
-                    setattr(target_node, '__basis_instance__', child_instance)
-
-                print("child_instance", child_instance)
-                target_node.setAttribute('data-item-key', k_val)
-                new_instances[k_val] = child_instance
-
-
-                new_cb = ChildBinding(component_instance=self.component_instance,
-                                      node=target_node,
-                                      childclass=childcomponent_py,
-                                      childinstance=child_instance,
-                                      loop_binding=self)
-                self.component_instance.add_binding(new_cb)
-                
-                if target_node.parentNode != fragment:
-                    fragment.appendChild(target_node)
-                
-
-        # Cleanup old child bindings that are removed
-        for k_val, old_instance in self.instances.items():
-            if k_val not in new_instances:
-                bindings_to_rem = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.childinstance == old_instance]
-                for rem in bindings_to_rem:
-                    self.component_instance.remove_binding(rem)
-
-        self.parent.replaceChildren(fragment)
-        self.instances = new_instances
-
-    def marked_for_hydration(self):
-        return [self.node, self.parent, *[inst.__element__ for inst in self.instances.values() if inst.__element__ is not None]]
-
-    @classmethod
-    def from_blueprint(cls, component_instance, node, blueprint):
-        cloned_node = node.cloneNode(True)
-        
-        # Capture parent and the sibling that comes after the template node,
-        # then remove the template node entirely from the DOM.
-        # (Must capture before remove() since parentNode becomes None after.)
-        parent_node = node.parentNode
-        after_node = node.nextSibling
-        node.remove()
-        
-        instance = cls(
-            component_instance=component_instance, 
-            node=node,
-            clone=cloned_node,
-            parent=parent_node,
-            ast_trees=blueprint.ast_trees,
-            **blueprint.kwargs,
-        )
-        
-        instance._after_node = after_node
-        
-        return instance
-
-@dataclass(kw_only=True)
-class SmartKeyedLoopBinding(KeyedLoopBinding):
-    """
-    Experimental high-performance keyed loop reconciliation using the 
-    Longest Increasing Subsequence (LIS) algorithm.
-    """
-    def update(self):
         # 1. Prepare data
         new_keys = self.get_collection_keys()
         new_items = self.get_collection_items()
@@ -932,9 +1048,9 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
         for r_key in removed_keys:
             old_instance = self.instances[r_key]
             # Remove from DOM (handling custom elements by removing the wrapper node)
-            cb_list = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.childinstance == old_instance]
-            if cb_list:
-                node_to_remove = cb_list[0].node
+            cb = _cb_by_instance.get(id(old_instance))
+            if cb:
+                node_to_remove = cb.node
                 if node_to_remove and node_to_remove.parentNode:
                     node_to_remove.remove()
             else:
@@ -942,10 +1058,8 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
                     old_instance.__element__.remove()
             
             # Remove associated bindings from the parent component
-            bindings_to_rem = [cb for cb in self.component_instance.__bindings__ 
-                              if isinstance(cb, ChildBinding) and cb.childinstance == old_instance]
-            for rem in bindings_to_rem:
-                self.component_instance.remove_binding(rem)
+            if cb:
+                self.component_instance.remove_binding(cb)
             
             # Remove from our instance map
             del self.instances[r_key]
@@ -976,7 +1090,7 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
                 new_instances_map[k_val] = child_instance
                 
                 # Ensure data-item-key is set on the correct node
-                existing_cb = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.childinstance == child_instance][0]
+                existing_cb = _cb_by_instance[id(child_instance)]
                 existing_cb.node.setAttribute('data-item-key', str(k_val))
             else:
                 # New creation — mount immediately after the template node (self.node)
@@ -1000,12 +1114,20 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
                 # Find anchor: after the last-inserted item, or before _after_node for the first
                 if new_instances_list:
                     # Search for the ChildBinding to get the node
-                    last_cb = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.childinstance == new_instances_list[-1]][0]
+                    last_cb = _cb_by_instance[id(new_instances_list[-1])]
                     insert_after = last_cb.node
                     anchor = insert_after.nextSibling
                 else:
                     # First item: insert at the slot where the template was
                     anchor = getattr(self, '_after_node', None)
+
+                # Ensure anchor is actually a child of the parent
+                if anchor is not None:
+                    try:
+                        if getattr(anchor, 'parentNode', None) != self.parent:
+                            anchor = None
+                    except Exception:
+                        anchor = None
 
                 self.parent.insertBefore(target_node, anchor)
                 
@@ -1015,6 +1137,7 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
                                       childinstance=child_instance,
                                       loop_binding=self)
                 self.component_instance.add_binding(new_cb)
+                _cb_by_instance[id(child_instance)] = new_cb
                 
                 new_instances_map[k_val] = child_instance
                 sources[i] = -1
@@ -1039,13 +1162,13 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
 
             # 5. Reorder items in DOM (backwards for stable insertBefore)
             # Start anchor from the end of our known item block
-            last_cb = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.childinstance == new_instances_list[-1]][0]
+            last_cb = _cb_by_instance[id(new_instances_list[-1])]
             last_item_node = last_cb.node
             next_node = last_item_node.nextSibling
             for i in range(len(new_keys) - 1, -1, -1):
                 instance = new_instances_list[i]
                 # Find the node from the existing ChildBinding
-                cb = [cb for cb in self.component_instance.__bindings__ if isinstance(cb, ChildBinding) and cb.childinstance == instance][0]
+                cb = _cb_by_instance[id(instance)]
                 node = cb.node
                 
                 # Move if it is a new item (sources[i] == -1) OR an existing item not in LIS
@@ -1056,6 +1179,33 @@ class SmartKeyedLoopBinding(KeyedLoopBinding):
                 next_node = node
 
         self.instances = new_instances_map
+
+    def marked_for_hydration(self):
+        return [self.node, self.parent, *[inst.__element__ for inst in self.instances.values() if inst.__element__ is not None]]
+
+    @classmethod
+    def from_blueprint(cls, component_instance, node, blueprint):
+        cloned_node = node.cloneNode(True)
+        
+        # Capture parent and the sibling that comes after the template node,
+        # then remove the template node entirely from the DOM.
+        # (Must capture before remove() since parentNode becomes None after.)
+        parent_node = node.parentNode
+        after_node = node.nextSibling
+        node.remove()
+        
+        instance = cls(
+            component_instance=component_instance, 
+            node=node,
+            clone=cloned_node,
+            parent=parent_node,
+            ast_trees=blueprint.ast_trees,
+            **blueprint.kwargs,
+        )
+        
+        instance._after_node = after_node
+        
+        return instance
 
 @dataclass
 class SlotBinding(NodeBinding):
@@ -1117,17 +1267,8 @@ def _eval_ast(node, context, allowed_builtins):
             left = _eval(node.left)
             right = _eval(node.right)
             op_type = type(node.op)
-            ops = {
-                ast.Add: operator.add,
-                ast.Sub: operator.sub,
-                ast.Mult: operator.mul,
-                ast.Div: operator.truediv,
-                ast.Mod: operator.mod,
-                ast.Pow: operator.pow,
-                ast.FloorDiv: operator.floordiv,
-            }
-            if op_type in ops:
-                return ops[op_type](left, right)
+            if op_type in _BINOP_MAP:
+                return _BINOP_MAP[op_type](left, right)
             raise ValueError(f"Unsupported binop {op_type}")
 
         elif isinstance(node, ast.Compare):
@@ -1135,24 +1276,13 @@ def _eval_ast(node, context, allowed_builtins):
             for op, comparator in zip(node.ops, node.comparators):
                 right = _eval(comparator)
                 op_type = type(op)
-                ops = {
-                    ast.Eq: operator.eq,
-                    ast.NotEq: operator.ne,
-                    ast.Lt: operator.lt,
-                    ast.LtE: operator.le,
-                    ast.Gt: operator.gt,
-                    ast.GtE: operator.ge,
-                    ast.Is: operator.is_,
-                    ast.IsNot: operator.is_not,
-                    ast.In: operator.contains,
-                }
                 if op_type == ast.NotIn:
                     res = not operator.contains(right, left)
-                elif op_type in ops:
+                elif op_type in _CMPOP_MAP:
                     if op_type == ast.In:
-                        res = ops[op_type](right, left)
+                        res = _CMPOP_MAP[op_type](right, left)
                     else:
-                        res = ops[op_type](left, right)
+                        res = _CMPOP_MAP[op_type](left, right)
                 else:
                     raise ValueError(f"Unsupported cmp {op_type}")
                 if not res: return False
@@ -1224,8 +1354,7 @@ def safe_format(template_str, context, allowed_builtins):
 def safe_format_with_stores(template_str, context, allowed_builtins, store_registry, component_instance_registry, ast_trees=None):
     
     result = ""
-    formatter = Formatter()
-    for literal_text, fname, format_spec, conversion in formatter.parse(template_str):
+    for literal_text, fname, format_spec, conversion in _FORMATTER.parse(template_str):
         result += literal_text
         if fname is not None:
             if fname in allowed_builtins:
@@ -1269,12 +1398,11 @@ def extract_dependencies(template_str, allowed_builtins=ALLOWED_BUILTINS):
     Extracts dependencies from a template string and returns a tuple:
     (list of dependencies, dictionary of desugared AST trees mapping fname -> tree).
     """
-    formatter = Formatter()
     deps = set()
     trees = {}
 
     try:
-        parsed_template = list(formatter.parse(template_str))
+        parsed_template = list(_FORMATTER.parse(template_str))
     except ValueError:
         # Handle cases where template_str is not a valid format string (e.g. CSS)
         return [], {}
@@ -1343,8 +1471,6 @@ def extract_dependencies(template_str, allowed_builtins=ALLOWED_BUILTINS):
 
 def _process_standard_attr_bindings(component_instance, element, attribute_names):
 
-    formatter = Formatter()
-
     bindings = []
     fields = []
 
@@ -1373,8 +1499,6 @@ def _process_standard_attr_bindings(component_instance, element, attribute_names
 
 
 def _process_self_attr_bindings(component_instance, attrs_dict:dict):
-
-    formatter = Formatter()
 
     bindings = []
     fields = []
@@ -1430,8 +1554,6 @@ def _process_event_attr_bindings(component_instance, element, attribute_names):
 def _process_text_bindings(component_instance, textnode):
     
     node = textnode
-
-    formatter = Formatter()
 
     bindings = []
     fields = []
@@ -1524,7 +1646,7 @@ def get_lis_indices(arr: list[int]) -> list[int]:
 
 __all__ = ['Binding', 'SelfBinding', 'TextBinding', 'AttributeBinding', \
             'ModelBinding', 'EventBinding', 'IfBinding', 'ChildBinding', \
-            'LoopBinding', 'KeyedLoopBinding', 'SmartKeyedLoopBinding', 'SlotBinding', \
+            'LoopBinding', 'SlotBinding', \
             'safe_eval', 'safe_format', 'safe_format_with_stores', \
             'extract_dependencies', 'Refrain', \
             '_process_standard_attr_bindings', '_process_event_attr_bindings', \

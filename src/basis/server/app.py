@@ -63,6 +63,7 @@ def initialize_pyscript_registry(app: FastAPI):
     files_dict["{DOMAIN}/basis/shared/router.py"] = "./basis/shared/router.py"
     files_dict["{DOMAIN}/basis/shared/db.py"] = "./basis/shared/db.py"
     files_dict["{DOMAIN}/basis/shared/basis_await.py"] = "./basis/shared/basis_await.py"
+    files_dict["{DOMAIN}/basis/shared/validation.py"] = "./basis/shared/validation.py"
 
     for i, m in enumerate(app._component_routes, 1):
         cdir_n_label = '{' + f'COMPONENTS_DIR_{i}' + '}'

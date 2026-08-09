@@ -60,7 +60,7 @@ class StoreProvider(Component):
     def __setattr__(self, key, value):
         old_value = getattr(self, key, None)
 
-        print(f"*****In __setattr__ for StoreProvider: {key}, {value}")
+        # print(f"*****In __setattr__ for StoreProvider: {key}, {value}")
         
         super().__setattr__(key, value)
         
@@ -128,7 +128,7 @@ class StoreProvider(Component):
     @client
     async def fetch_data(self):
 
-        print(f"*****In fetch_data for url: {self.url}")
+        # print(f"*****In fetch_data for url: {self.url}")
         
         if not self.url or not self.name:
             return
@@ -142,7 +142,7 @@ class StoreProvider(Component):
         store = Store._registry.get(self.name)
         if store:
             if getattr(store, "_hydrated_from_ssr", False) and getattr(store, "_ssr_url", None) == self.url:
-                print(f"[Basis] SSR Hydration Guard: skipping fetch for store {self.name}")
+                # print(f"[Basis] SSR Hydration Guard: skipping fetch for store {self.name}")
                 store._hydrated_from_ssr = False
                 self.__dict__["_last_fetched_url"] = self.url
                 return
@@ -155,7 +155,7 @@ class StoreProvider(Component):
             if store:
                 if self.target:
                     if isinstance(data, list):
-                        print("***Creating ReactiveCollection with target***")
+                        # print("***Creating ReactiveCollection with target***")
                         setattr(store, self.target, ReactiveCollection(data))
                     else:
                         setattr(store, self.target, data)

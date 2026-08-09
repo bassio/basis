@@ -74,6 +74,7 @@ class EffectNode(ReactiveNode):
 class DependencyGraph:
     def __init__(self):
         self.nodes: Dict[str, ReactiveNode] = {}
+        self.effects: List[EffectNode] = []
 
     def get_or_create_state(self, name: str) -> StateNode:
         if name not in self.nodes:
@@ -101,11 +102,17 @@ class DependencyGraph:
 
     def add_effect(self, name: str, update_func: Callable, dependencies: List[str]):
         node = EffectNode(name, update_func)
-        self.nodes[name] = node 
+        self.nodes[name] = node
+        self.effects.append(node)
         for dep_name in dependencies:
             dep_node = self.nodes.get(dep_name) or self.get_or_create_state(dep_name)
             node.add_dependency(dep_node)
         return node
+
+    def remove_effect(self, name: str):
+        node = self.nodes.pop(name, None)
+        if node and node in self.effects:
+            self.effects.remove(node)
 
     def trigger(self, name: str):
         if name in self.nodes:
@@ -126,11 +133,8 @@ class DependencyGraph:
 
     def process_updates(self):
         """Update all stale effect nodes."""
-        # In a more advanced DAG, we'd use topological order here.
-        # But since EffectNodes are the leaves and they pull from ComputedNodes,
-        # it's somewhat self-ordering.
-        for node in list(self.nodes.values()):
-            if isinstance(node, EffectNode) and node.stale:
+        for node in self.effects:
+            if node.stale:
                 node.update()
 
 class DependencyVisitor(ast.NodeVisitor):

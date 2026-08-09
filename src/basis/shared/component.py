@@ -87,4 +87,14 @@ def py_event(func):
     return wrapper
 
 
-__all__ = ['Component', 'IS_CLIENT', 'IS_SERVER', 'Basis', 'client', 'include_store', 'include_model', 'py_event']
+def scoped(func):
+    """
+    Decorator to mark a component's style method to be encapsulated
+    within a CSS @scope (...) { ... } block.
+    """
+    func.__scoped__ = True
+    return func
+
+
+__all__ = ['Component', 'IS_CLIENT', 'IS_SERVER', 'Basis', 'client', 'include_store', 'include_model', 'py_event', 'scoped']
+

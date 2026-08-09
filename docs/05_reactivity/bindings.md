@@ -8,7 +8,7 @@ This is the core difference from Virtual DOM frameworks, which re-evaluate the e
 
 ## Binding types
 
-The framework defines twelve specialized binding classes, each handling a distinct type of DOM relationship.
+The framework defines eleven specialized binding classes, each handling a distinct type of DOM relationship.
 
 ### `SelfBinding`
 
@@ -68,16 +68,11 @@ Handles child component instantiation. When Basis encounters a hyphenated tag (e
 
 ### `LoopBinding`
 
-Renders a list by repeating an HTML template for each item in a collection.
+High-performance loop binding using a Longest Increasing Subsequence (LIS) diffing algorithm to reconcile list items in-place. Supports optional `key` tracking by identity and falls back to index-based tracking when omitted.
 
-- **Template**: `<li for="todo" in="{todos}">{todo}</li>`
-
-### `KeyedLoopBinding` & `SmartKeyedLoopBinding`
-
-Enhanced loop bindings that use a `key` attribute to track list items by identity.
-
-- **Template**: `<li for="user" in="{users}" key="id">{user.name}</li>`
-- Instead of rebuilding DOM nodes when the list changes, these bindings move existing nodes to match the new order. This preserves input focus, CSS transition state, and scroll position during list reorders.
+- **Unkeyed Template**: `<li for="todo" in="{todos}">{todo}</li>`
+- **Keyed Template**: `<li for="user" in="{users}" key="id">{user.name}</li>`
+- Instead of tearing down DOM nodes when lists change, `LoopBinding` updates changed items in-place and moves existing nodes to match the new order. This preserves input focus, CSS transition state, and scroll position.
 
 ### `SlotBinding`
 

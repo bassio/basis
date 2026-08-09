@@ -50,7 +50,7 @@ class Tabs(Component):
 
     def style(self):
         """
-        :host {
+        ui-tabs {
             display: block;
             width: 100%;
         }
@@ -58,11 +58,15 @@ class Tabs(Component):
         .ui-tabs-container {
             display: flex;
             align-items: flex-end;
-            border-bottom: 1px solid var(--border-color, #495057);
+            border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
             width: 100%;
+            background: var(--bg-secondary, #181818);
+            padding: 4px 8px 0 8px;
+            gap: 2px;
             overflow-x: auto;
-            overflow-y: hidden;
-            scrollbar-width: none; /* Hide scrollbar for cleaner look */
+            overflow-y: visible;
+            position: relative;
+            z-index: 1;
         }
 
         .ui-tabs-container::-webkit-scrollbar {
@@ -72,25 +76,26 @@ class Tabs(Component):
         .tabs-slot-wrapper {
             display: flex;
             align-items: flex-end;
+            gap: 2px;
         }
 
         .add-tab-button {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            width: 28px;
-            height: 28px;
-            margin-bottom: 4px;
-            margin-left: 8px;
-            border-radius: 6px;
-            color: var(--text-secondary);
+            width: 26px;
+            height: 26px;
+            margin-bottom: 3px;
+            margin-left: 6px;
+            border-radius: 4px;
+            color: var(--text-secondary, #8e9297);
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.15s ease;
         }
 
         .add-tab-button:hover {
-            background: rgba(255, 255, 255, 0.05);
-            color: var(--text-primary);
+            background: var(--hover-bg, rgba(255, 255, 255, 0.06));
+            color: var(--text-primary, #dcddde);
         }
         """
 

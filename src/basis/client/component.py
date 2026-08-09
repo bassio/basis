@@ -10,7 +10,7 @@ except ImportError:
 
     PYSCRIPT = False
 
-from basis.shared.bindings import SelfBinding, ChildBinding, EventBinding, IfBinding, TextBinding, KeyedLoopBinding, LoopBinding
+from basis.shared.bindings import SelfBinding, ChildBinding, EventBinding, IfBinding, TextBinding, LoopBinding
 
 from basis.shared.base_component import BaseComponent
 from basis.shared.hmr import start_hmr
@@ -172,25 +172,25 @@ class Component(BaseComponent):
         event_bindings = [eb for eb in all_bindings if isinstance(eb, EventBinding)]
         if_bindings = [ib for ib in all_bindings if isinstance(ib, IfBinding)]
         text_bindings = [tb for tb in all_bindings if isinstance(tb, TextBinding)]
-        loop_bindings = [lb for lb in all_bindings if isinstance(lb, (LoopBinding, KeyedLoopBinding))]
+        loop_bindings = [lb for lb in all_bindings if isinstance(lb, LoopBinding)]
         child_bindings = [eb for eb in all_bindings if isinstance(eb, ChildBinding)]
         other_bindings = [ob for ob in all_bindings if ob not in event_bindings + if_bindings + text_bindings + loop_bindings + child_bindings]
 
 
-        print(f"DEBUG HYDRATION: initialize_ssr for {self.__class__.__name__}, bindings count: {len(all_bindings)}")
+        # print(f"DEBUG HYDRATION: initialize_ssr for {self.__class__.__name__}, bindings count: {len(all_bindings)}")
         for eb in event_bindings:
             
             eb_node_cid = eb.node.getAttribute("data-client-id")
             matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{eb_node_cid}']")
             if matched_ssr_node:
                 eb_node_new = matched_ssr_node
-                print(f"DEBUG HYDRATION: MATCHED event binding's {eb.event} ({eb.target_fn}) node: {eb_node_new.outerHTML}")
+                # print(f"DEBUG HYDRATION: MATCHED event binding's {eb.event} ({eb.target_fn}) node: {eb_node_new.outerHTML}")
             elif ssr_root.getAttribute("data-hydration-id") == eb_node_cid:
                 eb_node_new = ssr_root
-                print(f"DEBUG HYDRATION: MATCHED event binding root node's {eb.event} ({eb.target_fn})")
+                # print(f"DEBUG HYDRATION: MATCHED event binding root node's {eb.event} ({eb.target_fn})")
             else:
                 eb_node_new = eb.node #just keep the old node then !
-                print(f"DEBUG HYDRATION: DID NOT MATCH event binding's {eb.event} ({eb.target_fn}) node with client_id {eb_node_cid}")
+                # print(f"DEBUG HYDRATION: DID NOT MATCH event binding's {eb.event} ({eb.target_fn}) node with client_id {eb_node_cid}")
 
             eb.node = eb_node_new
 
@@ -252,15 +252,15 @@ class Component(BaseComponent):
                         if i == position_in_shadow:
                             tb.node = childNode
                         
-        print(f"DEBUG HYDRATION: loop_bindings count: {len(loop_bindings)}")
+        # print(f"DEBUG HYDRATION: loop_bindings count: {len(loop_bindings)}")
         for lb in loop_bindings:
             lb.parent
             lb_child_bindings = [cb for cb in child_bindings if cb.loop_binding is lb]
-            print(f"DEBUG HYDRATION: loop_binding {lb.collection}, child_bindings count: {len(lb_child_bindings)}")
+            # print(f"DEBUG HYDRATION: loop_binding {lb.collection}, child_bindings count: {len(lb_child_bindings)}")
             for cb in lb_child_bindings:
                 klb_child_node_cid = cb.node.getAttribute("data-client-id")
                 matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{klb_child_node_cid}']")
-                print(f"DEBUG HYDRATION:   child component {cb.childinstance.__class__.__name__}, client_id: {klb_child_node_cid}, matched_ssr_node: {matched_ssr_node is not None}")
+                # print(f"DEBUG HYDRATION:   child component {cb.childinstance.__class__.__name__}, client_id: {klb_child_node_cid}, matched_ssr_node: {matched_ssr_node is not None}")
                 if matched_ssr_node:
                     cb.node = matched_ssr_node
                     # CRITICAL: Attach the component instance for loop items

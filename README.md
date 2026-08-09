@@ -62,8 +62,8 @@ def full_name(self):
     return f"{self.first_name} {self.last_name}"
 ```
 
-### 3. Smart Keyed Reconciliation
-The `SmartKeyedLoopBinding` uses a Longest Increasing Subsequence (LIS) algorithm to dynamically reorder and update DOM list items in-place. This preserves browser input focus, scroll position, and CSS animations during list sorting or updates.
+### 3. Smart Loop Reconciliation
+The `LoopBinding` uses a Longest Increasing Subsequence (LIS) algorithm to dynamically reorder and update DOM list items in-place. It supports explicit keys (`key="id"`) and falls back to index-based tracking when omitted, preserving browser input focus, scroll position, and CSS animations during list updates.
 
 ### 4. Cross-Boundary References
 The template braces syntax supports special prefixes to bind reactive state across boundaries:

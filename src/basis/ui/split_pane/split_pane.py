@@ -93,7 +93,7 @@ class SplitPane(Component):
 
     def style(self):
         """
-        :host {
+        ui-split-pane, :host {
             display: flex;
             width: 100%;
             height: 100%;
@@ -101,11 +101,11 @@ class SplitPane(Component):
             background-color: var(--bg-primary, #ffffff);
         }
 
-        :host([direction="vertical"]) {
+        ui-split-pane[direction="vertical"], :host([direction="vertical"]) {
             flex-direction: column;
         }
 
-        :host([direction="horizontal"]) {
+        ui-split-pane[direction="horizontal"], :host([direction="horizontal"]) {
             flex-direction: row;
         }
         """

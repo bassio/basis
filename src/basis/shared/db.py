@@ -21,11 +21,12 @@ else:
         """
         Translates SQLModel.Field into a standard dataclass field.
         Safely strips out server-side keys like primary_key, foreign_key, index, etc.
+        Keeps validation and constraint metadata.
         """
         if "default_factory" in kwargs:
-            return dataclasses.field(default_factory=kwargs["default_factory"])
+            return dataclasses.field(default_factory=kwargs["default_factory"], metadata=kwargs)
         
-        return dataclasses.field(default=default)
+        return dataclasses.field(default=default, metadata=kwargs)
 
     def Relationship(*args: Any, **kwargs: Any) -> Any:
         """

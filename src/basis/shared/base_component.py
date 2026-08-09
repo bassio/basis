@@ -1,12 +1,11 @@
 import inspect
 from pathlib import Path
-from string import Formatter
 import weakref
 
 from basis.shared.bindings import BindingBlueprint, Binding, SelfBinding, TextBinding, \
     AttributeBinding, SelfAttributeBinding, TextContentAttributeBinding, ModelBinding, EventBinding, IfBinding, \
-    ChildBinding, LoopBinding, KeyedLoopBinding, SmartKeyedLoopBinding, SlotBinding, ComponentSubscription, \
-    desugar_expression, safe_eval, safe_format, safe_format_with_stores, \
+    ChildBinding, LoopBinding, SlotBinding, ComponentSubscription, \
+    FormModelBinding, desugar_expression, safe_eval, safe_format, safe_format_with_stores, \
     ALLOWED_BUILTINS, Refrain, \
     _process_self_attr_bindings
 from basis.shared.bindings import extract_dependencies
@@ -82,33 +81,73 @@ class BaseComponent(object):
 
     @classmethod
     def _get_template_string(cls) -> str:
+        templatestr = ""
         if hasattr(cls, 'template'):
-            if inspect.isfunction(cls.template):
-                templatestr = cls.template.__doc__
-            elif isinstance(cls.template, str):
-                templatestr = cls.template
-        elif cls.__doc__:
-            templatestr = cls.__doc__
-        elif (html_file:=cls.__file__().with_suffix(".html").with_stem(cls.__file__().parent.name)).exists():
-            with open(html_file, "r") as htm:
-                templatestr = htm.read()
-        else:
-            return ""
+            val = getattr(cls, 'template')
+            if isinstance(val, str):
+                templatestr = val
+            elif isinstance(inspect.getattr_static(cls, 'template', None), classmethod):
+                if val.__doc__ is not None and val.__doc__.strip():
+                    templatestr = val.__doc__
+                else:
+                    templatestr = val()
+            elif inspect.isfunction(val):
+                if val.__doc__ is not None:
+                    templatestr = val.__doc__
+        
+        if not templatestr:
+            if cls.__doc__:
+                templatestr = cls.__doc__
+            elif (html_file:=cls.__file__().with_suffix(".html").with_stem(cls.__file__().parent.name)).exists():
+                with open(html_file, "r") as htm:
+                    templatestr = htm.read()
+            else:
+                templatestr = ""
         
         return templatestr
     
     @classmethod
     def _get_style_string(cls):
         style_content = ""
-        if isinstance(cls.style, str):
-            style_content = cls.style
-        elif inspect.isfunction(cls.style):
-            if cls.style.__doc__ is not None:
-                style_content = cls.style.__doc__
-            elif isinstance(cls.style, classmethod):
-                style_content = cls.style()
+        if hasattr(cls, 'style'):
+            val = getattr(cls, 'style')
+            if isinstance(val, str):
+                style_content = val
+            elif isinstance(inspect.getattr_static(cls, 'style', None), classmethod):
+                if val.__doc__ is not None and val.__doc__.strip():
+                    style_content = val.__doc__
+                else:
+                    style_content = val()
+            elif inspect.isfunction(val):
+                if val.__doc__ is not None:
+                    style_content = val.__doc__
+        
+        # Check if the style needs to be scoped
+        is_scoped = False
+        try:
+            desc = inspect.getattr_static(cls, 'style', None)
+            if getattr(desc, '__scoped__', False):
+                is_scoped = True
+        except AttributeError:
+            pass
+            
+        if not is_scoped:
+            try:
+                val = getattr(cls, 'style', None)
+                if val is not None:
+                    if inspect.ismethod(val):
+                        val = val.__func__
+                    if getattr(val, '__scoped__', False):
+                        is_scoped = True
+            except AttributeError:
+                pass
+
+        if is_scoped and style_content:
+            tag = getattr(cls, '__tag__', cls.__name__)
+            style_content = f"@scope ({tag}) {{\n{style_content}\n}}"
         
         return style_content
+
 
     @classmethod
     def _set_style_string(cls):
@@ -183,6 +222,7 @@ class BaseComponent(object):
         self_element = template.firstElementChild
         self.add_binding(SelfBinding(component_instance=self, node=self_element))
         setattr(self_element, '__basis_instance__', self)
+        self.__dict__['_element'] = self_element
         
     #
     def _get_instance_nodes(self):
@@ -266,11 +306,14 @@ class BaseComponent(object):
         if sb:
             sb.node = node
         else:
-            self.__bindings__.append(SelfBinding(component_instance=self, node=node))
+            self.add_binding(SelfBinding(component_instance=self, node=node))
+        self.__dict__['_element'] = node
 
     def add_binding(self, binding):
 
         self.__dict__['__bindings__'].append(binding)
+        if isinstance(binding, SelfBinding):
+            self.__dict__['_element'] = binding.node
 
         if hasattr(binding, 'fields'):
             # Existing flat dependency tracking (keeping for compatibility for now, but will eventually remove)
@@ -293,6 +336,9 @@ class BaseComponent(object):
             self.__dict__['__bindings__'].remove(binding)
         except ValueError:
             pass
+        if hasattr(binding, 'update'):
+            effect_name = f"effect_{id(binding)}"
+            self._dag.remove_effect(effect_name)
         if hasattr(binding, 'fields'):
             for field in binding.fields:
                 if field in self._deps and binding in self._deps[field]:
@@ -364,7 +410,6 @@ class BaseComponent(object):
     def _analyze_node(cls, node, node_index):
 
         blueprints = []
-        formatter = Formatter()
 
         if hasattr(node, 'getAttributeNames'): # ELEMENT node
             element = node
@@ -402,8 +447,7 @@ class BaseComponent(object):
                 for_attr_value = element.getAttribute('for')
                 fieldnames, trees_dict = extract_dependencies(element.getAttribute('in'), ALLOWED_BUILTINS)
                 
-                #binding_class = KeyedLoopBinding if 'key' in non_standard_attrs else LoopBinding
-                binding_class = SmartKeyedLoopBinding if 'key' in non_standard_attrs else LoopBinding
+                binding_class = LoopBinding
                 
                 kwargs = {'item': for_attr_value, 'collection': inlist_attr_value}
                 if 'key' in non_standard_attrs:
@@ -421,28 +465,39 @@ class BaseComponent(object):
                 bind_attr_value = element.getAttribute('bind')
                 fieldnames, trees_dict = extract_dependencies(bind_attr_value, ALLOWED_BUILTINS)
                 if len(fieldnames) == 1:
-                    field = fieldnames[0]
-                    blueprints.append(BindingBlueprint(
-                        binding_class=ModelBinding,
-                        node_index=node_index,
-                        kwargs={'field': field},
-                        ast_trees=trees_dict
-                    ))
-                    # Also need the event binding for the input
                     tag_name = str.lower(element.tagName)
-                    input_type = element.getAttribute('type') if element.hasAttribute('type') else 'text'
-                    if tag_name == 'input' and input_type in ['checkbox', 'radio']:
-                        bound_event = 'change'
-                    elif tag_name == 'select':
-                        bound_event = 'change'
+                    if tag_name == 'form':
+                        blueprints.append(BindingBlueprint(
+                            binding_class=FormModelBinding,
+                            node_index=node_index,
+                            kwargs={
+                                'target_expression': fieldnames[0],
+                                'validate_on': element.getAttribute('validate-on') or 'input'
+                            },
+                            ast_trees=trees_dict
+                        ))
                     else:
-                        bound_event = 'input'
-                    
-                    blueprints.append(BindingBlueprint(
-                        binding_class=EventBinding,
-                        node_index=node_index,
-                        kwargs={'event': f"on{bound_event}", 'target_fn': 'bind_handler'}
-                    ))
+                        field = fieldnames[0]
+                        blueprints.append(BindingBlueprint(
+                            binding_class=ModelBinding,
+                            node_index=node_index,
+                            kwargs={'field': field},
+                            ast_trees=trees_dict
+                        ))
+                        # Also need the event binding for the input
+                        input_type = element.getAttribute('type') if element.hasAttribute('type') else 'text'
+                        if tag_name == 'input' and input_type in ['checkbox', 'radio']:
+                            bound_event = 'change'
+                        elif tag_name == 'select':
+                            bound_event = 'change'
+                        else:
+                            bound_event = 'input'
+                        
+                        blueprints.append(BindingBlueprint(
+                            binding_class=EventBinding,
+                            node_index=node_index,
+                            kwargs={'event': f"on{bound_event}", 'target_fn': 'bind_handler'}
+                        ))
 
             # Process text-content binding
             if 'text-content' in non_standard_attrs and not is_loop_template:
@@ -548,7 +603,7 @@ class BaseComponent(object):
         return blueprints
 
     def __init_bindings__(self):
-        print(f"__init_bindings__ of {self.__class__}")
+        # print(f"__init_bindings__ of {self.__class__}")
         
         #print("__binding_blueprints__", self.__class__.__binding_blueprints__)
         
@@ -586,14 +641,14 @@ class BaseComponent(object):
     def __init_fields__(self):
         cls = self.__class__
         
-        print(f"__init_fields__ : {cls} fields: ", self.__fields__)
+        # print(f"__init_fields__ : {cls} fields: ", self.__fields__)
 
         fields_on_class = [attr for attr in self.__fields__ \
                                 if (attr not in self.__dict__) and \
                                 (attr in cls.__dict__) \
                                 and (not inspect.isfunction(getattr(cls, attr)))]
         
-        print(f"fields_on_class of {cls} : ", fields_on_class)
+        # print(f"fields_on_class of {cls} : ", fields_on_class)
 
         # Collect dependencies from computed properties
         for name, member in inspect.getmembers(cls):
@@ -607,7 +662,7 @@ class BaseComponent(object):
         with self.refrain() as refrained:
 
             for field in fields_on_class:
-                print(f"setting attr from class {self.__class__.__name__} on the instance: {field}, with value {cls.__dict__[field]}")
+                # print(f"setting attr from class {self.__class__.__name__} on the instance: {field}, with value {cls.__dict__[field]}")
                 setattr(refrained, field, cls.__dict__[field])
 
             for field in self.__fields__:
@@ -686,8 +741,11 @@ class BaseComponent(object):
 
     @property
     def __element__(self):
+        if '_element' in self.__dict__:
+            return self.__dict__['_element']
         for binding in self.__bindings__:
             if isinstance(binding, SelfBinding):
+                self.__dict__['_element'] = binding.node
                 return binding.node
         return None
 
@@ -750,25 +808,33 @@ class BaseComponent(object):
 
 
     def __getattribute__(self, name):
-        try:
-            if name.startswith("$"):
-                store_name, attr_name = name.strip("$").split(".")
-                val = getattr(self.__class__.S[store_name], attr_name, None)
-                return val
-            elif name.startswith("#"):
-                component_name, attr_name = name.strip("#").split(".")
-                val = getattr(self.__class__._instance_registry[component_name], attr_name, None)
-                return val
-            else:
-                return super().__getattribute__(name)
-
-        except Exception as e:
-            # print(f"Error in __getattribute__ for {name}: {e}")
-            return super().__getattribute__(name)
+        if name and len(name) > 1:
+            first_char = name[0]
+            if first_char == '$':
+                try:
+                    target = name[1:]
+                    if "." in target:
+                        store_name, attr_name = target.split(".", 1)
+                        return getattr(self.__class__.S[store_name], attr_name, None)
+                    else:
+                        return self.__class__.S[target]
+                except Exception:
+                    pass
+            elif first_char == '#':
+                try:
+                    target = name[1:]
+                    if "." in target:
+                        component_name, attr_name = target.split(".", 1)
+                        return getattr(self.__class__._instance_registry[component_name], attr_name, None)
+                    else:
+                        return self.__class__._instance_registry[target]
+                except Exception:
+                    pass
+        return super().__getattribute__(name)
 
     def __setattr__(self, name, value):
 
-        print(f"inside __setattr__ of {self} for the attr {name}")
+        # print(f"inside __setattr__ of {self} for the attr {name}")
 
         if name.startswith("$"):
             store_name, attr_name = name.strip("$").split(".")
@@ -779,7 +845,7 @@ class BaseComponent(object):
             except KeyError:
                 old_value = None
             
-            print(f"calling __setattr__ on {store_instance} called for {attr_name}, old value {old_value}, new value {value}")
+            # print(f"calling __setattr__ on {store_instance} called for {attr_name}, old value {old_value}, new value {value}")
             setattr(store_instance, attr_name, value)
 
         elif name.startswith("#"):
@@ -792,30 +858,28 @@ class BaseComponent(object):
                 old_value = None
             
             setattr(component_instance, attr_name, value)
-            print(f"calling __setattr__ on {component_instance} called for {attr_name}, old value {old_value}, new value {value}")
+            # print(f"calling __setattr__ on {component_instance} called for {attr_name}, old value {old_value}, new value {value}")
             #the component_instance should then react from its instance !
 
         else:
-            try:
-                old_value = self.__dict__[name]
-                print(f"old_value of {name}", old_value)
-            except KeyError: #setting a new attribute
-                old_value = None
-
-            self.__dict__[name] = value
-
-            #check for change
-            if value != old_value:
-                print(f"__setattr__ on {self} called for {name}, old value {old_value}, new value {value}")
-                #print("and now reacting ..")
-                #self.react([name])
-                print("and now reacting via DAG ..")
+            if name not in self.__dict__:
+                # Initial assignment of a new attribute -> always trigger DAG
+                self.__dict__[name] = value
                 self._dag.trigger(name)
+            else:
+                # Updating an existing attribute -> fast change detection
+                old_value = self.__dict__[name]
+                self.__dict__[name] = value
+                
+                if value is not old_value:
+                    if isinstance(value, (list, dict, set, tuple)) \
+                    or value != old_value:
+                        self._dag.trigger(name)
     
     @classmethod
     def mount(cls, container, replace=False, **attributes):
         
-        print(f"mount: starting mounting {cls}, with attributes: {attributes}")
+        # print(f"mount: starting mounting {cls}, with attributes: {attributes}")
 
         container = container
 
@@ -840,7 +904,7 @@ class BaseComponent(object):
                                                           childinstance=child_instance,
                                                           ))
 
-        print(f"mount: finished mounting {cls}")
+        # print(f"mount: finished mounting {cls}")
 
         return new_instance
 
@@ -1049,7 +1113,7 @@ class BaseComponent(object):
         if isinstance(names, str):
             raise Exception("Please pass only a list of strings to react().")
 
-        print(f"In react({names}) of {self}")
+        # print(f"In react({names}) of {self}")
 
         # Integration with DAG: trigger the graph
         self._dag.trigger_batch(names)

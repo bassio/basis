@@ -3,12 +3,25 @@ import json
 import sys
 from typing import Any
 
-IS_CLIENT = "pyscript" in sys.modules
+IS_CLIENT = "pyscript" in sys.modules or "pyodide" in sys.modules
 IS_SERVER = not IS_CLIENT
 
+def _is_server():
+    return not ("pyscript" in sys.modules or "pyodide" in sys.modules)
+
+def _get_pyfetch():
+    if "pyodide.http" in sys.modules:
+        return getattr(sys.modules["pyodide.http"], "pyfetch", None)
+    return pyfetch
+
 if IS_CLIENT:
-    from pyscript import WebSocket, document
-    from pyodide.http import pyfetch
+    try:
+        from pyscript import WebSocket, document
+        from pyodide.http import pyfetch
+    except ImportError:
+        WebSocket = None
+        document = None
+        pyfetch = None
 else:
     WebSocket = None
     document = None
@@ -90,7 +103,7 @@ class Store:
                 try:
                     state_data = json.loads(initial_state_script.textContent)
                     if name in state_data:
-                        print(f"HYDRATING store {name} FROM basis-initial-state")
+                        # print(f"HYDRATING store {name} FROM basis-initial-state")
                         for k, v in state_data[name].items():
                             setattr(self, k, v)
                         
@@ -271,7 +284,7 @@ class ModelStore(Store):
 
     async def fetch_all(self, **kwargs) -> list:
         
-        if IS_SERVER:
+        if _is_server():
             from basis.shared.context import db_session_var
             session = db_session_var.get()
             if session:
@@ -300,7 +313,8 @@ class ModelStore(Store):
         self.loading = True
 
         try:
-            response = await pyfetch(resolved_url)
+            pf = _get_pyfetch()
+            response = await pf(resolved_url)
             if response.ok:
                 data = await response.json()
                 hydrated = [self.model.model_validate(item) if hasattr(self.model, "model_validate") else item for item in data]
@@ -543,8 +557,8 @@ class ModelStore(Store):
             else:
                 self.error = f"Delete failed: {response.status}"
                 self.items = old_items
+                return False
         except Exception as e:
             self.error = str(e)
             self.items = old_items
             return False
-        return False

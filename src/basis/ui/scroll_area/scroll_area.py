@@ -7,12 +7,13 @@ class ScrollArea(Component):
 
     def style(self):
         """
-        :host {
+        ui-scroll-area, :host {
             display: block;
             width: 100%;
             height: 100%;
             overflow: hidden;
             position: relative;
+            background: var(--bg-primary, #1e1e1e);
         }
 
         .ui-scroll-area-viewport {
@@ -20,22 +21,28 @@ class ScrollArea(Component):
             height: 100%;
             padding: 0;
             margin: 0;
+            background: var(--bg-primary, #1e1e1e);
             scrollbar-width: thin;
             scrollbar-color: var(--scrollbar-thumb, #888) transparent;
             transition: scrollbar-color 0.3s ease;
         }
 
         /* Viewport Overflow handling */
-        :host([orientation="vertical"]) .ui-scroll-area-viewport {
+        ui-scroll-area[orientation="vertical"] .ui-scroll-area-viewport,
+        ui-scroll-area:not([orientation]) .ui-scroll-area-viewport,
+        :host([orientation="vertical"]) .ui-scroll-area-viewport,
+        :host:not([orientation]) .ui-scroll-area-viewport {
             overflow-y: auto;
             overflow-x: hidden;
         }
 
+        ui-scroll-area[orientation="horizontal"] .ui-scroll-area-viewport,
         :host([orientation="horizontal"]) .ui-scroll-area-viewport {
             overflow-x: auto;
             overflow-y: hidden;
         }
 
+        ui-scroll-area[orientation="both"] .ui-scroll-area-viewport,
         :host([orientation="both"]) .ui-scroll-area-viewport {
             overflow: auto;
         }
@@ -62,15 +69,18 @@ class ScrollArea(Component):
         }
 
         /* Visibility: hover mode */
+        ui-scroll-area[visibility="hover"],
         :host([visibility="hover"]) {
             --scrollbar-thumb: transparent;
         }
 
+        ui-scroll-area[visibility="hover"]:hover,
         :host([visibility="hover"]:hover) {
             --scrollbar-thumb: var(--border-color, #dee2e6);
         }
 
         /* Visibility: always mode */
+        ui-scroll-area[visibility="always"],
         :host([visibility="always"]) {
             --scrollbar-thumb: var(--border-color, #dee2e6);
         }

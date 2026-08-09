@@ -49,7 +49,17 @@ class Tab(Component):
 
     def style(self):
         """
-        :host {
+        ui-tab {
+            display: inline-block;
+            position: relative;
+            z-index: 1;
+        }
+
+        ui-tab:has(.ui-tab-input:checked) {
+            z-index: 10;
+        }
+
+        .ui-tab-wrapper {
             display: inline-block;
             position: relative;
         }
@@ -59,21 +69,21 @@ class Tab(Component):
             align-items: center;
             justify-content: center;
             height: 32px;
-            padding: 0 12px;
+            padding: 0 14px;
             cursor: pointer;
             position: relative;
             background: transparent;
             font-size: 13px;
-            font-weight: 500;
-            color: var(--text-secondary, #868b94);
+            font-weight: 400;
+            color: var(--text-secondary);
             border: 1px solid transparent;
             border-bottom: none;
-            margin-bottom: -1px;
-            transition: all 0.2s ease;
+            transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
             white-space: nowrap;
             border-radius: 6px 6px 0 0;
             user-select: none;
-            gap: 8px;
+            gap: 6px;
+            z-index: 1;
         }
 
         .ui-tab-input {
@@ -84,23 +94,33 @@ class Tab(Component):
         }
 
         .ui-tab-container:hover {
-            color: var(--text-primary, #ffffff);
-            background: rgba(255,255,255,0.03);
+            color: var(--text-primary);
+            background: var(--hover-bg, rgba(255, 255, 255, 0.04));
         }
 
         .ui-tab-input:checked + .ui-tab-container {
             background-color: var(--bg-primary, #1e1e1e);
-            border-color: var(--border-color, #495057);
-            border-bottom: 1px solid var(--bg-primary, #1e1e1e); 
-            color: var(--text-primary, #ffffff);
+            border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+            border-bottom: 1px solid var(--bg-primary, #1e1e1e);
+            border-radius: 6px 6px 1px 1px;
+            color: var(--text-primary);
+            font-weight: 500;
             z-index: 10;
+            position: relative;
+            box-shadow: 0 2px 0 0 var(--bg-primary, #1e1e1e);
         }
 
         .tab-icon {
             display: flex;
             align-items: center;
             justify-content: center;
+            font-size: 13px;
             opacity: 0.7;
+        }
+
+        .ui-tab-input:checked + .ui-tab-container .tab-icon {
+            opacity: 0.95;
+            color: var(--accent-purple, #7f6df2);
         }
 
         .tab-close {
@@ -109,22 +129,24 @@ class Tab(Component):
             justify-content: center;
             width: 16px;
             height: 16px;
-            border-radius: 4px;
+            border-radius: 3px;
+            margin-left: 2px;
             margin-right: -4px;
-            opacity: 0.3; /* Increased from 0 to 0.3 for better visibility */
-            transition: all 0.2s;
+            opacity: 0.3;
+            transition: all 0.15s ease;
         }
 
         .ui-tab-container:hover .tab-close {
-            opacity: 0.8;
+            opacity: 0.7;
         }
 
         .tab-close:hover {
             opacity: 1 !important;
-            background: rgba(255,255,255,0.2);
+            background: rgba(255, 255, 255, 0.12);
+            color: var(--text-primary);
         }
 
-        :host(.dragging) {
+        ui-tab.dragging {
             opacity: 0.5;
         }
         """
@@ -158,8 +180,13 @@ class TabContent(Component):
     
     def style(self):
         """
+        ui-tab-content {
+            display: block;
+            width: 100%;
+        }
         .ui-tab-content {
-            display: none; // hide by default
+            display: block;
+            width: 100%;
         }
         """
         
@@ -175,5 +202,6 @@ class TabContent(Component):
     def template(self):
         """
         <div class="ui-tab-content" content-for="{value}" >
+            <slot></slot>
         </div>
         """

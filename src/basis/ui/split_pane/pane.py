@@ -8,7 +8,7 @@ class SplitPaneItem(Component):
 
     def style(self):
         """
-        :host {
+        ui-pane {
             display: flex;
             flex-direction: column;
             overflow: hidden;
@@ -16,14 +16,22 @@ class SplitPaneItem(Component):
             min-height: var(--pane-min-size, 0px);
             max-width: var(--pane-max-size, none);
             max-height: var(--pane-max-size, none);
-            flex: var(--pane-flex, 1 1 0%);
+            flex: var(--pane-flex, 1 1 auto);
+            box-sizing: border-box;
+        }
+
+        ui-pane:not([initial-size]), ui-pane[initial-size="auto"] {
+            flex: 1 1 0%;
         }
         
         .ui-pane-content {
             flex: 1;
-            overflow: auto;
+            overflow: hidden;
             display: flex;
             flex-direction: column;
+            min-height: 0;
+            width: 100%;
+            height: 100%;
         }
         """
 
