@@ -1,3 +1,4 @@
+from basis.shared.reactive import computed
 from basis.shared.component import Component
 
 
@@ -25,6 +26,25 @@ class Select(Component):
     size        = "md"
     helper      = ""
     error       = ""
+    
+
+    @computed(dependencies=["options", "value"])
+    def normalized_options(self):
+        opts = self.options or []
+        res = []
+        for item in opts:
+            if isinstance(item, dict):
+                val = str(item.get("value", ""))
+                lbl = str(item.get("label", ""))
+            else:
+                val = str(item)
+                lbl = str(item)
+            res.append({
+                "value": val,
+                "label": lbl,
+                "selected": val == str(self.value)
+            })
+        return res
 
     def on_change(self, event):
         self.value = event.target.value
@@ -141,10 +161,11 @@ class Select(Component):
                     onchange="{on_change}">
                     <option value="" disabled="disabled" selected="{not value}">{placeholder}</option>
                     <option
-                        for:each="{options}"
-                        value="{item['value'] if isinstance(item, dict) else item}"
-                        selected="{(item['value'] if isinstance(item, dict) else item) == value}">
-                        {item['label'] if isinstance(item, dict) else item}
+                        for="opt"
+                        in="{$normalized_options}"
+                        key="value"
+                        value="{opt.value}">
+                        {opt.label}
                     </option>
                 </select>
                 <!-- Custom chevron -->

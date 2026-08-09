@@ -1,5 +1,5 @@
 from basis.shared.component import Component
-from basis.shared.dag import computed
+from basis.shared.reactive import computed
 
 class Breadcrumbs(Component):
     """
@@ -18,19 +18,22 @@ class Breadcrumbs(Component):
     def processed_items(self):
         raw_items = self.items or []
         length = len(raw_items)
-        return [
-            {
-                "label": item.get("label", ""),
-                "href": item.get("href", ""),
+        result = []
+        for idx, item in enumerate(raw_items):
+            label = item.get("label", "") if isinstance(item, dict) else str(item)
+            href = item.get("href", "") if isinstance(item, dict) else ""
+            result.append({
+                "label": label,
+                "href": href,
                 "is_last": idx == length - 1
-            }
-            for idx, item in enumerate(raw_items)
-        ]
+            })
+        return result
+
 
     def style(self):
         """
         ui-breadcrumbs {
-            display: block;
+            display: inline-block;
         }
 
         .ui-breadcrumbs-list {
@@ -40,39 +43,48 @@ class Breadcrumbs(Component):
             list-style: none;
             padding: 0;
             margin: 0;
-            gap: 0.35rem;
-            font-size: 0.85rem;
-            color: var(--text-secondary, #6c757d);
+            gap: 0.5rem;
+            font-size: 0.75rem;
+            font-family: var(--font-mono, monospace);
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-muted, #767c90);
         }
 
         .ui-breadcrumbs-item {
             display: inline-flex;
             align-items: center;
-            gap: 0.35rem;
+            gap: 0.5rem;
         }
 
         .ui-breadcrumbs-link a {
-            color: var(--text-secondary, #6c757d);
+            color: var(--text-muted, #767c90);
             text-decoration: none;
             font-weight: 500;
             transition: color 0.15s ease;
         }
 
         .ui-breadcrumbs-link a:hover {
-            color: var(--accent-color, #007acc);
+            color: var(--accent-color, #7f6df2);
         }
 
         .ui-breadcrumbs-text {
-            color: var(--text-primary, #212529);
-            font-weight: 600;
+            color: var(--text-secondary, #a9afc0);
+            font-weight: 500;
+        }
+
+        .ui-breadcrumbs-item:last-child .ui-breadcrumbs-text {
+            color: var(--text-muted, #767c90);
+            opacity: 0.8;
         }
 
         .ui-breadcrumbs-separator {
-            color: var(--border-color, #dee2e6);
+            color: var(--border-color, #3a4256);
             display: inline-flex;
             align-items: center;
             user-select: none;
             font-size: 0.75rem;
+            opacity: 0.6;
         }
         """
 
@@ -80,7 +92,7 @@ class Breadcrumbs(Component):
         """
         <nav class="ui-breadcrumbs" aria-label="Breadcrumb">
             <ol class="ui-breadcrumbs-list">
-                <li class="ui-breadcrumbs-item" for="item" in="{processed_items()}" key="label">
+                <li class="ui-breadcrumbs-item" for="item" in="{processed_items}" key="label">
                     <basis-link class="ui-breadcrumbs-link" href="{item['href']}" if="{item['href'] and not item['is_last']}">
                         {item['label']}
                     </basis-link>

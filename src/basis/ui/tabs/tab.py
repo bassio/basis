@@ -5,7 +5,7 @@ if IS_CLIENT:
 else:
     window = ffi = None
 
-from basis.shared.dag import computed
+from basis.shared.reactive import computed
 
 class Tab(Component):
     __tag__ = "ui-tab"

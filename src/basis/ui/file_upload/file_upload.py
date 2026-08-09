@@ -5,7 +5,7 @@ import os
 import uuid
 from pathlib import Path
 from basis.shared.component import Component, IS_CLIENT
-from basis.shared.dag import computed
+from basis.shared.reactive import computed
 from basis.shared.actions import server_action
 
 if IS_CLIENT:

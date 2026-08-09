@@ -76,9 +76,6 @@ class Toast(Component):
             align-items: flex-start;
             gap: 0.85rem;
             padding: 1rem 1.25rem;
-            background: var(--glass-bg, rgba(255, 255, 255, 0.85));
-            backdrop-filter: blur(var(--glass-blur, 12px));
-            -webkit-backdrop-filter: blur(var(--glass-blur, 12px));
             border: 1px solid var(--border-color, rgba(0,0,0,0.1));
             border-radius: var(--radius-lg, 0.75rem);
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);

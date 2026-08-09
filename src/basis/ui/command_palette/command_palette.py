@@ -1,5 +1,5 @@
 from basis.shared.component import Component, IS_CLIENT
-from basis.shared.dag import computed
+from basis.shared.reactive import computed
 
 if IS_CLIENT:
     from pyscript import window, ffi
@@ -135,8 +135,6 @@ class CommandPalette(Component):
             position: fixed;
             inset: 0;
             background: rgba(0, 0, 0, 0.4);
-            backdrop-filter: blur(var(--glass-blur, 8px));
-            -webkit-backdrop-filter: blur(var(--glass-blur, 8px));
             display: flex;
             justify-content: center;
             padding-top: 15vh;
@@ -152,7 +150,6 @@ class CommandPalette(Component):
         }
 
         .ui-palette-dialog {
-            background: var(--glass-bg, var(--bg-primary, #ffffff));
             border: 1px solid var(--border-color, #dee2e6);
             border-radius: var(--radius-lg, 0.75rem);
             box-shadow: var(--shadow-md, 0 10px 25px -5px rgba(0,0,0,0.15));

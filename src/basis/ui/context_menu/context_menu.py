@@ -1,5 +1,5 @@
 from basis.shared.component import Component, IS_CLIENT
-from basis.shared.dag import computed
+from basis.shared.reactive import computed
 
 if IS_CLIENT:
     from pyscript import window, ffi
@@ -78,7 +78,6 @@ class ContextMenu(Component):
         .ui-context-menu {
             position: fixed;
             z-index: 3000;
-            background: var(--glass-bg, var(--bg-primary, #ffffff));
             border: 1px solid var(--border-color, #dee2e6);
             border-radius: var(--radius-md, 0.375rem);
             box-shadow: var(--shadow-md, 0 10px 15px -3px rgba(0, 0, 0, 0.1));

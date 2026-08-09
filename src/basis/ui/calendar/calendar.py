@@ -1,5 +1,5 @@
 from basis.shared.component import Component
-from basis.shared.dag import computed
+from basis.shared.reactive import computed
 import datetime
 import calendar
 

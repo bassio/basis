@@ -8,6 +8,8 @@ from string import Formatter
 import sys
 from typing import Any
 
+# Refrain has moved to reactive.py — re-export for backward compatibility
+from basis.shared.reactive import Refrain
 from basis.shared.validation import validate_field, validate_model, ValidationError
 
 
@@ -1574,34 +1576,6 @@ def _process_text_bindings(component_instance, textnode):
         fields += fieldnames
 
     return bindings, fields
-
-
-class Refrain(object):
-    def __init__(self, component):
-        self.__dict__['inner_dict'] = {}
-        self.__dict__['component'] = component
-        self.__dict__['forced_reactivity'] = set()
-
-    def __enter__(self):
-        return self
-    
-    def __setattr__(self, name, value):
-        self.inner_dict[name] = value
-
-    def force_react(self, name):
-        self.forced_reactivity.add(name)
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        inner_dict = self.__dict__['inner_dict']
-        inner_dict_keys = list(inner_dict.keys())
-        for k, v in inner_dict.items():
-            self.component.__dict__[k] = v
-        
-        # Collect all fields that need to react
-        fields_to_react = inner_dict_keys + [k for k in self.forced_reactivity if k not in inner_dict_keys]
-
-        if fields_to_react:
-            self.component._dag.trigger_batch(fields_to_react)
 
 
 

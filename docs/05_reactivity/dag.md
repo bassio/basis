@@ -48,7 +48,7 @@ graph TD
 The `@computed` decorator defines a property whose value is derived from other state. Basis automatically detects which state variables the function reads by parsing its source code with Python's `ast` module:
 
 ```python
-from basis.shared.dag import computed
+from basis.shared.reactive import computed
 from basis.shared.component import Component
 
 class Cart(Component):

@@ -18,7 +18,7 @@ When you update `self.count`, the DAG triggers all dependent nodes.
 You can create derived state using the `@computed` decorator. Basis automatically tracks dependencies based on the attributes you access within the function.
 
 ```python
-from basis.shared.dag import computed
+from basis.shared.reactive import computed
 
 class MyComponent(Component):
     count = 1

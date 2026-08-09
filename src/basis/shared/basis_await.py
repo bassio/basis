@@ -1,6 +1,6 @@
 from basis.shared.component import Component
 from basis.shared.store import Store
-from basis.shared.dag import computed
+from basis.shared.reactive import computed
 
 class BasisAwait(Component):
     __tag__ = "basis-await"

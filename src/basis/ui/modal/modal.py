@@ -47,8 +47,6 @@ class Modal(Component):
             position: fixed;
             inset: 0;
             background: rgba(0, 0, 0, 0.4);
-            backdrop-filter: blur(var(--glass-blur, 8px));
-            -webkit-backdrop-filter: blur(var(--glass-blur, 8px));
             display: flex;
             align-items: center;
             justify-content: center;
@@ -64,7 +62,6 @@ class Modal(Component):
         }
 
         .ui-modal-panel {
-            background: var(--glass-bg, var(--bg-primary, #ffffff));
             border: 1px solid var(--border-color, #dee2e6);
             border-radius: var(--radius-lg, 0.5rem);
             box-shadow: var(--shadow-md, 0 10px 15px -3px rgba(0, 0, 0, 0.1));

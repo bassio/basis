@@ -30,9 +30,10 @@ else:
 from basis.shared.bindings import ComponentSubscription
 from basis.shared.context import ContextVarProxyDict
 from basis.shared.db import _make_serializable
+from basis.shared.reactive import ReactiveObject
 
 
-class Store:
+class Store(ReactiveObject):
     _registry = ContextVarProxyDict("store_registry")
     _pending_subscriptions = ContextVarProxyDict("store_pending_subscriptions")
 
@@ -75,12 +76,17 @@ class Store:
         raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
     def __init__(self, name: str):
+        super().__init__()
         self.__dict__['_subscriptions'] = []
         self.__dict__['_name'] = name
         self.__dict__['_hydrated_from_ssr'] = False
         self.__dict__['_first_load_completed'] = False
         self.__dict__['loading'] = False
         self.__dict__['error'] = None
+
+        # Register default public attributes as state nodes
+        self._dag.get_or_create_state('loading')
+        self._dag.get_or_create_state('error')
 
         # Register in the global registry
         Store._registry[name] = self
@@ -124,6 +130,9 @@ class Store:
                 except Exception as e:
                     print(f"Error: Failed to hydrate store '{name}': {e}")
 
+        # Register @computed properties from the class
+        self._init_computed()
+
     def get_store_name(self):
         return self.__dict__['_name']
 
@@ -133,10 +142,41 @@ class Store:
                                                      attr=attr_name)
             self.__dict__['_subscriptions'].append(new_subscription)
 
+            # Register as EffectNode in the DAG
+            store_name = self.get_store_name()
+            effect_name = f"sub_{id(component_instance)}_{attr_name}"
+
+            if attr_name:
+                # Attribute-specific subscription
+                def make_effect_callback(comp, sname, aname):
+                    def callback():
+                        comp.react([f"${sname}.{aname}"])
+                    return callback
+
+                self._dag.add_effect(
+                    effect_name,
+                    make_effect_callback(component_instance, store_name, attr_name),
+                    [attr_name]
+                )
+            else:
+                # Whole-store subscription (wildcard)
+                def make_wildcard_callback(comp, sname):
+                    def callback():
+                        comp.react([f"${sname}"])
+                    return callback
+
+                self._dag.add_wildcard_effect(
+                    effect_name,
+                    make_wildcard_callback(component_instance, store_name)
+                )
+
     def remove_subscription(self, component_instance, attr_name:str):
         self.__dict__['_subscriptions'] = [
             sub for sub in self._subscriptions if sub != (component_instance, attr_name)
         ]
+        # Remove from DAG
+        effect_name = f"sub_{id(component_instance)}_{attr_name}"
+        self._dag.remove_effect(effect_name)
 
     def update(self, new_state: dict):
         """
@@ -147,26 +187,10 @@ class Store:
             setattr(self, k, v)
 
     def __setattr__(self, key, value):
-        
-        exists = key in self.__dict__
-        
-        old_value = self.__dict__.get(key)
-
-        # On update, trigger react() on all subscribed components
-        if not exists or value != old_value:
-
-            super().__setattr__(key, value)
-            
-            store_name = self.get_store_name()
-
-            for component, attr_name in self._subscriptions:
-                # We tell the component to react to the store's "name"
-                # so it re-evaluates bindings starting with `{$store_name.xxx}`
-                if key == attr_name:
-                    component.react([f"${store_name}.{attr_name}"])
-                elif attr_name == "":
-                    # Whole-store subscription
-                    component.react([f"${store_name}"])
+        # Delegate to ReactiveObject for DAG-based change detection and triggering.
+        # ReactiveObject.__setattr__ handles private attrs, identity-first checks,
+        # auto-creates StateNodes, and triggers DAG propagation to subscription EffectNodes.
+        super().__setattr__(key, value)
 
 class WebSocketStore(Store):
     def __init__(self, name: str, ws_url: str):

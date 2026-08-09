@@ -48,8 +48,8 @@ def initialize_pyscript_registry(app: FastAPI):
     files_dict["{DOMAIN}/basis/client/plugins.py"] = "./basis/client/plugins.py"
 
     # add shared
+    files_dict["{DOMAIN}/basis/shared/reactive.py"] = "./basis/shared/reactive.py"
     files_dict["{DOMAIN}/basis/shared/bindings.py"] = "./basis/shared/bindings.py"
-    files_dict["{DOMAIN}/basis/shared/dag.py"] = "./basis/shared/dag.py"
     files_dict["{DOMAIN}/basis/shared/base_component.py"] = "./basis/shared/base_component.py"
     files_dict["{DOMAIN}/basis/shared/element.py"] = "./basis/shared/element.py"
     files_dict["{DOMAIN}/basis/shared/component.py"] = "./basis/shared/component.py"

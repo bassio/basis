@@ -81,6 +81,7 @@ class ServerComponent(BaseComponent):
     @classmethod
     def clone_blueprint(cls):
         raw = cls.__blueprint__
+        print(cls, raw)
         # blueprint is the builder dict; 'component' key holds the root Element
         root_element = raw['component']
         return copy.deepcopy(root_element)

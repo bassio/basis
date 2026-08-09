@@ -10,7 +10,7 @@ For small or self-contained UI elements, everything lives in one `.py` file. The
 
 ```python
 from basis.shared.component import Component
-from basis.shared.dag import computed
+from basis.shared.reactive import computed
 
 class Counter(Component):
     """

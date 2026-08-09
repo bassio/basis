@@ -55,7 +55,7 @@ class Node(object):
             pass  # not in the list — treat as a no-op
         self.parent = None
 
-@dataclass
+@dataclass(eq=False)
 class Comment(Node):
     parent:'Element|None' = None
     nodeName:str = field(default= "#comment", init=False, repr=False)
@@ -79,7 +79,7 @@ class Comment(Node):
         new_node = Comment(data=self.data, parent=self.parent)
         return new_node
 
-@dataclass
+@dataclass(eq=False)
 class ElementString(Node):
     value:str
     nodeName:str = field(default= "#text", init=False, repr=False)
@@ -117,7 +117,7 @@ class ElementString(Node):
         new_node = ElementString(value=self.value, parent=self.parent)
         return new_node
 
-@dataclass
+@dataclass(eq=False)
 class Element(Node):
     tag:str
     attrs:dict
@@ -125,6 +125,7 @@ class Element(Node):
     void_:bool|None = field(default=None, repr=False)
     _detached:bool = field(default=False, repr=False)
     _if_expr:str|None = field(default=None, repr=False)
+
     
     @property
     def nodeName(self):

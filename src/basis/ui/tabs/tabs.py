@@ -1,5 +1,5 @@
 from basis.shared.component import Component, IS_CLIENT
-from basis.shared.dag import computed
+from basis.shared.reactive import computed
 
 if IS_CLIENT:
     from pyscript import window, ffi

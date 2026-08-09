@@ -6,11 +6,11 @@ from basis.shared.bindings import BindingBlueprint, Binding, SelfBinding, TextBi
     AttributeBinding, SelfAttributeBinding, TextContentAttributeBinding, ModelBinding, EventBinding, IfBinding, \
     ChildBinding, LoopBinding, SlotBinding, ComponentSubscription, \
     FormModelBinding, desugar_expression, safe_eval, safe_format, safe_format_with_stores, \
-    ALLOWED_BUILTINS, Refrain, \
+    ALLOWED_BUILTINS, \
     _process_self_attr_bindings
 from basis.shared.bindings import extract_dependencies
 from basis.shared.store import Store
-from basis.shared.dag import DependencyGraph, StateNode, ComputedNode, EffectNode, computed
+from basis.shared.reactive import ReactiveObject, DependencyGraph, StateNode, ComputedNode, EffectNode, computed, Refrain
 from basis.shared.context import ContextVarProxyDict
 
 
@@ -51,7 +51,7 @@ def include_model(model: type, name: str, one: bool = False, target: str = "item
     return decorator
 
 
-class BaseComponent(object):
+class BaseComponent(ReactiveObject):
 
     _registry = {}
     _instance_registry = ContextVarProxyDict("component_instance_registry")
@@ -212,8 +212,6 @@ class BaseComponent(object):
         self.__dict__['_deps'] = {}
         self.__dict__['__fields__'] = []
         self.__dict__['_subscriptions'] = []
-        self.__dict__['_dag'] = DependencyGraph()
-        self.__dict__['_dag_nodes'] = self._dag.nodes
         self.__class__._live_instances.add(self)
         
     def __init_selfbinding__(self):
@@ -725,18 +723,7 @@ class BaseComponent(object):
                     refrained.force_react(field)
 
             # Register computed properties in the DAG
-            for name, member in inspect.getmembers(self.__class__):
-                # Check if it's a computed property (metadata is on fget if it's a property)
-                member_func = getattr(member, 'fget', member)
-                if hasattr(member_func, '_is_computed'):
-                    # The 'computed' decorator stores dependencies in _dependencies
-                    deps = getattr(member_func, '_dependencies', [])
-                    # The original function is stored in _original_func
-                    original_func = getattr(member_func, '_original_func', None)
-                    if original_func:
-                        node = self._dag.add_computed(name, original_func, self, deps)
-                        # Force an initial calculation so we don't start with None
-                        node.update()
+            self._init_computed()
 
 
     @property
@@ -862,19 +849,8 @@ class BaseComponent(object):
             #the component_instance should then react from its instance !
 
         else:
-            if name not in self.__dict__:
-                # Initial assignment of a new attribute -> always trigger DAG
-                self.__dict__[name] = value
-                self._dag.trigger(name)
-            else:
-                # Updating an existing attribute -> fast change detection
-                old_value = self.__dict__[name]
-                self.__dict__[name] = value
-                
-                if value is not old_value:
-                    if isinstance(value, (list, dict, set, tuple)) \
-                    or value != old_value:
-                        self._dag.trigger(name)
+            # Delegate standard attribute handling to ReactiveObject
+            super().__setattr__(name, value)
     
     @classmethod
     def mount(cls, container, replace=False, **attributes):
@@ -1083,9 +1059,7 @@ class BaseComponent(object):
             for cb in first_level_child_bindings:
                 yield from cb.childinstance.get_bindings(recursive=True)
 
-    def refrain(self):
-        ref_context = Refrain(self)
-        return ref_context
+    # refrain() is inherited from ReactiveObject
 
     def add_subscription(self, component_instance, attr_name:str):
         if (component_instance, attr_name) not in self._subscriptions:
@@ -1108,14 +1082,6 @@ class BaseComponent(object):
             sub for sub in self._subscriptions if sub != (component_instance, attr_name)
         ]
 
-    def react(self, names:list[str]):
-
-        if isinstance(names, str):
-            raise Exception("Please pass only a list of strings to react().")
-
-        # print(f"In react({names}) of {self}")
-
-        # Integration with DAG: trigger the graph
-        self._dag.trigger_batch(names)
+    # react() is inherited from ReactiveObject
         
 ALLOWED_BUILTINS['BaseComponent'] = BaseComponent
