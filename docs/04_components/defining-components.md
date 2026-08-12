@@ -1,12 +1,12 @@
 # Defining Components
 
-A Basis component is a Python class that combines an HTML template, optional CSS, and reactive state. There are two ways to organize the files, and the framework supports both.
+A Basis component is a Python class that combines an HTML template, CSS styling, and reactive state. Basis supports both single-file and multi-file component layouts.
 
 ---
 
 ## Single-file components
 
-For small or self-contained UI elements, everything lives in one `.py` file. The HTML template goes in the class docstring (or in a `template` method's docstring); CSS goes in a `style` class variable.
+For small or self-contained UI elements, everything lives in a single `.py` file. The HTML template is defined in the class docstring (or in a `template` method docstring); CSS styling is specified in a `style` class variable.
 
 ```python
 from basis.shared.component import Component
@@ -17,6 +17,7 @@ class Counter(Component):
     <div class="counter-card">
         <h3>Simple Counter</h3>
         <p>Current value: <strong>{count}</strong></p>
+        <p>Double value: <strong>{double_count}</strong></p>
         <button onclick="{increment}">+ Increment</button>
     </div>
     """
@@ -41,32 +42,38 @@ class Counter(Component):
     }
     """
 
+    @computed
+    def double_count(self):
+        return self.count * 2
+
     def increment(self):
         self.count += 1
 ```
 
-Class-level variables like `count = 0` become reactive state nodes. Assigning to `self.count` anywhere triggers the DAG to update the DOM nodes that reference it.
+### Class Attributes & State Nodes
+Class-level variables like `count = 0` are automatically converted into reactive state nodes during component setup. Assigning to `self.count` inside event handlers updates the state and triggers the reactive graph to update bound DOM nodes.
+
+### `@computed` Properties
+Decorating a method with `@computed` creates a derived state node. Basis analyzes the function's AST to detect state dependencies (such as `self.count`) and recalculates `double_count` only when `count` changes.
 
 ---
 
 ## Multi-file components
 
-For larger components, keeping HTML and CSS inside Python strings gets unwieldy. Basis supports splitting into separate files as long as they share the same name as the parent folder:
+For larger components, keeping HTML markup and CSS styling inside Python strings can become unwieldy. Basis supports organizing components into folders where `.html` and `.css` files are placed alongside the `.py` file:
 
 ```text
 components/
 └── todo_list/
-    ├── todo_list.py    ← Python class
+    ├── todo_list.py    ← Python class logic
     ├── todo_list.html  ← HTML template
     └── todo_list.css   ← Stylesheet
 ```
 
 > [!IMPORTANT]
-> The `.html` and `.css` files must be named after the **parent folder**, not the `.py` file. The framework looks for `<parent_folder_name>.html` and `<parent_folder_name>.css` relative to the Python file's location.
+> The `.html` and `.css` files must be named after the **parent folder** (e.g. `todo_list.html` inside a folder named `todo_list`). Basis automatically detects these matching files at import time and attaches them to `__templatestr__` and `style`.
 
 ### `todo_list.py`
-
-No HTML or CSS needed here — just define the class and its logic:
 
 ```python
 from basis.shared.component import Component
@@ -75,13 +82,10 @@ class TodoList(Component):
     items = ["Buy groceries", "Write Basis docs"]
 
     def add_todo(self, event):
-        # ...
         pass
 ```
 
 ### `todo_list.html`
-
-Standard HTML with braces interpolation:
 
 ```html
 <div class="todo-wrapper">
@@ -94,8 +98,6 @@ Standard HTML with braces interpolation:
 
 ### `todo_list.css`
 
-Plain CSS — no pre-processing, no utility class framework required:
-
 ```css
 .todo-wrapper {
     background-color: white;
@@ -104,5 +106,3 @@ Plain CSS — no pre-processing, no utility class framework required:
     padding: 24px;
 }
 ```
-
-Basis detects matching `.html` and `.css` files at class definition time and loads their contents into `__templatestr__` and `style` on the class. Your editor can syntax-highlight each file correctly since they're proper HTML and CSS files rather than strings inside Python.

@@ -1,30 +1,36 @@
-# State Stores & Server Actions
+# State Stores & Store Providers
 
-Local component state handles UI concerns — toggle states, form inputs, ephemeral selections. For state that needs to be shared across components, or for operations that need to run on the server, Basis provides **Stores** and **Server Actions**.
+Local component state handles UI concerns like toggle states or form inputs. For shared global state, or data fetched from backend APIs, Basis provides **Stores**, **Store Providers**, and **Server Actions**.
 
 ---
 
-## Global state stores
+## 1. Global State Stores (`Store`)
 
-A `Store` is a reactive container that any component can subscribe to. When a value in the store changes, every subscribed component updates its relevant DOM nodes automatically.
-
-### Defining a store
+A `Store` inherits from `ReactiveObject`. Any component can subscribe to a store's attributes. When a store attribute changes, subscribed components update their bound DOM nodes automatically.
 
 ```python
 from basis.shared.store import Store
+from basis.shared.reactive import computed
 
 class UserSession(Store):
     username = "Guest"
+    role = "user"
     is_authenticated = False
+
+    @computed
+    def is_admin(self):
+        return self.is_authenticated and self.role == "admin"
 
 user_store = UserSession("session")
 ```
 
-The string passed to the constructor (`"session"`) is the store's registry name. This is what you use to reference it in templates.
+The constructor string (`"session"`) registers the store globally under that name for template subscriptions.
 
-### Subscribing in templates
+---
 
-Use the `$store_name.attribute` syntax inside braces to bind to a store value:
+## 2. Subscribing in Component Templates
+
+Use the `$store_name.attribute` syntax inside template braces:
 
 ```python
 class Header(Component):
@@ -32,29 +38,51 @@ class Header(Component):
     <header>
         <div if="{$session.is_authenticated}">
             <span>Welcome, {$session.username}!</span>
-            <button onclick="{logout}">Logout</button>
-        </div>
-        <div if="{not $session.is_authenticated}">
-            <button onclick="{login}">Sign In</button>
+            <span if="{$session.is_admin}">[Admin Panel]</span>
         </div>
     </header>
     """
-    pass
 ```
 
-The `$session` prefix tells Basis to look up the store registered under the name `"session"` and bind to its `is_authenticated` or `username` attributes respectively.
-
-### Late registration
-
-If a component is defined before the store it depends on is instantiated, Basis queues the subscription. As soon as the store is created, any pending subscriptions for that store name are resolved and the bindings are activated.
+### Late Registration
+If a component template references `$session` before `UserSession("session")` is instantiated, Basis queues the subscription. Once the store registers, subscriptions automatically resolve and activate bindings.
 
 ---
 
-## Server actions
+## 3. Declarative Store Providers
 
-A `@server_action` is a method decorated to run exclusively on the server. On the client, the decorator replaces the method with an async RPC proxy that serializes the call, sends it to `/basis/api/action`, and applies the server's updated state back to the client store.
+Basis provides declarative components for fetching remote data directly into stores:
 
-### Defining a server action
+### Standard Store Provider (`<store-provider>`)
+
+```html
+<store-provider name="products" url="/api/v1/products" target="items"></store-provider>
+
+<ul>
+    <li for="p" in="{$products.items}">{p.name} - ${p.price}</li>
+</ul>
+```
+
+### Model Store Provider (`<model-store-provider>`)
+
+`ModelStoreProvider` integrates with `ModelStore` to perform typed data fetching (and SQLModel server queries):
+
+```html
+<model-store-provider name="user_profile" model="{UserModel}" user_id="123" one="true"></model-store-provider>
+
+<div>
+    <h3>{$user_profile.name}</h3>
+    <p>{$user_profile.email}</p>
+</div>
+```
+
+Both providers feature **SSR Hydration Guards**: if data was already server-rendered and injected during initial page load, the client provider skips redundant network fetches.
+
+---
+
+## 4. Server Actions (`@server_action`)
+
+A `@server_action` decorator marks a method to execute exclusively on the server. On the client, the decorator replaces the method with an async RPC proxy pointing to `/basis/api/action`.
 
 ```python
 from basis.shared.store import Store
@@ -65,57 +93,38 @@ class CartStore(Store):
 
     @server_action
     async def add_item(self, item_name: str, price: float):
-        # This runs on the server only.
-        # Database access, secrets, and third-party APIs are safe here.
+        # Executes on the server
         self.items.append({"name": item_name, "price": price})
-        return "Item added."
+        return f"Added {item_name}"
 ```
 
-### Calling a server action from a component
-
-Because `@server_action` makes the method async on the client, you must `await` it:
+### Invoking from Components
 
 ```python
 class ProductCard(Component):
     """
-    <div class="product">
-        <h3>Indigo Sneakers</h3>
-        <button onclick="{add_sneakers}">Add to Cart</button>
-    </div>
+    <button onclick="{add_product}">Add Item</button>
     """
-
-    async def add_sneakers(self):
-        result = await cart_store.add_item("Indigo Sneakers", 89.99)
-        print(result)
+    async def add_product(self):
+        msg = await cart_store.add_item("Sneakers", 89.99)
+        print(msg)
 ```
 
-The store reference (`cart_store`) is the global Python object. Calling methods on it directly is how you trigger server actions — there is no special syntax inside the component itself.
-
----
-
-## Server action lifecycle
+### Server Action Lifecycle Flow
 
 ```mermaid
 sequenceDiagram
-    participant Browser as Browser
-    participant ClientStore as Client Store
-    participant RPC as /basis/api/action
-    participant ServerStore as Server Store
+    participant Client as Client Browser
+    participant StoreProxy as Client Store Proxy
+    participant RPC as /basis/api/action Endpoint
+    participant ServerStore as Server Store Instance
 
-    Browser->>ClientStore: 1. Call store method
-    ClientStore->>RPC: 2. POST (path, store_name, args)
-    RPC->>ServerStore: 3. Resolve store & execute method
-    ServerStore->>ServerStore: 4. Mutate server-side state
-    ServerStore->>RPC: 5. Return result + serialized state
-    RPC->>ClientStore: 6. Response JSON
-    ClientStore->>ClientStore: 7. Apply state snapshot
-    ClientStore->>Browser: 8. DAG triggers DOM updates
+    Client->>StoreProxy: 1. Await store method call
+    StoreProxy->>RPC: 2. POST (path, store_name, args)
+    RPC->>ServerStore: 3. Resolve store & execute function
+    ServerStore->>ServerStore: 4. Mutate server state
+    ServerStore->>RPC: 5. Return result + state snapshot
+    RPC->>StoreProxy: 6. JSON Response
+    StoreProxy->>StoreProxy: 7. Apply state snapshot to Client Store
+    StoreProxy->>Client: 8. DAG updates bound DOM nodes
 ```
-
-The complete flow:
-
-1. The browser calls the store method. The RPC proxy intercepts it and POSTs the call to the server.
-2. The server locates the registered action function and the target store instance.
-3. The action runs on the server with full access to databases and environment variables.
-4. After execution, the server serializes the store's updated state and returns it alongside the function's return value.
-5. The client store receives the snapshot, updates its local state, and the DAG propagates changes to every subscribed component.

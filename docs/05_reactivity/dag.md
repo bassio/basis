@@ -1,51 +1,51 @@
 # The DAG Reactivity Engine
 
-Basis uses a **Directed Acyclic Graph (DAG)** to track how state flows through your components. Each component instance owns a `DependencyGraph` object. When you mutate an attribute, the graph propagates the change to every computed value and DOM binding that depends on it — nothing more.
+Basis uses a **Directed Acyclic Graph (DAG)** to track state propagation. Both `BaseComponent` and `Store` inherit from a unified base class named `ReactiveObject`, equipping all components and global state stores with fine-grained reactivity.
 
-There is no Virtual DOM, no full component re-render, and no dirty-checking scan.
+When you mutate an attribute, the DAG propagates the change exclusively to computed properties and DOM bindings dependent on that attribute. There is no Virtual DOM, no full re-render, and no dirty-checking loop.
 
 ---
 
-## The three node types
+## The Unified Architecture (`ReactiveObject`)
 
 ```mermaid
 graph TD
-    subgraph State Layer
-        S1[StateNode: count]
-        S2[StateNode: tax_rate]
+    ReactiveObject["ReactiveObject Base Class"]
+    ReactiveObject --> BaseComponent["BaseComponent"]
+    ReactiveObject --> Store["Store"]
+    
+    DependencyGraph["DependencyGraph"]
+    ReactiveObject -->|Owns instance of| DependencyGraph
+    
+    subgraph DAG Node Topology
+        StateNode["StateNode (Raw Attribute)"]
+        ComputedNode["ComputedNode (@computed Derived State)"]
+        EffectNode["EffectNode (DOM Binding / Subscription)"]
     end
 
-    subgraph Derived State Layer
-        C1[ComputedNode: subtotal]
-        C2[ComputedNode: total]
-    end
-
-    subgraph Effect Layer
-        E1[EffectNode: TextBinding subtotal]
-        E2[EffectNode: TextBinding total]
-        E3[EffectNode: AttributeBinding warning_class]
-    end
-
-    S1 --> C1
-    C1 --> C2
-    S2 --> C2
-
-    C1 --> E1
-    C2 --> E2
-    S1 --> E3
+    DependencyGraph --> StateNode
+    DependencyGraph --> ComputedNode
+    DependencyGraph --> EffectNode
 ```
-
-**`StateNode`** — A raw component attribute (e.g. `count = 0`). These are the sources of state. They're never stale; they just hold a value and notify dependents when that value changes.
-
-**`ComputedNode`** — A derived value defined with `@computed`. It caches its result and only recalculates when one of its upstream `StateNode`s is marked stale. Computed nodes can depend on other computed nodes.
-
-**`EffectNode`** — A terminal node that performs a side effect, typically updating a DOM node. Bindings register themselves as effect nodes. They have no descendants — they're the leaves of the graph.
 
 ---
 
-## Computed properties
+## The Three Node Types
 
-The `@computed` decorator defines a property whose value is derived from other state. Basis automatically detects which state variables the function reads by parsing its source code with Python's `ast` module:
+### 1. `StateNode`
+Represents root state sources (raw instance attributes). They hold raw state values and notify dependents when values are assigned or modified.
+
+### 2. `ComputedNode`
+Represents derived values created with the `@computed` decorator. It caches calculation results and re-evaluates only when one of its upstream dependency nodes is marked stale. Computed nodes can depend on other computed nodes or state nodes across stores and components.
+
+### 3. `EffectNode`
+Represents terminal side-effects. In components, DOM bindings (Text, Attribute, Model, Loop) register as effect nodes. In stores, subscription notifications register as effect nodes. Effect nodes are the leaves of the DAG and have no downstream dependents.
+
+---
+
+## `@computed` Properties & AST Dependency Extraction
+
+The `@computed` decorator defines properties derived from state. Basis parses the function's Abstract Syntax Tree (AST) using Python's built-in `ast` module to automatically detect `self.x` attribute dependencies:
 
 ```python
 from basis.shared.reactive import computed
@@ -64,42 +64,37 @@ class Cart(Component):
         return self.subtotal * self.tax_rate
 ```
 
-Basis parses each `@computed` method's source, finds all `self.x` attribute accesses, and registers those as dependencies in the graph. `subtotal` depends on `items`; `tax` depends on `subtotal` and `tax_rate`.
-
-If the AST analysis can't pick up a dependency (e.g. the value comes from a dynamic lookup), you can declare dependencies explicitly:
+### Manual Dependency Overrides
+If an AST analysis cannot infer dynamic dependencies (e.g. indirect dictionary lookups), explicit dependency names can be supplied:
 
 ```python
 @computed(dependencies=["items", "discount_rate"])
 def final_price(self):
-    # dependencies explicitly declared, AST analysis skipped
     ...
 ```
 
 ---
 
-## How a state mutation propagates
+## State Mutation Lifecycle
 
-When you write `self.count += 1`:
+When `self.count += 1` is executed:
 
-1. `BaseComponent.__setattr__` intercepts the assignment, compares the new value to the old one, and calls `self._dag.trigger("count")`.
-2. The DAG marks `count`'s `StateNode` stale, then walks its dependents and marks them stale recursively.
-3. `DependencyGraph.process_updates()` iterates all `EffectNode`s and calls `update()` on any that are stale.
-4. Each stale `EffectNode` first ensures its upstream `ComputedNode`s are up to date, then runs its DOM update function.
-
-Only nodes reachable from `count` in the dependency graph are touched.
+1. `ReactiveObject.__setattr__` intercepts the assignment, compares identity/value changes, and invokes `self._dag.trigger("count")`.
+2. The DAG marks `count`'s `StateNode` as stale and recursively marks downstream `ComputedNode` and `EffectNode` dependents as stale.
+3. `DependencyGraph.process_updates()` iterates through stale `EffectNode` instances and triggers their update callbacks.
+4. If an `EffectNode` depends on a `ComputedNode`, the computed node recalculates its cached value before the effect updates the DOM.
 
 ---
 
-## Batching mutations with `refrain()`
+## Batching Mutations with `refrain()`
 
-Mutating several attributes one after another would trigger the DAG — and therefore DOM updates — after each individual assignment. For cases where you want to apply multiple changes atomically, use the `refrain()` context manager:
+To avoid redundant DOM updates during multi-property updates, use `refrain()`:
 
 ```python
 with self.refrain() as refrained:
     refrained.first_name = "John"
     refrained.last_name = "Doe"
     refrained.age = 30
-# DOM updates happen once, here
 ```
 
-All assignments inside the `with` block are queued. The DAG runs a single batch update when the block exits, so the DOM is touched exactly once regardless of how many attributes changed.
+Assignments inside the `with` context block are stored in a temporary buffer. When exiting the block, the DAG triggers a single batch update (`trigger_batch`), executing DOM effects exactly once.

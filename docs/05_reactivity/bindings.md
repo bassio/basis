@@ -8,7 +8,7 @@ This is the core difference from Virtual DOM frameworks, which re-evaluate the e
 
 ## Binding types
 
-The framework defines eleven specialized binding classes, each handling a distinct type of DOM relationship.
+The framework defines twelve specialized binding classes, each handling a distinct type of DOM relationship.
 
 ### `SelfBinding`
 
@@ -62,6 +62,17 @@ Attaches an event listener that calls a component method.
 - **Template**: `<button onclick="{submit_form}">Submit</button>`
 - The referenced method is called when the event fires.
 
+### `FormModelBinding`
+
+Provides automatic two-way data binding and validation for entire forms mapped to `SQLModel` or standard Python `dataclasses`.
+
+- **Template**: `<form bind="{user_model}" validate-on="blur">`
+- When Basis sees `bind` on a `<form>` element, it instantiates `FormModelBinding`. This binding:
+  1. Scans the form for all nested `<input>`, `<select>`, and `<textarea>` elements with a `name` attribute.
+  2. Automatically maps user inputs to fields on the target model.
+  3. Intercepts `submit`, `input`, and `blur` events to run the framework's internal `validate_model()` function.
+  4. Automatically populates a reactive dictionary named `{model}_errors` with any Pydantic/SQLModel validation errors, which you can bind directly in your template for error messages.
+
 ### `ChildBinding`
 
 Handles child component instantiation. When Basis encounters a hyphenated tag (e.g. `<user-card>`) in a template, it looks up the registered component class, mounts a new instance, and attaches it.
@@ -72,7 +83,11 @@ High-performance loop binding using a Longest Increasing Subsequence (LIS) diffi
 
 - **Unkeyed Template**: `<li for="todo" in="{todos}">{todo}</li>`
 - **Keyed Template**: `<li for="user" in="{users}" key="id">{user.name}</li>`
-- Instead of tearing down DOM nodes when lists change, `LoopBinding` updates changed items in-place and moves existing nodes to match the new order. This preserves input focus, CSS transition state, and scroll position.
+
+**Why `key` matters:**
+If you don't provide a `key`, Basis updates DOM nodes based on their index in the list. If you reverse a list, the DOM nodes stay exactly where they are, and Basis just overwrites the text content of every node to match the new reversed order. 
+
+If you *do* provide a `key`, Basis tracks the identity of the underlying data item. If you reverse a keyed list, Basis actually moves the existing DOM nodes to their new positions. This preserves input focus, CSS transition state, and scroll position within the moved elements.
 
 ### `SlotBinding`
 

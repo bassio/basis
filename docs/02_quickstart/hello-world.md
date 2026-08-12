@@ -13,7 +13,7 @@ pip install fastapi uvicorn basis-framework
 ```
 
 > [!NOTE]
-> If you're using `uv` for environment management, `uv add fastapi uvicorn basis-framework` works the same way. The package name on PyPI may differ during early development — check the project README if the install fails.
+> If you're using `uv` for environment management, `uv add fastapi uvicorn basis-framework` works the same way.
 
 ---
 
@@ -48,6 +48,14 @@ Three things are happening here:
 
 ## 3. Run it
 
+You can run your app using the **Basis CLI**:
+
+```bash
+basis dev
+```
+
+Or directly via Uvicorn:
+
 ```bash
 uvicorn app:app --reload
 ```
@@ -64,17 +72,17 @@ When the browser first requests `/`:
 
 1. FastAPI calls the Basis SSR handler registered by `@app.entrypoint`.
 2. Basis parses the component's HTML template and renders it with the initial state (`name = "World"`).
-3. The response is a complete HTML document including the rendered markup, the PyScript script tags, and a JSON block containing the component's initial state.
+3. The response is a complete HTML document including rendered markup, PyScript configuration, and a JSON block containing initial state.
 
-Because the page is fully rendered server-side, search engines see complete content — no blank screen waiting for JavaScript.
+Because the page is fully rendered server-side, search engines see complete content — no blank screen waiting for client scripts.
 
 ### Client hydration
 
-Once the HTML is in the browser:
+Once the HTML is loaded in the browser:
 
 1. PyScript boots the Pyodide WebAssembly runtime in the background.
 2. Basis runs the `HelloBasis` class in the browser and scans the pre-rendered HTML for hydration markers.
-3. Rather than creating new DOM nodes, it attaches reactive bindings to the existing ones.
-4. The `bind="{name}"` attribute becomes a two-way `ModelBinding`: input events write to `self.name`, and the DAG engine propagates that change to the `{name}` text node in the heading.
+3. Rather than re-creating DOM nodes, it attaches reactive bindings to existing ones.
+4. The `bind="{name}"` attribute becomes a two-way `ModelBinding`: input events update `self.name`, and the DAG engine updates the `{name}` text node in the heading.
 
-All DOM updates happen in-place, with no layout rebuilds or content flashes.
+All DOM updates happen in-place without layout shifts or content flashes.

@@ -45,8 +45,6 @@ The underlying Directed Acyclic Graph (DAG) reactivity engine intercepts that as
 
 Basis requires no Node.js, no npm, and no compilation step. PyScript loads your `.py` source files, HTML templates, and CSS stylesheets directly in the browser. There is no intermediate build artifact.
 
-Hot module replacement (HMR) works over a WebSocket connection and is available out of the box during development — edit a file and the browser updates without losing component state.
-
 ---
 
 ## 5. Component-Driven
