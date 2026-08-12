@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter
 from basis.server.db import ModelRegistryMixin
@@ -7,17 +8,29 @@ from basis.server.db import ModelRegistryMixin
 class BasisPlugin(ModelRegistryMixin):
     """
     A self-contained, route-aware bundle that can be registered into a Basis
-    app via ``app.include_plugin(plugin)``.
+    app via ``app.include_plugin(plugin)`` or auto-discovered from the
+    ``plugins/`` directory or installed packages.
 
     A plugin declares:
     - A URL prefix for its HTTP routes (``prefix``).
     - An optional directory of Python/HTML/CSS component files to serve as
       static assets so PyScript can import them (``static_dir`` / ``static_mount``).
+    - An optional list of plugin names it depends on (``requires``).
     - Any number of REST endpoints via ``@plugin.get``, ``@plugin.post``, etc.
       (or directly via ``@plugin.router.get`` for full FastAPI expressiveness).
     - Server actions via the bare ``@server_action`` decorator (unchanged) —
       these self-register in the global ``_action_registry`` on import and are
       reached by clients through the global ``POST /basis/api/action`` endpoint.
+
+    Auto-Discovery
+    --------------
+    Plugins can be auto-discovered without manual ``include_plugin()`` calls:
+
+    1. **Local**: Place a Python file or package in your app's ``plugins/``
+       directory. It must expose a module-level ``plugin`` variable that is a
+       ``BasisPlugin`` instance.
+    2. **Installed**: Publish a package with a ``basis.plugins`` entry point
+       in ``pyproject.toml``.
 
     Example
     -------
@@ -55,12 +68,13 @@ class BasisPlugin(ModelRegistryMixin):
 
     ::
 
-        # app.py
+        # app.py — auto-discovery (plugins/ directory)
         from basis import Basis
-        from my_chat import plugin as chat_plugin
 
-        app = Basis()
-        app.bootstrap()
+        app = Basis(plugins_dir="plugins")  # discovers & registers automatically
+
+        # Or explicit registration:
+        from my_chat import plugin as chat_plugin
         app.include_plugin(chat_plugin)
     """
 
@@ -72,6 +86,7 @@ class BasisPlugin(ModelRegistryMixin):
         static_mount: str | None = None,
         name: str | None = None,
         tags: list[str] | None = None,
+        requires: list[str] | None = None,
     ):
         """
         Parameters
@@ -92,13 +107,20 @@ class BasisPlugin(ModelRegistryMixin):
             mount.  Defaults to a sanitised version of ``prefix``.
         tags:
             OpenAPI tags applied to all routes on this plugin's router.
+        requires:
+            List of plugin names this plugin depends on.  Used for ordering
+            plugin registration (dependency-based topological sort in later
+            phases).  Does not affect installation — use Python package
+            dependencies for that.
         """
         self.prefix = prefix.rstrip("/")
         self.static_dir = Path(static_dir) if static_dir else None
         self.static_mount = static_mount or self.prefix
         self.name = name or self.prefix.strip("/").replace("/", "_") or "plugin"
+        self.requires = requires or []
         self.models = set()
         self.actions = {}
+        self._settings = {}
         # Public router — use @plugin.router.get(...) for full FastAPI control,
         # or the convenience shorthands below.
         self.router = APIRouter(prefix=self.prefix, tags=tags or [])
@@ -171,3 +193,45 @@ class BasisPlugin(ModelRegistryMixin):
             f"static_mount={self.static_mount!r}, "
             f"name={self.name!r})"
         )
+
+    # ------------------------------------------------------------------
+    # Lifecycle hooks — override in subclasses for custom behaviour.
+    # ------------------------------------------------------------------
+
+    def on_register(self, app: "Basis") -> None:
+        """
+        Called synchronously when the plugin is registered with a Basis app
+        via ``include_plugin()``.  Use for validation or immediate setup.
+        The ``app._plugins`` list will already contain previously registered
+        plugins, so you can check for dependencies here.
+        """
+        pass
+
+    async def on_startup(self, app: "Basis") -> None:
+        """
+        Called during the Basis app's lifespan startup phase.
+        Use for async initialisation (database connections, background tasks, etc.).
+        """
+        pass
+
+    async def on_shutdown(self, app: "Basis") -> None:
+        """
+        Called during the Basis app's lifespan shutdown phase.
+        Use for cleanup (closing connections, flushing buffers, etc.).
+        """
+        pass
+
+    def configure(self, **settings) -> "BasisPlugin":
+        """
+        Apply user configuration to this plugin.
+
+        Returns ``self`` so it can be chained::
+
+            app.include_plugin(
+                auth_plugin.configure(secret_key="...", session_ttl=7200)
+            )
+
+        Plugin authors can read settings via ``self._settings``.
+        """
+        self._settings.update(settings)
+        return self

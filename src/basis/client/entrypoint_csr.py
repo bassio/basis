@@ -1,8 +1,14 @@
-import json
 import importlib
+import json
+import sys
+
 from pyscript import document
+
 from basis.client.component import Component
 from basis.shared.hmr import start_hmr
+
+# Print client side python version details
+print("[Basis] Running Python version:", sys.version)
 
 print("[Basis] Zero-Config CSR Entrypoint started.")
 

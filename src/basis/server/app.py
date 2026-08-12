@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 import sys
 from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
-from basis.server.static import BasisStaticFiles
+from basis.server.static import BasisStaticFiles, BasisStaticFilesPyc
 from fastapi import FastAPI, APIRouter, Request, WebSocket, WebSocketDisconnect
 from basis.server.plugin import BasisPlugin
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -34,36 +34,55 @@ def initialize_pyscript_registry(app: FastAPI):
       - app.state.client_modules: The list of modules available in the PyScript client VFS
       - app.state.vfs_to_server_module: The reverse mapping for RPC server action routing
     """
+    pyc_mode = getattr(app, "pyc_mode", False)
+    py_ext = ".pyc" if pyc_mode else ".py"
+
     files_dict = {}
     client_modules = []
     vfs_to_server_module = {}
     
     # add client side code (currently under /client)
-    files_dict["{DOMAIN}/basis/client/component.py"] = "./basis/client/component.py"
-    files_dict["{DOMAIN}/basis/client/component.js"] = "./basis/client/component.js"
+
+    #for entrypoint .py files : do not convert these to .pyc
     files_dict["{DOMAIN}/basis/client/entrypoint_csr.py"] = "./basis/client/entrypoint_csr.py"
     files_dict["{DOMAIN}/basis/client/entrypoint_ssr.py"] = "./basis/client/entrypoint_ssr.py"
-    files_dict["{DOMAIN}/basis/client/plugin.py"] = "./basis/client/plugin.py"
-    files_dict["{DOMAIN}/basis/client/actions.py"] = "./basis/client/actions.py"
-    files_dict["{DOMAIN}/basis/client/plugins.py"] = "./basis/client/plugins.py"
+
+    client_py_files = [
+        "component.py",
+        "plugin.py",
+        "actions.py",
+        "plugins.py",
+    ]
+    for f_name in client_py_files:
+        stem = Path(f_name).stem
+        target_name = stem + py_ext # py_ext depends on whether pyc mode is enabled or not
+        files_dict[f"{{DOMAIN}}/basis/client/{target_name}"] = f"./basis/client/{target_name}"
+    
+    files_dict["{DOMAIN}/basis/client/component.js"] = "./basis/client/component.js"
 
     # add shared
-    files_dict["{DOMAIN}/basis/shared/reactive.py"] = "./basis/shared/reactive.py"
-    files_dict["{DOMAIN}/basis/shared/bindings.py"] = "./basis/shared/bindings.py"
-    files_dict["{DOMAIN}/basis/shared/base_component.py"] = "./basis/shared/base_component.py"
-    files_dict["{DOMAIN}/basis/shared/element.py"] = "./basis/shared/element.py"
-    files_dict["{DOMAIN}/basis/shared/component.py"] = "./basis/shared/component.py"
-    files_dict["{DOMAIN}/basis/shared/page.py"] = "./basis/shared/page.py"
-    files_dict["{DOMAIN}/basis/shared/store.py"] = "./basis/shared/store.py"
-    files_dict["{DOMAIN}/basis/shared/store_provider.py"] = "./basis/shared/store_provider.py"
-    files_dict["{DOMAIN}/basis/shared/context.py"] = "./basis/shared/context.py"
-    files_dict["{DOMAIN}/basis/shared/hmr.py"] = "./basis/shared/hmr.py"
-    files_dict["{DOMAIN}/basis/shared/actions.py"] = "./basis/shared/actions.py"
-    files_dict["{DOMAIN}/basis/shared/plugin.py"] = "./basis/shared/plugin.py"
-    files_dict["{DOMAIN}/basis/shared/router.py"] = "./basis/shared/router.py"
-    files_dict["{DOMAIN}/basis/shared/db.py"] = "./basis/shared/db.py"
-    files_dict["{DOMAIN}/basis/shared/basis_await.py"] = "./basis/shared/basis_await.py"
-    files_dict["{DOMAIN}/basis/shared/validation.py"] = "./basis/shared/validation.py"
+    shared_py_files = [
+        "reactive.py",
+        "bindings.py",
+        "base_component.py",
+        "element.py",
+        "component.py",
+        "page.py",
+        "store.py",
+        "store_provider.py",
+        "context.py",
+        "hmr.py",
+        "actions.py",
+        "plugin.py",
+        "router.py",
+        "db.py",
+        "basis_await.py",
+        "validation.py",
+    ]
+    for f_name in shared_py_files:
+        stem = Path(f_name).stem
+        target_name = stem + py_ext
+        files_dict[f"{{DOMAIN}}/basis/shared/{target_name}"] = f"./basis/shared/{target_name}"
 
     for i, m in enumerate(app._component_routes, 1):
         cdir_n_label = '{' + f'COMPONENTS_DIR_{i}' + '}'
@@ -85,12 +104,14 @@ def initialize_pyscript_registry(app: FastAPI):
             subdir = f.parent
             subdir_rel_to_cdir = subdir.relative_to(c_dir)
             
+            vfs_file_name = f.stem + py_ext if pyc_mode else f.name
+            
             # component_file uses '/' as path separator in PyScript VFS
-            component_file = cdir_n_label + "/" + (subdir_rel_to_cdir / f.name).as_posix()
+            component_file = cdir_n_label + "/" + (subdir_rel_to_cdir / vfs_file_name).as_posix()
             component_file = component_file.replace("//", "/")
 
             # Server relative URL must always start with './' and use POSIX path separators
-            files_dict[component_file] = "." + clean_mount + "/" + (subdir_rel_to_cdir / f.name).as_posix()
+            files_dict[component_file] = "." + clean_mount + "/" + (subdir_rel_to_cdir / vfs_file_name).as_posix()
             files_dict[component_file] = files_dict[component_file].replace("//", "/")
 
             # Translate file path to Python import path
@@ -166,6 +187,156 @@ async def pyscript_json(request: Request):
     })
 
 
+# ------------------------------------------------------------------
+# Plugin auto-discovery
+# ------------------------------------------------------------------
+
+def discover_local_plugins(app_dir: Path, plugins_dir: str = "plugins") -> list["BasisPlugin"]:
+    """
+    Scan the ``plugins/`` directory for BasisPlugin instances.
+
+    Convention: each Python file or package in the directory must expose a
+    module-level variable named ``plugin`` that is a ``BasisPlugin`` instance.
+    Files/dirs starting with ``_`` are skipped.  Results are sorted
+    alphabetically by filename for deterministic ordering.
+    """
+    plugins = []
+    plugins_path = app_dir / plugins_dir
+
+    if not plugins_path.exists() or not plugins_path.is_dir():
+        return plugins
+
+    # Try to determine the canonical Python package path for the plugins dir.
+    # E.g. if app_dir is .../src/jotter and plugins_dir is "plugins",
+    # then the package path is "jotter.plugins" and a file heroes.py within
+    # would be importable as "jotter.plugins.heroes".
+    canonical_pkg = _resolve_canonical_package(plugins_path)
+
+    for item in sorted(plugins_path.iterdir()):
+        if item.name.startswith("_"):
+            continue
+
+        module_name = None
+        if item.is_file() and item.suffix == ".py":
+            module_name = item.stem
+        elif item.is_dir() and (item / "__init__.py").exists():
+            module_name = item.name
+
+        if not module_name:
+            continue
+
+        try:
+            # Determine the canonical import path (e.g. "jotter.plugins.heroes")
+            if canonical_pkg:
+                canonical_name = f"{canonical_pkg}.{module_name}"
+            else:
+                canonical_name = f"plugins.{module_name}"
+
+            # If already imported under the canonical name, just grab the plugin
+            if canonical_name in sys.modules:
+                mod = sys.modules[canonical_name]
+                plugin_obj = getattr(mod, "plugin", None)
+                if isinstance(plugin_obj, BasisPlugin):
+                    plugins.append(plugin_obj)
+                    logger.info(f"\U0001f50c Discovered local plugin: {plugin_obj.name} ({module_name})")
+                continue
+
+            # Import using the canonical name if it's a proper package,
+            # otherwise fall back to spec_from_file_location.
+            if canonical_pkg:
+                mod = importlib.import_module(canonical_name)
+            else:
+                module_file = item if item.is_file() else item / "__init__.py"
+                submodule_search = [str(item)] if item.is_dir() else None
+                spec = importlib.util.spec_from_file_location(
+                    canonical_name,
+                    module_file,
+                    submodule_search_locations=submodule_search,
+                )
+                if spec is None or spec.loader is None:
+                    continue
+                mod = importlib.util.module_from_spec(spec)
+                sys.modules[canonical_name] = mod
+                spec.loader.exec_module(mod)
+
+            plugin_obj = getattr(mod, "plugin", None)
+            if isinstance(plugin_obj, BasisPlugin):
+                plugins.append(plugin_obj)
+                logger.info(f"\U0001f50c Discovered local plugin: {plugin_obj.name} ({module_name})")
+            else:
+                logger.debug(
+                    f"Skipping plugins/{module_name}: no 'plugin' BasisPlugin variable found"
+                )
+        except Exception as e:
+            logger.warning(f"\u26a0\ufe0f  Failed to load plugin '{module_name}': {e}")
+
+    return plugins
+
+
+def _resolve_canonical_package(path: Path) -> str | None:
+    """
+    Walk up from *path* to find the top-level Python package and return
+    the dotted package name.  Returns ``None`` if *path* is not inside a
+    recognisable Python package tree.
+
+    Example: /home/user/project/src/myapp/plugins → "myapp.plugins"
+    """
+    parts = []
+    current = path.resolve()
+    while (current / "__init__.py").exists():
+        parts.append(current.name)
+        current = current.parent
+    if not parts:
+        return None
+    parts.reverse()
+    return ".".join(parts)
+
+
+def discover_installed_plugins(
+    allowlist: list[str] | None = None,
+    blocklist: list[str] | None = None,
+) -> list["BasisPlugin"]:
+    """
+    Discover plugins registered via Python ``entry_points`` under the
+    ``basis.plugins`` group.
+
+    Parameters
+    ----------
+    allowlist:
+        If provided, only load plugins whose entry-point name is in this list.
+    blocklist:
+        If provided, skip plugins whose entry-point name is in this list.
+    """
+    from importlib.metadata import entry_points as _entry_points
+
+    plugins = []
+    try:
+        eps = _entry_points(group="basis.plugins")
+    except Exception:
+        return plugins
+
+    for ep in eps:
+        if allowlist is not None and ep.name not in allowlist:
+            logger.debug(f"\u23ed\ufe0f  Skipping installed plugin '{ep.name}' (not in allowlist)")
+            continue
+        if blocklist is not None and ep.name in blocklist:
+            logger.debug(f"\u23ed\ufe0f  Skipping installed plugin '{ep.name}' (in blocklist)")
+            continue
+
+        try:
+            plugin_obj = ep.load()
+            if isinstance(plugin_obj, BasisPlugin):
+                dist_name = getattr(ep.dist, "name", "unknown") if ep.dist else "unknown"
+                plugins.append(plugin_obj)
+                logger.info(
+                    f"\U0001f4e6 Loaded installed plugin: {plugin_obj.name} (from {dist_name})"
+                )
+        except Exception as e:
+            logger.warning(f"\u26a0\ufe0f  Failed to load installed plugin '{ep.name}': {e}")
+
+    return plugins
+
+
 class HMRManager:
     def __init__(self):
         self.active_connections: Set[WebSocket] = set()
@@ -192,9 +363,23 @@ class Basis(FastAPI, DBAppMixin):
     _global_stores = []
     hmr_manager = HMRManager()
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, plugins_dir: str = "plugins",
+                 plugins: list[str] | bool | None = None,
+                 exclude_plugins: list[str] | None = None,
+                 pyc_mode: bool = False,
+                 **kwargs):
         self._start_hmr_watcher = False
-        
+        self._plugins_dir = plugins_dir
+        # plugins=True/None → auto-discover all; plugins=["a","b"] → allowlist;
+        # plugins=False → disable installed-plugin discovery (local still works)
+        self._plugins_config = plugins
+        self._exclude_plugins = exclude_plugins or []
+        self.pyc_mode = pyc_mode or os.environ.get("BASIS_PYC_MODE", "").lower() in ("1", "true", "yes")
+        if not hasattr(self, "_plugins"):
+            self._plugins = []
+        # Capture the app directory now (call stack has the user's module)
+        self._app_dir = self._detect_app_directory()
+
         user_lifespan = kwargs.get("lifespan")
         
         @asynccontextmanager
@@ -204,23 +389,38 @@ class Basis(FastAPI, DBAppMixin):
             
             # Precompute PyScript VFS files and action mappings
             initialize_pyscript_registry(app)
+
+            # Call plugin on_startup hooks
+            for plugin in getattr(app, "_plugins", []):
+                try:
+                    await plugin.on_startup(app)
+                except Exception as e:
+                    logger.warning(f"\u26a0\ufe0f  Plugin '{plugin.name}' on_startup failed: {e}")
             
             watcher_task = None
             if app._start_hmr_watcher:
                 watcher_task = asyncio.create_task(app._start_file_watcher())
                 
-            if user_lifespan:
-                async with user_lifespan(app) as maybe_state:
-                    yield maybe_state
-            else:
-                yield
-                
-            if watcher_task:
-                watcher_task.cancel()
-                try:
-                    await watcher_task
-                except asyncio.CancelledError:
-                    pass
+            try:
+                if user_lifespan:
+                    async with user_lifespan(app) as maybe_state:
+                        yield maybe_state
+                else:
+                    yield
+            finally:
+                # Call plugin on_shutdown hooks (reverse order)
+                for plugin in reversed(getattr(app, "_plugins", [])):
+                    try:
+                        await plugin.on_shutdown(app)
+                    except Exception as e:
+                        logger.warning(f"\u26a0\ufe0f  Plugin '{plugin.name}' on_shutdown failed: {e}")
+
+                if watcher_task:
+                    watcher_task.cancel()
+                    try:
+                        await watcher_task
+                    except asyncio.CancelledError:
+                        pass
                     
         kwargs["lifespan"] = basis_lifespan
         super().__init__(*args, **kwargs)
@@ -304,12 +504,16 @@ class Basis(FastAPI, DBAppMixin):
                 return
         self.add_route(mount_path, pyscript_json, methods=['get'])
 
+    def _get_static_files_cls(self):
+        return BasisStaticFilesPyc if getattr(self, "pyc_mode", False) else BasisStaticFiles
+
     def include_components_dir(self, mount_path:str, dir_path:str, name:str):
         for r in self._component_routes:
             if getattr(r, "path", None) == mount_path:
                 return
 
-        m = Mount(mount_path, BasisStaticFiles(directory=dir_path), name=name)
+        static_cls = self._get_static_files_cls()
+        m = Mount(mount_path, static_cls(directory=dir_path), name=name)
         
         self.routes.append(m)
         self._component_routes.append(m)
@@ -375,12 +579,14 @@ class Basis(FastAPI, DBAppMixin):
             elif r.name == 'basis_shared':
                 shared_route = r
 
+        static_cls = self._get_static_files_cls()
+
         if not client_route:
-            client_mount = Mount("/basis/client", BasisStaticFiles(packages=[('basis', 'client')]), name='basis_client')
+            client_mount = Mount("/basis/client", static_cls(packages=[('basis', 'client')]), name='basis_client')
             self.routes.append(client_mount)
 
         if not shared_route:
-            shared_mount = Mount("/basis/shared", BasisStaticFiles(packages=[('basis', 'shared')]), name='basis_shared')
+            shared_mount = Mount("/basis/shared", static_cls(packages=[('basis', 'shared')]), name='basis_shared')
             self.routes.append(shared_mount)
 
     def include_ui_components(self):
@@ -392,7 +598,8 @@ class Basis(FastAPI, DBAppMixin):
         
         ui_path = Path(spec.origin).parent
 
-        ui_mount = Mount("/basis/ui/", BasisStaticFiles(directory=ui_path), name='basis_ui')
+        static_cls = self._get_static_files_cls()
+        ui_mount = Mount("/basis/ui/", static_cls(directory=ui_path), name='basis_ui')
 
         self.routes.append(ui_mount)
         self._component_routes.append(ui_mount)
@@ -471,6 +678,9 @@ class Basis(FastAPI, DBAppMixin):
         self.include_ui_components()
         self.include_server_actions()
         self.include_plugin_server_actions()
+
+        # --- Auto-discover plugins ---
+        self._auto_discover_plugins()
 
     def include_server_actions(self, mount_path: str = "/basis/api/action"):
         """
@@ -636,39 +846,72 @@ class Basis(FastAPI, DBAppMixin):
 
             self.add_route("/basis/api/plugins-registry", _plugins_registry_handler, methods=["GET"], name="basis_plugins_registry")
 
+    def _auto_discover_plugins(self):
+        """
+        Discover and register plugins from the local ``plugins/`` directory
+        and from installed packages (via ``entry_points``).
+        """
+        # Layer 1: Local plugins/ directory (always — inherently app-scoped)
+        for plugin in discover_local_plugins(self._app_dir, self._plugins_dir):
+            self.include_plugin(plugin)
+
+        # Layer 2: Installed plugins via entry_points (with optional filtering)
+        if self._plugins_config is not False:
+            allowlist = (
+                self._plugins_config
+                if isinstance(self._plugins_config, list)
+                else None
+            )
+            for plugin in discover_installed_plugins(
+                allowlist=allowlist, blocklist=self._exclude_plugins
+            ):
+                self.include_plugin(plugin)
+
+    def _detect_app_directory(self) -> Path:
+        """
+        Determine the filesystem directory of the application that created
+        this Basis instance.  Uses the caller's ``__file__`` from the import
+        stack, falling back to ``cwd()``.
+        """
+        # Walk up the call stack to find the first frame outside of basis itself
+        for frame_info in inspect.stack():
+            frame_file = frame_info.filename
+            if "basis/server/" not in frame_file and "basis/shared/" not in frame_file:
+                return Path(frame_file).parent.resolve()
+        return Path.cwd()
+
     def include_plugin(self, plugin: BasisPlugin):
         """
         Register a BasisPlugin with this Basis app.
 
-        This performs three actions in order:
+        This method is **idempotent** — calling it with the same plugin
+        instance or a plugin with the same ``name`` is silently ignored.
 
-        1. **Routes** — mounts all HTTP endpoints declared on ``plugin.router``
-           (via ``@plugin.get``, ``@plugin.post``, ``@plugin.router.get``, etc.)
-           by calling ``app.include_router``.
-        2. **Static files** — if ``plugin.static_dir`` is set and exists on
-           disk, serves that directory at ``plugin.static_mount`` so PyScript
-           can fetch and import the plugin's component ``.py`` / ``.html`` /
-           ``.css`` files.
-        3. **SSR page** — if the plugin has a ``root_component`` attribute, an
-           SSR page is registered at ``plugin.prefix``.
+        Steps performed in order:
 
-        Server actions (``@server_action``) declared inside the plugin's module
-        do **not** require special handling here — they self-register in the
-        global ``_action_registry`` at import time and are reached by clients
-        through the existing ``POST /basis/api/action`` endpoint.
+        1. **Dedup check** — skip if already registered.
+        2. **Routes** — mounts all HTTP endpoints declared on ``plugin.router``.
+        3. **Static files** — if ``plugin.static_dir`` is set and exists on
+           disk, serves that directory at ``plugin.static_mount``.
+        4. **SSR page** — if the plugin has a ``root_component`` attribute.
+        5. **Models** — merges the plugin's model set into the app.
+        6. **Tracking** — appends to ``_plugins``.
+        7. **on_register hook** — calls ``plugin.on_register(app)``.
 
         Parameters
         ----------
         plugin:
             A :class:`~basis.server.plugin.BasisPlugin` instance.
-
-        Example
-        -------
-        ::
-
-            from my_chat import plugin as chat_plugin
-            app.include_plugin(chat_plugin)
         """
+        if not hasattr(self, "_plugins"):
+            self._plugins = []
+
+        # Idempotent: skip if already registered (by identity or name)
+        for existing in self._plugins:
+            if existing is plugin or existing.name == plugin.name:
+                logger.debug(f"Plugin '{plugin.name}' already registered, skipping.")
+                return
+
         # 1. Wire all HTTP routes declared on the plugin's router.
         self.include_router(plugin.router)
 
@@ -691,9 +934,14 @@ class Basis(FastAPI, DBAppMixin):
             self.models.update(plugin.models)
 
         # 5. Track included plugins
-        if not hasattr(self, "_plugins"):
-            self._plugins = []
         self._plugins.append(plugin)
+
+        # 6. Call on_register lifecycle hook
+        try:
+            plugin.on_register(self)
+        except Exception as e:
+            logger.error(f"\u274c Plugin '{plugin.name}' on_register failed: {e}")
+            raise
 
     def entrypoint(self, component_cls=None, *, pyscript_src=ONLINE_PYSCRIPT):
         """

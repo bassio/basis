@@ -57,12 +57,15 @@ class BasisPlugin(ModelRegistryMixin):
         static_mount: str | None = None,
         name: str | None = None,
         tags: list[str] | None = None,
+        requires: list[str] | None = None,
     ):
         self.prefix = prefix.rstrip("/")
         self.static_dir = static_dir
         self.static_mount = static_mount or self.prefix
         self.name = name or self.prefix.strip("/").replace("/", "_") or "plugin"
+        self.requires = requires or []
         self.models = set()
+        self._settings = {}
         self.router = APIRouter(prefix=self.prefix, tags=tags or [])
 
     def action(self, func_or_name: T | str | None = None, name: str | None = None) -> Any:
@@ -105,3 +108,12 @@ class BasisPlugin(ModelRegistryMixin):
 
     def patch(self, path: str, **kwargs):
         return lambda f: f
+
+    # Lifecycle hooks (no-ops on client)
+    def on_register(self, app=None): pass
+    async def on_startup(self, app=None): pass
+    async def on_shutdown(self, app=None): pass
+
+    def configure(self, **settings):
+        self._settings.update(settings)
+        return self

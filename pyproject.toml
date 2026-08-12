@@ -8,7 +8,12 @@ requires-python = ">=3.14"
 dependencies = [
     "beautifulsoup4>=4.14.3",
     "fastapi[standard]>=0.127.0",
+    "typer>=0.20.0",
+    "rich>=13.0.0",
 ]
+
+[project.scripts]
+basis = "basis.cli.main:app"
 
 [project.optional-dependencies]
 db = [

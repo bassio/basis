@@ -16,9 +16,17 @@ class SplitPaneItem(Component):
             min-height: var(--pane-min-size, 0px);
             max-width: var(--pane-max-size, none);
             max-height: var(--pane-max-size, none);
-            flex: var(--pane-flex, 1 1 auto);
+            flex: 1 1 auto;
             box-sizing: border-box;
+            height: 100%;
+            width: 100%;
         }
+
+        ui-pane[initial-size="220px"] { flex: 0 0 220px; width: 220px; }
+        ui-pane[initial-size="240px"] { flex: 0 0 240px; width: 240px; }
+        ui-pane[initial-size="20%"] { flex: 0 0 20%; width: 20%; }
+        ui-pane[initial-size="60%"] { flex: 0 0 60%; width: 60%; }
+        ui-pane[initial-size="100%"] { flex: 1 1 0%; width: 100%; }
 
         ui-pane:not([initial-size]), ui-pane[initial-size="auto"] {
             flex: 1 1 0%;
@@ -38,7 +46,7 @@ class SplitPaneItem(Component):
     def template(self):
         """
         <div class="ui-pane-content" 
-             style="--pane-min-size: {min_size}; --pane-max-size: {max_size}; flex-basis: {initial_size};">
+             style="--pane-min-size: {min_size}; --pane-max-size: {max_size};">
             <slot></slot>
         </div>
         """

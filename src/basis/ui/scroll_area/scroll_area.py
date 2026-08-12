@@ -8,9 +8,12 @@ class ScrollArea(Component):
     def style(self):
         """
         ui-scroll-area, :host {
-            display: block;
+            display: flex;
+            flex-direction: column;
             width: 100%;
             height: 100%;
+            flex: 1;
+            min-height: 0;
             overflow: hidden;
             position: relative;
             background: var(--bg-primary, #1e1e1e);
@@ -19,6 +22,8 @@ class ScrollArea(Component):
         .ui-scroll-area-viewport {
             width: 100%;
             height: 100%;
+            flex: 1;
+            min-height: 0;
             padding: 0;
             margin: 0;
             background: var(--bg-primary, #1e1e1e);

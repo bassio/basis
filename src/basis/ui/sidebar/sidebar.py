@@ -7,16 +7,24 @@ class Sidebar(Component):
     
     def style(self):
         """
+        ui-sidebar, :host {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+        }
+
         .ui-sidebar {
             display: flex;
             flex-direction: column;
-            --sidebar-width: 16rem; /* 256px */
+            --sidebar-width: 100%;
             --sidebar-width-icon: 3.5rem; /* 56px */
             background-color: var(--bg-secondary, #f8f9fa);
             transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             height: 100%;
             overflow: hidden;
-            width: var(--sidebar-width);
+            width: 100%;
             flex-shrink: 0;
             box-sizing: border-box;
             color: var(--text-primary, #2e2e2e);
