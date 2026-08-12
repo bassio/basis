@@ -85,6 +85,7 @@ Creating and consuming self-discoverable Basis plugins.
 ---
 
 ### Chapter 8: Appendix
-Reference material for developer CLI commands and secondary features.
+Reference material for developer CLI commands, codebase directory layout, and secondary features.
 
 - **[CLI Tooling](08_appendix/cli.md)** — Scaffold projects with `basis init`, run dev servers with `basis dev`, and inspect plugins with `basis plugin list`.
+- **[Codebase Structure](08_appendix/codebase-structure.md)** — Core directories, modules, and architecture layout of the Basis repository.

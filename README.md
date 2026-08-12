@@ -63,18 +63,6 @@ Navigate to `http://localhost:8000` to interact with the application.
 
 ---
 
-## Codebase Structure
-
-- `src/basis/cli/` — CLI commands (`dev`, `init`, `plugin`).
-- `src/basis/ui/` — Built-in component suite (`button`, `toast`, `breadcrumbs`, etc.).
-- `src/basis/shared/dag.py` — Unified reactive dependency graph engine.
-- `src/basis/shared/bindings.py` — DOM bindings (Text, Attribute, Loops, Slots).
-- `src/basis/shared/base_component.py` — Component lifecycle, state mapping, and setup.
-- `src/basis/client/` — Browser-side component mounting and PyScript runtime.
-- `src/basis/server/` — FastAPI application wrapper, static file servers, PYC compiler, and RPC router.
-
----
-
 ## Documentation
 
 For comprehensive guides, architecture diagrams, and detailed API breakdowns, browse the files in the **`docs/`** directory starting with **[docs/index.md](docs/index.md)**.
