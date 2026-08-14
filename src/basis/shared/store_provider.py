@@ -73,8 +73,12 @@ class StoreProvider(Component):
     def initialize(cls, container, **kwargs):
         name = kwargs.get("name", "")
         if name and name not in Store._registry:
-            # Create store synchronously so children can bind to it
-            Store(name)
+            # Create the store synchronously so children can bind to it. Prefer
+            # the canonical factory (proper subclass + constructor args); fall back
+            # to a plain Store(name) for config-only names. Never a raw plain
+            # Store(name) when a blueprint exists — that would trip the conflict
+            # guard and lose subclass constructor state.
+            Store.reinstantiate(name) or Store(name)
             
         instance = super().initialize(container, **kwargs)
         

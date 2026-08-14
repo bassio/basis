@@ -33,9 +33,104 @@ from basis.shared.db import _make_serializable
 from basis.shared.reactive import ReactiveObject
 
 
+def _format_config(config: dict) -> str:
+    """Render a store config snapshot for error messages, e.g. (model, url='/api')."""
+    if "args" in config or "kwargs" in config:
+        # Generic constructor-config capture: (args, kwargs).
+        args = config.get("args", ())
+        kwargs = config.get("kwargs", {})
+    else:
+        # Explicit flat config capture (e.g. ModelStore: {"model": ..., "url": ...}).
+        args, kwargs = (), config
+    parts = [repr(a) for a in args]
+    parts += [f"{k}={v!r}" for k, v in kwargs.items()]
+    return f"({', '.join(parts)})"
+
+
 class Store(ReactiveObject):
     _registry = ContextVarProxyDict("store_registry")
     _pending_subscriptions = ContextVarProxyDict("store_pending_subscriptions")
+
+    # Persistent config registry: name -> (cls, config_snapshot).
+    # Unlike `_registry` (which is cleared per-request for SSR isolation), this is a plain
+    # class-level dict that survives request boundaries, so server actions can re-instantiate
+    # a store even after the per-request registry reset wiped the live instance.
+    _store_blueprints: dict[str, tuple[type, dict]] = {}
+
+    @classmethod
+    def _capture_config(cls, *args, **kwargs) -> dict:
+        """
+        Snapshot the non-reactive constructor config (excluding the store name).
+        Subclasses with explicit config (ModelStore, WebSocketStore, ...) override
+        this to record a flat, explicit config dict instead of raw constructor
+        plumbing.
+        """
+        return {
+            "args": args,
+            "kwargs": {k: v for k, v in kwargs.items() if k != "name"},
+        }
+
+    @classmethod
+    def _restore(cls, name: str, config: dict) -> "Store":
+        """Rebuild a store instance from a captured config snapshot."""
+        return cls(name, *config["args"], **config["kwargs"])
+
+    def __new__(cls, name: str | None = None, *args, **kwargs):
+        instance = super().__new__(cls)
+        if name is None:
+            name = kwargs.get("name")
+        if name is None:
+            return instance
+
+        # The store NAME is the registry key (the $<name> DSL identity), not part
+        # of the config. Capture the non-reactive constructor config so SSR/RPC
+        # can rebuild this store later (see `reinstantiate`).
+        config = cls._capture_config(*args, **kwargs)
+
+        existing = cls._store_blueprints.get(name)
+        if existing is None:
+            # First declaration wins — the canonical config used by RPC/SSR.
+            cls._store_blueprints[name] = (cls, config)
+        else:
+            # Same name, same class + config → benign (this is exactly what
+            # `reinstantiate`/SSR reconstruction does). Same name, DIFFERENT
+            # config → genuine $name ambiguity → fail loudly.
+            store_cls, store_config = existing
+            try:
+                same_config = store_cls is cls and store_config == config
+            except Exception:
+                # Exotic config whose __eq__ cannot be compared — treat as benign
+                # rather than blocking reconstruction.
+                same_config = True
+            if not same_config:
+                raise ValueError(
+                    f"Cannot redeclare store '{name}': already registered as "
+                    f"{store_cls.__name__}{_format_config(store_config)}, "
+                    f"attempting to register as "
+                    f"{cls.__name__}{_format_config(config)}. "
+                    f"Store names are unique (they are the $<name> DSL identity); "
+                    f"fix the duplicate declaration rather than re-declaring with "
+                    f"new arguments."
+                )
+        return instance
+
+    @classmethod
+    def reinstantiate(cls, name: str) -> "Store | None":
+        """
+        Create a fresh instance of the store registered under *name* from its
+        persistent config snapshot (class + config).  Returns ``None`` if no
+        blueprint was ever recorded.
+
+        This powers store-bound server actions: after the per-request registry
+        reset wiped the live instance, the action handler can rebuild one with the
+        same class and config.  Server actions are expected to read authoritative
+        state from the DB (fresh sessions), so a fresh instance is safe.
+        """
+        blueprint = cls._store_blueprints.get(name)
+        if not blueprint:
+            return None
+        store_cls, config = blueprint
+        return store_cls._restore(name, config)
 
     @classmethod
     def from_dict(cls, name:str, init_dict:dict):
@@ -45,35 +140,6 @@ class Store(ReactiveObject):
             new_store.__dict__[k] = v
 
         return new_store
-
-    def serialize(self) -> dict:
-        """
-        Extract serialisable state from this Store instance.
-        Skips private/dunder attributes and non-serialisable callables.
-        """
-        state = {}
-        for k, v in self.__dict__.items():
-            if k.startswith('_'):
-                continue
-            if callable(v):
-                continue
-            try:
-                serializable_v = _make_serializable(v)
-                json.dumps(serializable_v)     # quick serialisability check
-                state[k] = serializable_v
-            except (TypeError, ValueError):
-                pass
-        return state
-
-    def __getattr__(self, name: str) -> Any:
-        if name.startswith('_'):
-            raise AttributeError(name)
-
-        _first_load_completed = self.__dict__.get('_first_load_completed', False)
-        if not _first_load_completed:
-            return None
-            
-        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
     def __init__(self, name: str):
         super().__init__()
@@ -132,6 +198,35 @@ class Store(ReactiveObject):
 
         # Register @computed properties from the class
         self._init_computed()
+
+    def serialize(self) -> dict:
+        """
+        Extract serialisable state from this Store instance.
+        Skips private/dunder attributes and non-serialisable callables.
+        """
+        state = {}
+        for k, v in self.__dict__.items():
+            if k.startswith('_'):
+                continue
+            if callable(v):
+                continue
+            try:
+                serializable_v = _make_serializable(v)
+                json.dumps(serializable_v)     # quick serialisability check
+                state[k] = serializable_v
+            except (TypeError, ValueError):
+                pass
+        return state
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith('_'):
+            raise AttributeError(name)
+
+        _first_load_completed = self.__dict__.get('_first_load_completed', False)
+        if not _first_load_completed:
+            return None
+            
+        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
     def get_store_name(self):
         return self.__dict__['_name']
@@ -193,14 +288,32 @@ class Store(ReactiveObject):
         super().__setattr__(key, value)
 
 class WebSocketStore(Store):
+    @classmethod
+    def _capture_config(cls, ws_url: str) -> dict:
+        """Explicit non-reactive config snapshot (websocket url)."""
+        return {"ws_url": ws_url}
+
+    @classmethod
+    def _restore(cls, name: str, config: dict) -> "WebSocketStore":
+        return cls(name, **config)
+
     def __init__(self, name: str, ws_url: str):
         super().__init__(name)
-        
-        # WebSocket connection
+
+        # WebSocket url + handle are non-reactive wiring, not state nodes.
+        self.__dict__['_config'] = {"ws_url": ws_url}
+        self.__dict__['_ws'] = None
         if WebSocket:
-            self.ws_url = ws_url
-            self.ws = WebSocket.new(ws_url)
-            self.ws.onmessage = self._on_message
+            self.__dict__['_ws'] = WebSocket.new(ws_url)
+            self.__dict__['_ws'].onmessage = self._on_message
+
+    @property
+    def ws_url(self) -> str:
+        return self.__dict__['_config']['ws_url']
+
+    @property
+    def ws(self):
+        return self.__dict__.get('_ws')
     
     def _on_message(self, event):
         data = json.loads(event.data)
@@ -209,8 +322,9 @@ class WebSocketStore(Store):
             setattr(self, k, v)
 
     def dispatch(self, action: str, payload: dict):
-        if self.ws and self.ws.readyState == 1: # OPEN
-            self.ws.send(json.dumps({"action": action, "payload": payload}))
+        ws = self.__dict__.get('_ws')
+        if ws and ws.readyState == 1: # OPEN
+            ws.send(json.dumps({"action": action, "payload": payload}))
         else:
             print(f"WebSocket not open. Cannot dispatch action '{action}'.")
 
@@ -270,20 +384,54 @@ def _matches_params(x: Any, params: dict) -> bool:
 
 
 class ModelStore(Store):
+    # Config attribute names are immutable metadata — never reactive state.
+    _CONFIG_ATTRS = frozenset({"model", "model_name", "custom_url"})
+
+    @classmethod
+    def _capture_config(cls, model: Any, url: str | None = None) -> dict:
+        """Explicit non-reactive config snapshot (model + endpoint url)."""
+        return {"model": model, "url": url}
+
+    @classmethod
+    def _restore(cls, name: str, config: dict) -> "ModelStore":
+        return cls(name, **config)
+
     def __init__(self, name: str, model: Any, url: str | None = None):
         super().__init__(name)
-        self.model = model
-        self.model_name = getattr(model, "__name__", str(model))
-        self.custom_url = url
+        # Non-reactive config: private dict, bypasses the DAG and serialize().
+        self.__dict__['_config'] = {
+            "model": model,
+            "model_name": getattr(model, "__name__", str(model)),
+            "url": url,
+        }
         if 'items' not in self.__dict__:
             self.__dict__['items'] = []
+
+    def __setattr__(self, name, value):
+        if name in self._CONFIG_ATTRS:
+            raise AttributeError(
+                f"{self.__class__.__name__} config '{name}' is read-only"
+            )
+        super().__setattr__(name, value)
+
+    @property
+    def model(self) -> Any:
+        return self.__dict__['_config']['model']
+
+    @property
+    def model_name(self) -> str:
+        return self.__dict__['_config']['model_name']
+
+    @property
+    def custom_url(self) -> str | None:
+        return self.__dict__['_config']['url']
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith('_'):
             raise AttributeError(name)
         
         # Check fields
-        model = self.__dict__.get("model")
+        model = self.__dict__['_config'].get("model")
         if model is None:
             raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
             

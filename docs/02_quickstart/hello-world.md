@@ -6,7 +6,7 @@ This guide walks through setting up a minimal Basis app. By the end you'll have 
 
 ## 1. Installation
 
-Basis requires Python 3.10 or higher. Install it alongside FastAPI and Uvicorn:
+Basis requires **Python 3.14 or higher** (this matches the framework's `requires-python` constraint in `pyproject.toml`). Install it alongside FastAPI and Uvicorn:
 
 ```bash
 pip install fastapi uvicorn basis-framework

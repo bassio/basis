@@ -1,3 +1,8 @@
+// Registry of custom-element configs keyed by tag. Basis Python refreshes the
+// entry on HMR re-imports so NEW elements render the updated template without
+// needing to redefine the (already-registered) custom element.
+globalThis.__basisElementConfigs = {};
+
 class LightDomComponent extends HTMLElement {
   constructor() {
     super();
@@ -10,12 +15,18 @@ class LightDomComponent extends HTMLElement {
 
 function CustomElementFactory(config) {
 
+  if (config && config['pyTag']) {
+    globalThis.__basisElementConfigs[config['pyTag']] = config;
+  }
+
   let C = class extends HTMLElement
   {
     constructor() {
       super();
 
-      this.config = config;
+      // Prefer the freshest config (HMR may have refreshed the registry).
+      const tag = (this.tagName || '').toLowerCase();
+      this.config = globalThis.__basisElementConfigs[tag] || config;
 
       console.log(`JS: Initializing constructor for '${this.tagName}' element`);
 
@@ -37,8 +48,14 @@ function CustomElementFactory(config) {
       
       console.log(`JS: ${this.tagName} added to page (connectedCallback())`);
 
+      // Refresh from the registry so HMR template updates reach existing elements.
+      const tag = (this.tagName || '').toLowerCase();
+      if (globalThis.__basisElementConfigs[tag]) {
+        this.config = globalThis.__basisElementConfigs[tag];
+      }
+
       const shadow = this.config['__shadow__'];
-      const pyClassName = this.config['pyClass'];
+      const pyClassName = this.config['pyClassName'];
 
       // ── SSR Hydration Detection ──────────────────────────────────────────
       // If the first element child carries a data-basis-component marker that

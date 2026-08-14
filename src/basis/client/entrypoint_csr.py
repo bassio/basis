@@ -42,3 +42,10 @@ if imports_element:
 
     except Exception as e:
         print(f"[Basis] Error parsing entrypoint imports: {e}")
+
+
+# Start HMR — live hot-swap of component files (.py/.html/.css) during development.
+try:
+    start_hmr()
+except Exception as e:
+    print(f"[Basis] HMR service could not be started: {e}")

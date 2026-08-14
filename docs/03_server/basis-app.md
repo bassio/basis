@@ -38,7 +38,7 @@ app = Basis(
 | :--- | :--- | :--- | :--- |
 | `pyc_mode` | `bool` | `False` | When `True` (or when `BASIS_PYC_MODE=1` is set in environment), enables on-the-fly PYC bytecode compilation for served Python files. |
 | `plugins_dir` | `str` | `"plugins"` | Directory path relative to the app where local plugins reside. |
-| `plugins` | `bool \| list[str]` | `True` | Controls plugin discovery. `True` discovers all; `["name1"]` allows specific plugins; `False` disables installed-plugin discovery. |
+| `plugins` | `bool \| list[str] \| None` | `None` | Controls plugin discovery. `None` (the default) and `True` both discover all installed plugins; `["name1"]` restricts to specific plugins (allowlist); `False` disables installed-plugin discovery. Local `plugins/` scanning always runs. |
 | `exclude_plugins` | `list[str]` | `None` | Optional list of plugin names to exclude from loading. |
 
 ---
@@ -68,6 +68,9 @@ The simplest way to configure a single-page Basis app. Decorating your root comp
 - Calls `app.bootstrap()` to initialize framework infrastructure.
 - Registers a GET route at `/` that server-renders the decorated component.
 - Detects the component module file and mounts its parent directory so PyScript can fetch dependencies.
+
+> [!NOTE]
+> `@app.entrypoint` configures PyScript to load from the **online** CDN (`https://pyscript.net/releases/2026.3.1`) by default. Pass `pyscript_src="/pyscript"` to use the offline bundle that `bootstrap()` mounts instead. See [The Page Component](../04_components/page-component.md) for details.
 
 ```python
 @app.entrypoint

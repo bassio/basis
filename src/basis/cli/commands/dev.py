@@ -42,9 +42,14 @@ def dev(
         help="Bind port.",
     ),
     reload: bool = typer.Option(
-        True,
+        False,
         "--reload/--no-reload",
-        help="Enable auto-reload on file changes.",
+        help="Full-process reload on file changes (uvicorn --reload). Disables live HMR hot-swap.",
+    ),
+    hmr: bool = typer.Option(
+        True,
+        "--hmr/--no-hmr",
+        help="Live client-side HMR: watch component files (.py/.html/.css) and hot-swap in the browser without a page refresh.",
     ),
     pyc: bool = typer.Option(
         False,
@@ -55,10 +60,23 @@ def dev(
     """
     Start the Basis development server with hot-module reloading.
 
+    By default component files (.py/.html/.css) are hot-swapped live in the
+    browser over a WebSocket — no page refresh, no state loss. Pass ``--reload``
+    to fall back to full process restarts instead (e.g. while editing server-only
+    code outside component directories).
+
     Auto-detects the Basis app in the current project if no app path is given.
     """
     if pyc:
         os.environ["BASIS_PYC_MODE"] = "1"
+
+    # Live HMR is the default. uvicorn --reload is mutually exclusive: it restarts
+    # the whole process on any .py change, which would preempt (and race with) the
+    # in-process HMR watcher.
+    if hmr and not reload:
+        os.environ["BASIS_HMR"] = "1"
+    else:
+        os.environ.pop("BASIS_HMR", None)
 
     project_dir = resolve_project_dir()
     import_path, run_dir = find_basis_app(app_path, cwd=project_dir)
@@ -70,7 +88,7 @@ def dev(
     module_part, attr_part = import_path.split(":", 1)
 
     # Build the startup banner
-    _print_banner(import_path, host, port, reload, pyc, project_dir)
+    _print_banner(import_path, host, port, reload, hmr, pyc, project_dir)
 
     # Discover and display plugins before starting
     _show_plugin_summary(module_part, project_dir)
@@ -104,7 +122,7 @@ def dev(
         raise typer.Exit()
 
 
-def _print_banner(import_path: str, host: str, port: int, reload: bool, pyc: bool, project_dir: Path):
+def _print_banner(import_path: str, host: str, port: int, reload: bool, hmr: bool, pyc: bool, project_dir: Path):
     """Print a styled startup banner."""
     url = f"http://{host}:{port}"
     if host == "0.0.0.0":
@@ -117,8 +135,10 @@ def _print_banner(import_path: str, host: str, port: int, reload: bool, pyc: boo
     ]
     if pyc:
         lines.append("[bold cyan]⚡ PYC:[/]     [yellow]enabled[/] — serving bytecode to client VFS")
-    if reload:
-        lines.append("[bold cyan]🔥 HMR:[/]     [green]enabled[/] — watching for changes")
+    if hmr and not reload:
+        lines.append("[bold cyan]🔥 HMR:[/]     [green]enabled[/] — live hot-swap (.py/.html/.css)")
+    elif reload:
+        lines.append("[bold cyan]🔥 HMR:[/]     [yellow]reload mode[/] — full process restarts")
 
     panel = Panel(
         "\n".join(lines),

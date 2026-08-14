@@ -368,7 +368,9 @@ class Basis(FastAPI, DBAppMixin):
                  exclude_plugins: list[str] | None = None,
                  pyc_mode: bool = False,
                  **kwargs):
-        self._start_hmr_watcher = False
+        # Client-side HMR is enabled by default for dev via the BASIS_HMR env var
+        # (set by ``basis dev --hmr``), or programmatically via run_with_hmr().
+        self._start_hmr_watcher = os.environ.get("BASIS_HMR", "").lower() in ("1", "true", "yes")
         self._plugins_dir = plugins_dir
         # plugins=True/None → auto-discover all; plugins=["a","b"] → allowlist;
         # plugins=False → disable installed-plugin discovery (local still works)
@@ -431,15 +433,31 @@ class Basis(FastAPI, DBAppMixin):
             from basis.shared.base_component import BaseComponent
             from basis.shared.router import Route
 
-            # Reset global registries to isolate per-request SSR state and avoid DetachedInstanceError
-            Store._registry.clear()
-            Store._pending_subscriptions.clear()
-            BaseComponent._instance_registry.clear()
-            BaseComponent._pending_subscriptions.clear()
-            Route._route_registry.clear()
+            # Reset global registries to isolate per-request SSR state and avoid DetachedInstanceError.
+            # RPC endpoints are EXEMPT: store-bound @server_action methods must be able to resolve
+            # their (persistent) store instance — see Store._store_blueprints / Store.reinstantiate.
+            if request.url.path not in ("/basis/api/action", "/basis/api/plugin-action"):
+                Store._registry.clear()
+                Store._pending_subscriptions.clear()
+                BaseComponent._instance_registry.clear()
+                BaseComponent._pending_subscriptions.clear()
+                Route._route_registry.clear()
 
             response = await call_next(request)
             return response
+
+        # HMR WebSocket endpoint — registered exactly once (regardless of how many
+        # component directories are mounted) so the client always has a stable /ws/hmr.
+        @self.websocket("/ws/hmr")
+        async def hmr_websocket_endpoint(websocket: WebSocket):
+            await self.hmr_manager.connect(websocket)
+            try:
+                while True:
+                    await websocket.receive_text()  # Just keep connection alive
+            except WebSocketDisconnect:
+                self.hmr_manager.disconnect(websocket)
+            except Exception:
+                self.hmr_manager.disconnect(websocket)
 
     def get_component_pyscript_vfs_path(self, component:"Component"):
         
@@ -518,42 +536,78 @@ class Basis(FastAPI, DBAppMixin):
         self.routes.append(m)
         self._component_routes.append(m)
 
-        # HMR WebSocket endpoint
-        @self.websocket("/ws/hmr")
-        async def hmr_websocket_endpoint(websocket: WebSocket):
-            await self.hmr_manager.connect(websocket)
-            try:
-                while True:
-                    await websocket.receive_text() # Just keep connection alive
-            except WebSocketDisconnect:
-                self.hmr_manager.disconnect(websocket)
-            except Exception:
-                self.hmr_manager.disconnect(websocket)
+    def _build_hmr_file_map(self):
+        """
+        Build ``{absolute_path: meta}`` for every watched component file.
+
+        For ``.py`` files the meta includes the authoritative client **import
+        module name** (same derivation as ``initialize_pyscript_registry``) so the
+        client can reload the exact module instead of guessing from a path.
+        """
+        file_map = {}
+        for m in self._component_routes:
+            watch_dir = Path(m.app.directory).absolute()
+            if not watch_dir.exists():
+                continue
+
+            clean_mount = m.path.rstrip("/")
+            mount_parts = [p for p in clean_mount.split("/") if p]
+
+            for f in itertools.chain(watch_dir.rglob("*.py"), watch_dir.rglob("*.html"), watch_dir.rglob("*.css")):
+                # Never watch compiled bytecode or stray caches
+                if "__pycache__" in f.parts or f.suffix == ".pyc":
+                    continue
+                rel = f.relative_to(watch_dir)
+                meta = {"file": str(rel), "ext": f.suffix.lstrip(".")}
+                if f.suffix == ".py":
+                    parts = list(mount_parts) + list(rel.with_suffix("").parts)
+                    if parts and parts[-1] == "__init__":
+                        parts.pop()
+                    if parts:
+                        meta["module"] = ".".join(parts)
+                file_map[str(f.absolute())] = meta
+        return file_map
 
     async def _start_file_watcher(self):
         """Simple poller to watch for file changes and broadcast HMR events."""
         mtimes = {}
-        
+        file_map = self._build_hmr_file_map()
+
         # Initial scan
         watch_dirs = [Path(m.app.directory).absolute() for m in self._component_routes]
-        # Also watch the basis package itself for core changes? Maybe too much.
-        
+
         while True:
-            for watch_dir in watch_dirs:
-                for ext in ["*.py", "*.html", "*.css"]:
-                    for f in watch_dir.glob(f"**/{ext}"):
-                        mtime = f.stat().st_mtime
+            try:
+                for watch_dir in watch_dirs:
+                    if not watch_dir.exists():
+                        continue
+                    for f in watch_dir.rglob("*"):
+                        if f.suffix not in (".py", ".html", ".css"):
+                            continue
+                        if "__pycache__" in f.parts:
+                            continue
+                        try:
+                            mtime = f.stat().st_mtime
+                        except OSError:
+                            continue
                         if f in mtimes and mtimes[f] < mtime:
-                            logger.info(f"HMR: File changed: {f.name}")
-                            # Determine type and relative path
+                            logger.info("HMR: File changed: %s", f.name)
                             rel_path = f.relative_to(watch_dir)
+                            meta = file_map.get(str(f.absolute()), {})
+                            try:
+                                content = f.read_text(encoding="utf-8")
+                            except OSError:
+                                content = ""
                             await self.hmr_manager.broadcast({
                                 "type": "hmr",
                                 "file": str(rel_path),
-                                "ext": f.suffix.lstrip("."),
-                                "content": f.read_text()
+                                "ext": meta.get("ext") or f.suffix.lstrip("."),
+                                "module": meta.get("module"),
+                                "content": content,
                             })
                         mtimes[f] = mtime
+            except Exception as e:  # never let the watcher die
+                logger.warning("HMR: watcher error: %s", e)
             await asyncio.sleep(0.5)
 
     def start_file_watcher(self):
@@ -734,6 +788,12 @@ class Basis(FastAPI, DBAppMixin):
             if store_name:
                 instance = Store._registry.get(store_name)
                 if not instance:
+                    # The per-request registry reset may have wiped the live instance;
+                    # fall back to the persistent store blueprint registry and rebuild it.
+                    instance = Store.reinstantiate(store_name)
+                    if instance is not None:
+                        Store._registry[store_name] = instance
+                if not instance:
                     raise HTTPException(status_code=404, detail=f"Store '{store_name}' not found")
 
             try:
@@ -807,6 +867,10 @@ class Basis(FastAPI, DBAppMixin):
                 if store_name:
                     from basis.shared.store import Store
                     instance = Store._registry.get(store_name)
+                    if not instance:
+                        instance = Store.reinstantiate(store_name)
+                        if instance is not None:
+                            Store._registry[store_name] = instance
                     if not instance:
                         raise HTTPException(status_code=404, detail=f"Store '{store_name}' not found")
 

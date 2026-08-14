@@ -82,7 +82,16 @@ class ContextVarProxyDict(dict):
         return self._get_dict().get(key, default)
 
     def clear(self):
-        self._get_dict().clear()
+        if IS_CLIENT:
+            self._clientside_fallback_dict.clear()
+        else:
+            # Rebind a fresh dict for the CURRENT context instead of clearing the
+            # shared dict in place.  ContextVar copies share the same value object,
+            # so `dict.clear()` here would wipe the registry for *every* context
+            # (including the main context where module-scope stores live).  Rebinding
+            # gives each request a genuinely empty registry while leaving other
+            # contexts untouched — this is what makes per-request SSR isolation real.
+            self._var.set({})
 
     def pop(self, key, default=None):
         return self._get_dict().pop(key, default)

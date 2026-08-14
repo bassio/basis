@@ -24,12 +24,29 @@ Expressions are evaluated against the component instance's namespace. The follow
 ```
 
 **Allowed built-ins:**
-A curated set of Python built-ins is available: `len`, `str`, `int`, `float`, `bool`, `range`, `list`, `dict`, `min`, `max`, `abs`, and a few others.
+A curated set of Python built-ins is available inside braces:
+
+- **Constants / literals**: `False`, `True`, `None`
+- **Conversions**: `int`, `float`, `str`, `list`, `tuple`, `set`, `repr`, `format`
+- **Numeric helpers**: `min`, `max`, `sum`, `pow`, `round`, `divmod`, `hex`, `oct`, `ord`
+- **Collection utilities**: `len`, `enumerate`, `filter`, `iter`, `map`, `range`, `reversed`, `slice`, `sorted`, `zip`
+
 ```html
 <p>Items in cart: {len(cart_items)}</p>
+<p>Total price: {round(sum(prices), 2)}</p>
 ```
 
-Arbitrary function calls, imports, and attribute writes are rejected by the AST parser at parse time.
+> [!NOTE]
+> The list above is the exact set defined in `ALLOWED_BUILTINS` in `basis/shared/bindings.py`. Notably, `bool`, `dict`, and `abs` are **not** included — use their equivalents (`bool(x)` can usually be written as a plain truthiness check; `abs` as `max(x, -x)`), or expose them as computed properties / component attributes.
+
+### Restrictions at parse time
+
+The AST sandbox rejects two categories of expression up front:
+
+- **Imports** — no `import` statements or `__import__` calls are available inside braces.
+- **Attribute writes** — expressions are evaluated read-only (`ast.Load` only); you cannot assign inside a binding.
+
+Function and method **calls are not blocked outright**: an expression may call any allowed built-in, or a method accessible on the component instance (e.g. `{name.upper()}`). Because bindings should stay free of side effects, complex logic belongs in event handlers or `@computed` properties — but the sandbox does not enforce that at parse time.
 
 ---
 

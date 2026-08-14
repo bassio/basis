@@ -8,7 +8,7 @@ This is the core difference from Virtual DOM frameworks, which re-evaluate the e
 
 ## Binding types
 
-The framework defines twelve specialized binding classes, each handling a distinct type of DOM relationship.
+The framework defines various specialized binding classes, each handling a distinct type of DOM relationship.
 
 ### `SelfBinding`
 
@@ -91,7 +91,7 @@ If you *do* provide a `key`, Basis tracks the identity of the underlying data it
 
 ### `SlotBinding`
 
-Reserves a zone in a child component's template for content projected from the parent. See [Parent & Child Components](child-components.md) for usage.
+Reserves a zone in a child component's template for content projected from the parent. See [Parent & Child Components](../04_components/child-components.md) for usage.
 
 ---
 

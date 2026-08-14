@@ -57,6 +57,10 @@ class BaseComponent(ReactiveObject):
     _instance_registry = ContextVarProxyDict("component_instance_registry")
     _live_instances = weakref.WeakSet()
     _pending_subscriptions = ContextVarProxyDict("component_pending_subscriptions")
+    # Client-only: class name -> [<style> elements injected by mount_app]. Used by
+    # HMR to live-update a component's CSS even when the <style> lives inside a
+    # shadow root (where document.querySelectorAll cannot reach it).
+    _style_elements = {}
 
     S = Store._registry
     C = _instance_registry
@@ -943,13 +947,16 @@ class BaseComponent(ReactiveObject):
                     style_elem.textContent = style_content
                     container.prepend(style_elem)
 
+                    # Track the element so HMR can update it (works inside shadow roots).
+                    try:
+                        cls._style_elements.setdefault(c.__name__, []).append(style_elem)
+                    except Exception:
+                        pass
+
         return new_instance
 
-    def hot_swap(self, new_cls):
-        """Hot-swap this instance with a new class definition."""
-        print(f"HMR: Hot-swapping instance {self} to {new_cls}")
-        
-        # 1. Capture current state (standard fields)
+    def _capture_state(self):
+        """Snapshot the instance's plain (non-$/#) field values before a hot-swap."""
         state = {}
         for field in self.__fields__:
             if not field.startswith(("$", "#")):
@@ -957,50 +964,94 @@ class BaseComponent(ReactiveObject):
                     state[field] = getattr(self, field)
                 except AttributeError:
                     pass
+        return state
 
-        # 2. Update class reference
-        self.__class__ = new_cls
-        
-        # 3. Clean up old bindings and DAG
+    def _rerender_after_swap(self, state):
+        """Rebind + re-render this instance against the (possibly new) class blueprint."""
+        # 1. Clean up old bindings and DAG
         for b in list(self.__bindings__):
             self.remove_binding(b)
-        
+
         self.__dict__['__bindings__'] = []
+        self.__dict__['_selfattr_bindings'] = {}
         self.__dict__['_deps'] = {}
         self.__dict__['_dag'] = DependencyGraph()
         self.__dict__['_dag_nodes'] = self._dag.nodes
-        
-        # 4. Clear cached template/nodes to force reload from new class blueprint
+
+        # 2. Clear cached template/nodes to force reload from the (new) class blueprint
         if '_template' in self.__dict__:
             del self.__dict__['_template']
         if '_nodes' in self.__dict__:
             del self.__dict__['_nodes']
 
-        # 5. Handle DOM replacement
+        # 3. Handle DOM replacement
         old_element = self.__element__
         if old_element:
-            # Create new template content from the new class
-            new_fragment = self.__template__
-            # Note: self.__template__ is a DocumentFragment/ServerFragment
-            
-            # Replace old root element with new one
-            # We assume the first child of the fragment is the component root
-            old_element.replaceWith(new_fragment)
-            
-            # Re-initialize everything
+            # IMPORTANT: self.__template__ is a cached DocumentFragment. Calling
+            # replaceWith(fragment) MOVES its children into the DOM and empties the
+            # fragment. So we must re-attach bindings against the fresh template
+            # nodes FIRST (mirroring initialize()), and only then swap them in —
+            # otherwise the rebuild walks an empty fragment and the rendered DOM
+            # stays unbound (raw {placeholders}).
             self.__init_selfbinding__()
             self.__init_slot_bindings__()
             self.__init_bindings__()
             self.__init_fields__()
-            
-            # 6. Restore state and trigger updates
+
+            new_fragment = self.__template__
+            old_element.replaceWith(new_fragment)
+
+            # 4. Restore state and trigger updates.
+            # The refrain() __exit__ already triggers the affected fields on the
+            # fresh DAG, so no extra trigger_batch is needed here.
             with self.refrain() as refrained:
                 for k, v in state.items():
                     setattr(refrained, k, v)
-            
-            # Trigger all bindings to reflect the restored state in the new DOM
-            self._dag.trigger_batch(list(state.keys()))
-            
+
+            # The fragment was emptied by replaceWith; re-cache a fresh clone so
+            # any later __template__ access (e.g. another hot-swap) still works.
+            try:
+                if hasattr(self.__class__, "clone_blueprint"):
+                    self.__dict__['_template'] = self.__class__.clone_blueprint().content
+            except Exception:
+                pass
+
+    def hot_swap(self, new_cls):
+        """Hot-swap this instance to a fully new class definition (exact-class match)."""
+        print(f"HMR: Hot-swapping instance {self} to {new_cls}")
+        state = self._capture_state()
+        # Update class reference, then re-render from the new class blueprint.
+        self.__class__ = new_cls
+        self._rerender_after_swap(state)
+
+    @classmethod
+    def _adopt_template(cls, new_base):
+        """Re-point a subclass's inherited template to a reloaded base class."""
+        setattr(cls, "__templatestr__", new_base.__templatestr__)
+        cls.__binding_blueprints__ = []
+        cls._initialize_blueprint()
+        cls._analyze_creation_args()
+        cls._analyze_template()
+
+    def hot_swap_template(self, new_cls):
+        """
+        Template-only hot-swap for instances whose class is a SUBCLASS of the
+        reloaded module's class (e.g. ``app_container.StatusBar(StatusBar)``).
+
+        The subclass lives in a module that HMR did NOT reload, so we must keep
+        the instance's class identity (methods + default attrs) and simply adopt
+        the reloaded base class's template + binding blueprints onto it.
+        """
+        sub = type(self)
+        print(f"HMR: Template-refreshing instance {self} (class {sub.__name__}) from {new_cls.__name__}")
+        try:
+            sub._adopt_template(new_cls)
+        except Exception as e:
+            print(f"HMR: Template refresh failed for {sub.__name__}: {e}")
+            return
+        state = self._capture_state()
+        self._rerender_after_swap(state)
+
         print(f"HMR: Hot-swap complete for {self}")
     
     @classmethod

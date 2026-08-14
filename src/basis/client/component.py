@@ -13,7 +13,6 @@ except ImportError:
 from basis.shared.bindings import SelfBinding, ChildBinding, EventBinding, IfBinding, TextBinding, LoopBinding
 
 from basis.shared.base_component import BaseComponent
-from basis.shared.hmr import start_hmr
 
 def client(func):
 
@@ -64,26 +63,39 @@ class Component(BaseComponent):
 
     @classmethod
     def _register_custom_element(cls):
-        
-        #print("_register_custom_element", cls.__tag__)
-        
-        if "-" in cls.__tag__ \
-        and cls.__tag__ not in cls._registry:
-            templatestr = cls.__templatestr__
-            custom_element = window.CustomElementFactory(ffi.to_js({'__templatestr__': templatestr, 'pyClassName': cls.__name__, '__shadow__': getattr(cls, '__shadow__', False)}))
+        """Register the class as a custom element (once), or refresh its config on HMR re-imports."""
+        if "-" not in cls.__tag__:
+            return
+
+        config = ffi.to_js({
+            '__templatestr__': cls.__templatestr__,
+            'pyClassName': cls.__name__,
+            'pyTag': cls.__tag__,
+            '__shadow__': getattr(cls, '__shadow__', False),
+        })
+
+        existing = window.customElements.get(cls.__tag__)
+        if existing is None:
+            custom_element = window.CustomElementFactory(config)
             window.customElements.define(cls.__tag__, custom_element)
             setattr(cls, 'custom_element', custom_element)
-    
+        else:
+            # Already defined — most likely an HMR re-import of the same module.
+            # Keep the existing JS class (custom elements can't be redefined) but
+            # refresh its config so NEW instances render the updated template.
+            setattr(cls, 'custom_element', existing)
+            try:
+                existing.config = config
+                window.__basisElementConfigs[cls.__tag__] = config
+            except Exception:
+                pass
+
     @classmethod
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        
+
         #client
         cls._register_custom_element()
-        
-        # Start HMR if on client
-        #if PYSCRIPT:
-        #    start_hmr()
 
     def __init__(self):
         super().__init__()

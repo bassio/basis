@@ -25,18 +25,16 @@ from basis import BasisPlugin
 plugin = BasisPlugin(
     name="chat",
     prefix="/chat",
-    static_dir="./static",
-    components_dir="./components",
+    static_dir="./components",   # component .py/.html/.css files served to PyScript
+    static_mount="/chat",        # URL path they are served at (defaults to prefix)
 )
 
 @plugin.get("/messages")
 async def get_messages():
     return [{"id": 1, "text": "Hello from Chat Plugin!"}]
-
-@plugin.on_startup
-async def startup_handler(app):
-    print("Chat plugin initialized successfully!")
 ```
+
+If you need lifecycle behaviour (e.g. database connections), subclass `BasisPlugin` and override the hooks — see [Lifecycle Hooks](#4-lifecycle-hooks) below.
 
 ---
 
@@ -71,27 +69,32 @@ Installed packages with this entry point are auto-discovered when Basis boots.
 
 ## 4. Lifecycle Hooks
 
-`BasisPlugin` provides three lifecycle hooks to manage resources and startup routines:
+`BasisPlugin` provides three lifecycle hooks to manage resources and startup routines. These are **instance methods you override by subclassing `BasisPlugin`** — they are *not* decorators.
 
 | Hook | Execution Timing | Use Case |
 | :--- | :--- | :--- |
-| `on_register` | Synchronously during `app.include_plugin()` | Route configuration and static asset mounting. |
-| `on_startup` | Async during app startup (`lifespan`) | Opening database connections, initializing caches, or spawning background tasks. |
-| `on_shutdown` | Async during app shutdown (`lifespan`) | Closing connections and cleaning up temporary files. |
+| `on_register(app)` | Synchronously during `app.include_plugin()` | Route configuration and static asset mounting. |
+| `on_startup(app)` | Async during app startup (`lifespan`) | Opening database connections, initializing caches, or spawning background tasks. |
+| `on_shutdown(app)` | Async during app shutdown (`lifespan`) | Closing connections and cleaning up temporary files. |
 
 ```python
-@plugin.on_register
-def handle_register(app):
-    print("Plugin registered with Basis app")
+from basis import BasisPlugin
 
-@plugin.on_startup
-async def handle_startup(app):
-    await db.connect()
+class AuthPlugin(BasisPlugin):
+    def on_register(self, app):
+        print("Plugin registered with Basis app")
 
-@plugin.on_shutdown
-async def handle_shutdown(app):
-    await db.disconnect()
+    async def on_startup(self, app):
+        await db.connect()
+
+    async def on_shutdown(self, app):
+        await db.disconnect()
+
+plugin = AuthPlugin(prefix="/auth", ...)
 ```
+
+> [!NOTE]
+> The base `BasisPlugin` defines each hook as a no-op. Because plugins are declared as instances (e.g. `plugin = BasisPlugin(prefix="/chat")`), the way to add hook behaviour is to subclass and override, as shown above. The `plugins/` directory and `entry_points` discovery both look for a module-level `plugin` variable, so you would still write `plugin = AuthPlugin(prefix="/auth", ...)` at the bottom of your plugin module.
 
 ---
 

@@ -47,11 +47,14 @@ Your reactive components mount inside `<div id="basis-ssr-root">` during both se
 | :--- | :--- | :--- | :--- |
 | `title` | `str` | `"Basis App"` | Browser tab title. |
 | `entry_module` | `str` | `"/main.py"` | URL path to the Python file PyScript executes on load. |
-| `pyscript_src` | `str` | `"/pyscript"` | Base path for the offline PyScript bundle. |
+| `pyscript_src` | `str` | `"/pyscript"` | Base path for the (offline) PyScript bundle. |
 | `pyscript_json_url` | `str` | `"/pyscript.json"` | URL of the manifest PyScript uses to resolve imports. |
 | `initial_state_json` | `str` | `"{}"` | Serialized store state injected during SSR; read by the client at boot. |
 
 `initial_state_json` is populated automatically during server-side rendering — you should not set it manually.
+
+> [!NOTE]
+> **Online vs. offline PyScript.** `Page` and `include_ssr_page()` default `pyscript_src` to `/pyscript`, which `app.bootstrap()` mounts with the offline PyScript bundle shipped inside `basis/static/pyscript`. However, the `@app.entrypoint` decorator overrides this default and points `pyscript_src` at the **online** PyScript CDN release (`https://pyscript.net/releases/2026.3.1`) unless you pass `pyscript_src` explicitly. If you want offline serving with `@app.entrypoint`, pass `pyscript_src="/pyscript"`.
 
 ---
 

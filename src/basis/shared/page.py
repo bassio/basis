@@ -51,11 +51,14 @@ class Page(Component):
     @classmethod
     def load(cls, ssr=False, request=None):
         if ssr:
-            # Instantiate fresh versions of the entrypoint stores for this request if not already present
+            # Instantiate fresh versions of the entrypoint stores for this request if not already present.
+            # Reconstruct from the persistent blueprint so the proper subclass (with its constructor
+            # args) is used — `store.__class__(name)` would drop extra args (e.g. ModelStore's model).
             for store in getattr(cls, "entrypoint_stores", []):
-                if store.get_store_name() not in Store._registry:
-                    store_instance = store.__class__(store.get_store_name())
-                    if store.get_store_name() == "router" and request and hasattr(request, "url"):
+                name = store.get_store_name()
+                if name not in Store._registry:
+                    store_instance = Store.reinstantiate(name) or Store(name)
+                    if name == "router" and request and hasattr(request, "url"):
                         store_instance.current_path = request.url.path
 
         container = Element("html", {}, list())

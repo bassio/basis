@@ -4,7 +4,7 @@ This guide will walk you through creating your first reactive application with B
 
 ## Installation
 
-Basis requires Python 3.10+ and FastAPI.
+Basis requires **Python 3.14+** and FastAPI.
 
 ```bash
 pip install fastapi uvicorn basis-framework

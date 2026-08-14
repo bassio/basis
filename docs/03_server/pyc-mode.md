@@ -14,6 +14,9 @@ PYC Mode addresses this by performing bytecode compilation on the server:
 2. **Security & Privacy**: Server-side logic inside `@server_action` methods is automatically stripped out before compiling code for the browser.
 3. **Reduced Memory Footprint**: Compact `.pyc` bytecode reduces Pyodide memory allocation during boot.
 
+> [!NOTE]
+> **Server-action stripping is not PYC-only.** Basis strips `@server_action` (and `@plugin.action`) bodies from every `.py` file it serves to the client — even in normal source mode — via the `BasisStaticFiles` handler. What PYC Mode *adds* on top is the on-the-fly bytecode compilation step, so the browser receives pre-compiled `.pyc` instead of raw source.
+
 ---
 
 ## Enabling PYC Mode
@@ -59,7 +62,7 @@ graph TD
 When PYC Mode is active, Basis swaps standard Starlette `StaticFiles` handlers with `BasisStaticFilesPyc`. When PyScript requests a file (e.g. `/basis/shared/component.pyc` or `/components/counter.pyc`), the handler dynamically locates the corresponding `.py` file.
 
 ### 2. Server Action Code Stripping
-Before compiling the Python file into bytecode for the client, Basis parses the module's AST and strips out the execution body of any functions decorated with `@server_action`.
+Before serving a `.py` file (in either mode), Basis parses the module's AST and strips out the execution body of any functions decorated with `@server_action` (or `@plugin.action`). In PYC Mode this stripping happens immediately before bytecode compilation.
 
 #### On Server:
 ```python

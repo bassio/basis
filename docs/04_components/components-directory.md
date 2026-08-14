@@ -62,4 +62,15 @@ class MainApp(Component):
 
 **`/pyscript.json` manifest** — PyScript needs to know which files exist before it can import them. When the browser requests `/pyscript.json`, Basis crawls all registered component directories, collects every `.py` file along with any matching `.html` and `.css` companions, and returns the full list as a virtual filesystem manifest. PyScript reads this manifest and pre-fetches the modules it needs.
 
-**HMR file watching** — Once a directory is registered, the development file watcher monitors it automatically. Any change to a `.py`, `.html`, or `.css` file inside the directory triggers an HMR broadcast over the WebSocket connection. The browser re-evaluates the changed module and re-renders affected components — no manual refresh, no loss of current state.
+**HMR file watching** — When running `basis dev` (default, HMR on), a file watcher monitors every registered component directory. Any change to a `.py`, `.html`, or `.css` file inside a directory triggers an HMR broadcast over the `/ws/hmr` WebSocket:
+
+- **`.css`** → the owning component's `<style>` element is updated live (scoped styles stay scoped).
+- **`.html`** → the component's template + binding blueprints are rebuilt and all live instances re-render.
+- **`.py`** → the module is written to the client VFS, re-imported, and every live instance is hot-swapped — state is preserved, no manual refresh.
+
+A small HMR status badge appears in the bottom-right corner of the page during development, showing connection state and the last applied update (green ✓ / red ✗).
+
+> **Notes**
+> - HMR hot-swaps component files only. Framework-internal files (`basis/shared/*`, `basis/client/*`) and server-only code are not hot-swapped — use `basis dev --reload` (full process restart) while editing those.
+> - `basis dev --no-hmr` disables the live watcher; `basis dev --reload` switches to full-process reloads.
+> - PYC mode (`--pyc`) skips `.py` hot-swap (compiled bytecode can't be live-reloaded) and falls back to a full reload with a console notice.
