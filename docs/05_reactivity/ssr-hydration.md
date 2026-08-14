@@ -1,6 +1,6 @@
 # SSR & Client Hydration
 
-Basis splits the page lifecycle into two distinct phases: a server render that produces complete static HTML, followed by a client hydration step that attaches reactive bindings to the existing DOM without rebuilding it.
+Basis splits the page lifecycle into two phases: a server render that produces complete static HTML, and a client hydration step that attaches reactive bindings to that existing DOM **without rebuilding it**. This chapter explains how the two halves agree on *which* nodes are reactive and *where* they live.
 
 ---
 
@@ -9,57 +9,172 @@ Basis splits the page lifecycle into two distinct phases: a server render that p
 ```text
 1. SERVER-SIDE RENDERING (FastAPI)
    ├── Executes server_load() coroutines on all components
-   ├── Renders complete HTML layout in Python
-   ├── Stamps reactive elements with hydration IDs
+   ├── Renders a complete HTML layout in Python
+   ├── Stamps reactive elements with hydration markers
    └── Delivers a fully-formed HTML page to the browser
 
 2. CLIENT-SIDE HYDRATION (PyScript / Pyodide)
    ├── Boots the Pyodide WebAssembly runtime
    ├── Reads the initial store state from the embedded JSON block
-   ├── Scans the pre-rendered DOM for hydration ID markers
-   ├── Attaches Binding instances to matched DOM nodes
+   ├── Mounts the app into a detached staging shadow root
+   ├── Assigns client-side IDs with the same path algorithm
+   ├── Matches every binding to its server-rendered node
    └── Activates the DAG — the page is now fully reactive
 ```
 
 ---
 
+## Two worlds: canonical (default) and legacy
+
+Basis can render and hydrate in one of two worlds, selected at startup:
+
+| World | Default? | Server tree | Text matching |
+|-------|----------|-------------|---------------|
+| **canonical** | ✅ yes | preserves text/comments; identical to the browser DOM | deterministic **text ordinals** |
+| **legacy** | opt-in | strips whitespace-only text | positional index |
+
+- Canonical is the default. Set `BASIS_HYDRATION=legacy` to opt back into the legacy world (kept for A/B and rollback).
+- The two worlds differ only in *how IDs are derived and matched*; both produce a fully reactive page.
+- The client detects which world produced the page itself: canonical pages carry a `data-basis-text` marker, legacy pages do not — no environment variable needs to reach the browser.
+
+---
+
+## The canonical tree — structural parity
+
+For hydration to be deterministic, the server's model of the DOM and the browser's DOM must be *structurally identical*. The canonical server tree-builder guarantees this:
+
+- **Text is preserved exactly** as authored — no whitespace stripping.
+- **Contiguous text is merged into one node per text run**, matching how the browser coalesces text nodes.
+- **Whitespace-only text nodes are kept** in the tree (they are excluded from ID numbering by policy, not by deletion).
+- **Comments are kept** as real nodes, so they split text runs exactly like the browser.
+
+Because both trees are built from the same template with the same rules, a node in the server tree and the same node parsed by the browser get the same path — that is the root of determinism.
+
+---
+
+## The node policy (what counts toward an ID)
+
+Hydration paths are computed over **normalized children**:
+
+- **Element nodes always count.**
+- **Text nodes count** unless they are whitespace-only — except *reactive* text nodes, which count even when their current value is empty (a cleared form-error binding still has non-empty template text).
+- **Comment nodes never count.**
+
+Whitespace and comments are preserved in the DOM but ignored for numbering, so indentation or a comment around a binding can never shift a sibling's ID.
+
+This policy is the single source of truth in `basis/shared/hydration.py`. The module is duck-typed so the exact same functions run over the server's `Element` model *and* the browser DOM (Pyodide) — there is one algorithm, not two.
+
+---
+
 ## Hydration markers
 
-During the server render, Basis walks the component tree and stamps two kinds of attributes onto reactive elements:
+The server walks the component tree and stamps attributes that act as the bridge to the client:
 
 ### `data-hydration-id`
 
-Written on elements that contain reactive bindings — anything referencing a `{expression}`. The value is a path string encoding the node's position in the element tree (e.g. `r:0:1:2`).
+Written on every element that participates in a binding (a `{expression}` text node, an attribute, an event, an `if`, a child component, a loop). The value is the node's path in the element tree, e.g. `r:0:1:2`.
 
 ```html
-<!-- Server-rendered output -->
 <span data-hydration-id="r:0:1">Score: 0</span>
 ```
 
 ### `data-component-hydration-id`
 
-Written on the root element of each component instance, marking the boundary between nested component trees.
+Written on the root element of each component instance, marking component boundaries.
 
 ```html
-<!-- Server-rendered output -->
-<user-card data-component-hydration-id="r:0:2"></user-card>
+<user-card data-component-hydration-id="r:0:2">...</user-card>
 ```
 
-These attributes are the bridge between the static server output and the client's reactive binding instances.
+### `data-basis-text`
+
+Written on the **parent** of reactive text nodes: a comma-separated list of the *ordinals* of its reactive text children (0-based, among the parent's normalized children). Because text nodes cannot carry attributes, this marker is how the client locates them deterministically.
+
+```html
+<!-- "Score: 0" is the 0th reactive text child of the span -->
+<span data-hydration-id="r:0:1" data-basis-text="0">Score: 0</span>
+```
 
 ---
 
-## The hydration process
+## The path algorithm
 
-Once the page lands in the browser and PyScript has initialized:
+Each countable node is identified by a path string `r:` + one segment per depth, where the segment is the node's index among the parent's normalized children, in document order. The root is `r:0`.
 
-**Step 1: Read initial state** — The client-side `Store` constructors read the `<script id="basis-initial-state">` JSON block and pre-populate their values from the server's serialized state. By the time bindings are activated, stores already hold the correct data.
+```html
+<div>                     r:0
+  <span>Score: 0</span>   r:0:0   (element, index 0)
+  <p>{body}</p>           r:0:1   (element, index 1)
+</div>
+```
 
-**Step 2: Node matching** — The client component initializer walks the pre-rendered DOM in sync with the compiled `BindingBlueprint` index. For each blueprint, it looks up the matching `data-hydration-id` in the live DOM and attaches the corresponding `Binding` instance to that node. No new elements are created.
+Both sides compute this identically from the shared policy, so a client-side `data-client-id` and a server-side `data-hydration-id` are the same value for the same logical node.
 
-**Step 3: DAG activation** — Once all bindings are attached to live DOM nodes, the `DependencyGraph` is activated. From this point on, any state mutation propagates through the graph and updates only the affected nodes.
+---
 
-The result is that the page's DOM is never rebuilt during hydration. The browser's existing text nodes, input elements, and attribute values are reused in place, preserving scroll position, focus state, and any CSS transitions that were already running.
+## The hydration process (client)
 
-> [!NOTE]
-> Because hydration reuses existing DOM nodes rather than creating new ones, there is no flash of blank content and no layout shift — the page looks identical before and after PyScript finishes loading.
+1. **Read initial state** — `Store` constructors read `<script id="basis-initial-state">` and pre-populate from the server's serialized state.
+
+2. **Stage a client mount** — `mount_app_ssr()` mounts the whole app into a *detached* shadow root, then `_set_nodes_with_client_ids()` walks it with the same canonical policy and stamps `data-client-id` on every countable node. This staging tree is used only to discover bindings and paths; it is discarded once hydration completes.
+
+3. **Match components** — For each component instance, the client finds the corresponding SSR subtree by matching the component root's `data-client-id` against the SSR `data-hydration-id`s.
+
+4. **Match bindings** (`initialize_ssr`) — Each binding is repointed from its staging node to the matching SSR node:
+   - **Element bindings** (events, attributes, `if`, child components, loops) are found by path: `ssr_root.querySelector('[data-hydration-id="<path>"]')`.
+   - **Text bindings** are matched by **ordinal**: the client computes the text node's ordinal among its parent's normalized children, reads the SSR parent's `data-basis-text`, and adopts the SSR text node at that ordinal. Whitespace and comments around the binding cannot shift it.
+   - Bindings that cannot be matched are recorded in the hydration report (below) rather than silently left stale.
+
+5. **DAG activation** — Once every binding points at a live SSR node, state mutations propagate through the `DependencyGraph` and update only the affected nodes.
+
+The result: the SSR DOM is reused in place — no flash of content, no layout shift — and the existing text nodes, inputs, and attributes become live.
+
+---
+
+## Diagnostics
+
+Hydration is fail-loud. On the client, `mount_app_ssr()` builds a `HydrationReport` that records:
+
+- **Unmatched bindings** — which binding type (e.g. `TextBinding`, `EventBinding`, `IfBinding`) and which client path failed to match.
+- **Unhydrated components** — component roots present on the client but absent from the SSR tree (unless they are legitimately hidden by an `if`).
+
+The report is surfaced three ways:
+
+- **`window.__basisHydrationReport`** — the machine-readable report (also mirrored as a `data-__basisHydrationReport` JSON attribute on `<html>`).
+- **`basis-hydration-mismatch`** — a `CustomEvent` dispatched on `document` with the report as `detail`, for tools and tests.
+- **`console.warn` + `console.table`** — a loud, human-readable summary in the devtools console.
+
+---
+
+## Fallback re-render
+
+When a **genuine component-root mismatch** occurs (a component the client mounted is not present in the SSR tree and is not hidden by an `if`), Basis does not leave a dead, non-reactive subtree. With the fallback enabled (default), it:
+
+1. Replaces the SSR content with the already-mounted **client render**, moved out of the staging shadow root together with its scoped styles.
+2. Records `fallback: "whole-app client re-render"` in the report and warns loudly.
+
+The page stays fully reactive even though that load sacrificed SSR. Because the fallback only fires on genuine mismatches, healthy pages are unaffected.
+
+- Disable with `BASIS_HYDRATION_FALLBACK=0` (or `set_hydration_fallback(False)` in code).
+
+---
+
+## Compatibility & rollback
+
+- **Default**: canonical (preserved-text tree, text ordinals, `data-basis-text`).
+- **Legacy**: set `BASIS_HYDRATION=legacy` to use the stripped-text tree and positional text matching — the original behaviour, kept for A/B comparison and as a rollback path.
+- The client needs no configuration: it detects which world produced the page from the presence of `data-basis-text`.
+
+---
+
+## Under the hood
+
+The whole contract lives in `basis/shared/hydration.py`:
+
+- node policy (`normalized_children`, `is_whitespace_text`, …),
+- the path algorithm (`iter_tree_paths`),
+- marker stamping (`apply_hydration_markers`, `stamp_text_ordinals`),
+- the diagnostics report shape (`HydrationReport`),
+- the mode + fallback toggles (`hydration_mode_is_canonical`, `hydration_fallback_enabled`).
+
+The same functions run server-side (over `basis/shared/element.py`) and client-side (over the browser DOM in Pyodide), which is what lets server and client agree without a second, hand-written algorithm.

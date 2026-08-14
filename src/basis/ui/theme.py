@@ -94,7 +94,6 @@ class ThemeProvider(Component):
     def template(self):
         """
         <style id="theme-provider" text-content="{tokens_css}"></style>
-        <slot></slot>
         """
 
 # Global instance for convenience

@@ -91,8 +91,13 @@ function CustomElementFactory(config) {
       if (shadow) {
         
         const shadowRoot = this.shadowRoot;
-        const templateContent = init_template.content
-        shadowRoot.appendChild(document.importNode(templateContent, true));
+        // Only populate an empty shadow root: re-connecting an existing element
+        // (e.g. a hydration-fallback re-render that moves an already-mounted
+        // subtree into the live DOM) must not duplicate the template.
+        if (shadowRoot.childNodes.length === 0) {
+          const templateContent = init_template.content
+          shadowRoot.appendChild(document.importNode(templateContent, true));
+        }
 
       }
       else {

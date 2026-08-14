@@ -3,10 +3,25 @@ import json
 from basis.shared.component import Component
 from basis.shared.element import Element, DocumentType
 from basis.shared.store import Store
+from basis.shared.hydration import (
+    apply_hydration_to_component,
+    hydration_mode_is_canonical,
+)
 
 
 def _apply_hydration_logic(app, root_component_plus_child_components):
-    """Apply hydration IDs and component IDs to the DOM tree."""
+    """Apply hydration IDs and component IDs to the DOM tree.
+
+    In canonical mode (``BASIS_HYDRATION=canonical`` / ``set_hydration_mode``)
+    this delegates to the shared set-based algorithm in ``shared/hydration.py``
+    and stamps ``data-basis-text`` text ordinals.  Otherwise it runs the
+    original DFS below, kept verbatim for A/B comparison (default until
+    parity is confirmed in the browser).
+    """
+    if hydration_mode_is_canonical():
+        apply_hydration_to_component(app, root_component_plus_child_components)
+        return
+
     def map_hydration_ids(root_element):
         stack = [(root_element, 0, [0])]
         stack_return = []

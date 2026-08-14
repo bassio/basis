@@ -72,6 +72,7 @@ def initialize_pyscript_registry(app: FastAPI):
         "store_provider.py",
         "context.py",
         "hmr.py",
+        "hydration.py",
         "actions.py",
         "plugin.py",
         "router.py",

@@ -1,5 +1,26 @@
 from bs4.builder import TreeBuilder
 from basis.shared.element import Element, ElementString, Comment, element_fn
+from basis.shared.hydration import hydration_mode_is_canonical
+
+# ---------------------------------------------------------------------------
+# Canonical text handling (Phase A — deterministic hydration)
+# ---------------------------------------------------------------------------
+# The legacy tree-builder stripped leading/trailing whitespace from every text
+# chunk and dropped empty ones.  That corrupted SSR output (e.g. ``Best: ``
+# became ``Best:``) and made the server tree structurally different from the
+# browser DOM (which preserves whitespace text nodes).
+#
+# The canonical mode keeps text exactly as authored and merges contiguous
+# chunks into a single ``ElementString`` per text run (matching browser
+# text-node boundaries).  Whitespace-only text nodes stay in the tree — they
+# are excluded from hydration IDs by *policy* (see
+# ``basis/shared/hydration.py``), not by deletion — so the server tree and the
+# client DOM are structurally identical.
+#
+# Which mode is active is decided by ``hydration_mode_is_canonical()``
+# (``BASIS_HYDRATION=canonical`` or ``set_hydration_mode()``); it is resolved
+# at parse time so the A/B toggle applies to each tree build.
+
 
 class ElementTreeBuilder(TreeBuilder):
     """
@@ -9,8 +30,11 @@ class ElementTreeBuilder(TreeBuilder):
     NAME = "element"
     features = ["element", "html"]
     
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, preserve_text=None, **kwargs):
         super().__init__(*args, **kwargs)
+        if preserve_text is None:
+            preserve_text = hydration_mode_is_canonical()
+        self.preserve_text = preserve_text
         self.reset()
     
     def reset(self):
@@ -21,6 +45,10 @@ class ElementTreeBuilder(TreeBuilder):
         # --- Tree ID State ---
         self.path_stack = ["r"]  # Root prefix
         self.index_stack = [0]   # Current index at each depth
+        # --- Canonical text-run state (preserve_text mode) ---
+        # True when the most recent event in the current parent was text, so
+        # contiguous chunks merge into one ElementString (browser behaviour).
+        self._text_run_open = False
 
     def _generate_current_id(self):
         """Combines the current path and the current index at this depth."""
@@ -49,12 +77,22 @@ class ElementTreeBuilder(TreeBuilder):
             
             def handle_data(self, data):
                 self.builder.handle_data(data)
-        
+
+            def handle_comment(self, data):
+                # Route comments through the builder so canonical mode preserves
+                # them as Comment nodes (splitting text runs exactly like the
+                # browser).  Legacy mode drops them, matching its current
+                # behaviour so the live SSR path is unchanged.
+                if self.builder.preserve_text:
+                    self.builder.handle_comment(data)
+
         parser = ElementParser(self)
         parser.feed(markup)
     
     def handle_starttag(self, name, attrs):
         """Handle opening tags."""
+        # A new element ends any open text run at this level.
+        self._text_run_open = False
         # Convert HTML attributes to a pythonic style
         # (e.g., 'class' -> 'cls', 'data-*' -> 'data_*')
         fasthtml_attrs = {}
@@ -97,6 +135,8 @@ class ElementTreeBuilder(TreeBuilder):
         
     def handle_endtag(self, name):
         """Handle closing tags."""
+        # Closing a tag ends any open text run in the (now-current) parent.
+        self._text_run_open = False
         if self.current_element and self.current_element['tag'] == name:
             # Build the Element component now that we have all children
             attrs = self.current_element['attrs']
@@ -136,15 +176,51 @@ class ElementTreeBuilder(TreeBuilder):
                 self.current_element = None
     
     def handle_data(self, data):
-        """Handle text content."""
-        data = data.strip()
-        if data != "": # check for and eliminate empty ElementString("") in the tree
-            data = ElementString(value=data, parent=self.current_element)
-            if data and self.current_element is not None:
-                self.current_element['children'].append(data)
+        """Handle text content.
+
+        ``preserve_text=False`` (legacy, default): strip leading/trailing
+        whitespace and drop empty chunks — the original behaviour, retained so
+        the live SSR path stays byte-for-byte unchanged until parity is
+        confirmed.
+
+        ``preserve_text=True`` (canonical, Phase A): preserve the text exactly
+        as authored and merge adjacent chunks into a single ``ElementString``
+        per text run (matching browser text-node boundaries).  Whitespace-only
+        text nodes remain in the tree.
+        """
+        if self.current_element is None:
+            return
+
+        if not self.preserve_text:
+            # --- LEGACY behaviour (unchanged) ---
+            data = data.strip()
+            if data == "":
+                return
+            self.current_element['children'].append(
+                ElementString(value=data, parent=self.current_element)
+            )
+            return
+
+        # --- Canonical behaviour (Phase A) ---
+        children = self.current_element['children']
+        if (
+            self._text_run_open
+            and children
+            and isinstance(children[-1], ElementString)
+            and data
+        ):
+            # Contiguous chunk from the same text run: merge into one node,
+            # mirroring how the browser coalesces text into a single Text node.
+            children[-1].value += data
+        elif data:
+            children.append(ElementString(value=data, parent=self.current_element))
+        # Mark this run as open so the NEXT chunk (if any) merges.
+        self._text_run_open = True
     
     def handle_comment(self, data):
         """Handle comment data."""
+        # A comment node sits between text runs: end any open run.
+        self._text_run_open = False
         data = data.strip()
         data = Comment(data=data, parent=self.current_element)
         if data and self.current_element is not None:
@@ -157,15 +233,19 @@ class ElementTreeBuilder(TreeBuilder):
         return None
     
 
-def html_to_element_tree(html_string):
-    """Convert HTML string to Elemenents using custom TreeBuilder."""
-    builder = ElementTreeBuilder()
+def html_to_element_tree(html_string, preserve_text=None):
+    """Convert HTML string to Elements using custom TreeBuilder.
+
+    ``preserve_text`` selects canonical text handling; ``None`` uses
+    ``PRESERVE_TEXT_DEFAULT`` (legacy until parity is confirmed).
+    """
+    builder = ElementTreeBuilder(preserve_text=preserve_text)
     builder.feed(html_string)
     return builder.get_result()
 
-def html_to_element(html_string):
+def html_to_element(html_string, preserve_text=None):
     """Convert HTML string to Elements using custom TreeBuilder."""
-    builder = ElementTreeBuilder()
+    builder = ElementTreeBuilder(preserve_text=preserve_text)
     builder.feed(html_string)
     tree_root = builder.get_result()
     return tree_root['component']
