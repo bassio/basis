@@ -540,9 +540,17 @@ class Basis(FastAPI, DBAppMixin):
         """
         Build ``{absolute_path: meta}`` for every watched component file.
 
-        For ``.py`` files the meta includes the authoritative client **import
-        module name** (same derivation as ``initialize_pyscript_registry``) so the
-        client can reload the exact module instead of guessing from a path.
+        Every entry carries the authoritative client **import module name** of the
+        component that owns it (same derivation as ``initialize_pyscript_registry``):
+
+        * ``.py`` files map to their own module (``jotter.components.statusbar``).
+        * ``.css`` / ``.html`` companion files map to the module that loads them
+          (package ``titlebar/__init__.py`` -> ``titlebar/titlebar.css``, or a
+          flat ``my_comp.py`` -> ``my_comp.css``).
+
+        The client uses this to find the component class by ``__module__`` instead
+        of guessing a class name from the filename (which breaks for names like
+        ``titlebar.css`` -> class ``TitleBar``).
         """
         file_map = {}
         for m in self._component_routes:
@@ -552,6 +560,30 @@ class Basis(FastAPI, DBAppMixin):
 
             clean_mount = m.path.rstrip("/")
             mount_parts = [p for p in clean_mount.split("/") if p]
+
+            # Map each .py module file to its import name, and its companion
+            # css/html assets to the same module (mirrors initialize_pyscript_registry).
+            asset_owners = {}
+            for f in watch_dir.rglob("*.py"):
+                if "__pycache__" in f.parts:
+                    continue
+                rel = f.relative_to(watch_dir)
+                parts = list(mount_parts) + list(rel.with_suffix("").parts)
+                if parts and parts[-1] == "__init__":
+                    parts.pop()
+                if not parts:
+                    continue
+                module_name = ".".join(parts)
+
+                if f.name == "__init__.py":
+                    css_file = (f.parent / f.parent.name).with_suffix(".css")
+                    html_file = (f.parent / f.parent.name).with_suffix(".html")
+                else:
+                    css_file = f.with_suffix(".css")
+                    html_file = f.with_suffix(".html")
+                for asset in (css_file, html_file):
+                    if asset.exists():
+                        asset_owners[str(asset.absolute())] = module_name
 
             for f in itertools.chain(watch_dir.rglob("*.py"), watch_dir.rglob("*.html"), watch_dir.rglob("*.css")):
                 # Never watch compiled bytecode or stray caches
@@ -565,6 +597,8 @@ class Basis(FastAPI, DBAppMixin):
                         parts.pop()
                     if parts:
                         meta["module"] = ".".join(parts)
+                else:
+                    meta["module"] = asset_owners.get(str(f.absolute()))
                 file_map[str(f.absolute())] = meta
         return file_map
 

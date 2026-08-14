@@ -94,15 +94,15 @@ class HMRClient:
         component_class = data.get("component_class")
 
         if ext == "css":
-            self._update_css(file, content, component_class)
+            self._update_css(file, content, component_class, module)
         elif ext == "py":
             self._update_python(file, content, module)
         elif ext == "html":
-            self._update_html(file, content, component_class)
+            self._update_html(file, content, component_class, module)
 
     # ── CSS ────────────────────────────────────────────────────────────────
-    def _update_css(self, file, content, component_class=None):
-        cls = self._find_component_class(file, component_class)
+    def _update_css(self, file, content, component_class=None, module=None):
+        cls = self._find_component_class(file, component_class, module)
         if cls is None:
             self._update_global_css(file, content)
             self._notify(f"No component matched {file}; applied as global CSS")
@@ -114,16 +114,16 @@ class HMRClient:
             cls.style = content
 
         style_content = cls._get_style_string() or content
-        style_elements = getattr(BaseComponent, "_style_elements", {}).get(cls.__name__, [])
         updated = 0
-        for se in style_elements:
+        # Update styles recorded by mount_app (works inside shadow roots) AND any
+        # matching light-DOM style element — a mount's staging shadow can hold a
+        # copy that must not mask the visible one.
+        for se in getattr(BaseComponent, "_style_elements", {}).get(cls.__name__, []):
             se.textContent = style_content
             updated += 1
-        # Fallback scan (e.g. styles mounted before the registry was populated)
-        if not updated:
-            for se in document.querySelectorAll(f'style[data-component-class="{cls.__name__}"]'):
-                se.textContent = style_content
-                updated += 1
+        for se in document.querySelectorAll(f'style[data-component-class="{cls.__name__}"]'):
+            se.textContent = style_content
+            updated += 1
 
         if updated:
             self._notify(f"CSS updated for {cls.__name__}")
@@ -132,16 +132,18 @@ class HMRClient:
             self._notify(f"CSS for {cls.__name__}: no mounted <style> found; applied globally")
 
     def _update_global_css(self, file, content):
+        # Append to <body> (after the component styles) rather than <head>, so a
+        # same-specificity global rule actually wins the cascade when it has to.
         style_el = document.getElementById("basis-hmr-global-css")
         if style_el is None:
             style_el = document.createElement("style")
             style_el.id = "basis-hmr-global-css"
-            document.head.appendChild(style_el)
+            document.body.appendChild(style_el)
         style_el.textContent = content
 
     # ── HTML ───────────────────────────────────────────────────────────────
-    def _update_html(self, file, content, component_class=None):
-        cls = self._find_component_class(file, component_class)
+    def _update_html(self, file, content, component_class=None, module=None):
+        cls = self._find_component_class(file, component_class, module)
         if cls is None:
             self._notify(f"No component matched {file}; HTML not applied", error=True)
             return
@@ -282,7 +284,22 @@ class HMRClient:
                     self._notify(f"Subclass refresh failed for {sub.__name__}: {e}", error=True)
         return count
 
-    def _find_component_class(self, file, component_class=None):
+    def _find_component_class(self, file, component_class=None, module=None):
+        """
+        Resolve the component class an HMR file belongs to.
+
+        Precedence:
+        1. ``module`` — the authoritative import name sent by the server; match a
+           registered class by ``__module__`` (handles names like ``titlebar.css``
+           -> class ``TitleBar``, whose filename heuristic would produce ``Titlebar``).
+        2. ``component_class`` — explicit class name from the server.
+        3. Filename heuristic — PascalCase / flat / kebab forms of the stem.
+        """
+        if module:
+            for c in BaseComponent._registry.values():
+                if getattr(c, "__module__", "") == module:
+                    return c
+
         if component_class:
             for c in BaseComponent._registry.values():
                 if c.__name__ == component_class:
