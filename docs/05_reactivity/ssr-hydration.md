@@ -24,18 +24,15 @@ Basis splits the page lifecycle into two phases: a server render that produces c
 
 ---
 
-## Two worlds: canonical (default) and legacy
+## One canonical world
 
-Basis can render and hydrate in one of two worlds, selected at startup:
+Basis has a single hydration model — **canonical** — used for both rendering and hydration. There is no alternate "legacy" mode anymore:
 
-| World | Default? | Server tree | Text matching |
-|-------|----------|-------------|---------------|
-| **canonical** | ✅ yes | preserves text/comments; identical to the browser DOM | deterministic **text ordinals** |
-| **legacy** | opt-in | strips whitespace-only text | positional index |
+- The server tree **preserves text/comments exactly** like the browser DOM (no whitespace stripping).
+- IDs are derived by **one single-source algorithm** shared between server and client.
+- Text bindings are matched by deterministic **text ordinals** (`data-basis-text`).
 
-- Canonical is the default. Set `BASIS_HYDRATION=legacy` to opt back into the legacy world (kept for A/B and rollback).
-- The two worlds differ only in *how IDs are derived and matched*; both produce a fully reactive page.
-- The client detects which world produced the page itself: canonical pages carry a `data-basis-text` marker, legacy pages do not — no environment variable needs to reach the browser.
+The former `BASIS_HYDRATION` switch (and the legacy stripped-text tree with positional matching) has been removed from the codebase. The client needs no configuration: canonical pages carry a `data-basis-text` marker and match by ordinal.
 
 ---
 
@@ -159,11 +156,11 @@ The page stays fully reactive even though that load sacrificed SSR. Because the 
 
 ---
 
-## Compatibility & rollback
+## Compatibility
 
-- **Default**: canonical (preserved-text tree, text ordinals, `data-basis-text`).
-- **Legacy**: set `BASIS_HYDRATION=legacy` to use the stripped-text tree and positional text matching — the original behaviour, kept for A/B comparison and as a rollback path.
-- The client needs no configuration: it detects which world produced the page from the presence of `data-basis-text`.
+- Hydration is always **canonical** (preserved-text tree, text ordinals, `data-basis-text`). There is no legacy mode or rollback switch.
+- The client needs no configuration — every SSR page carries the canonical markers.
+- The fallback re-render remains available and default-on; disable with `BASIS_HYDRATION_FALLBACK=0` (or `set_hydration_fallback(False)` in code).
 
 ---
 
@@ -175,6 +172,6 @@ The whole contract lives in `basis/shared/hydration.py`:
 - the path algorithm (`iter_tree_paths`),
 - marker stamping (`apply_hydration_markers`, `stamp_text_ordinals`),
 - the diagnostics report shape (`HydrationReport`),
-- the mode + fallback toggles (`hydration_mode_is_canonical`, `hydration_fallback_enabled`).
+- the fallback toggle (`hydration_fallback_enabled`).
 
 The same functions run server-side (over `basis/shared/element.py`) and client-side (over the browser DOM in Pyodide), which is what lets server and client agree without a second, hand-written algorithm.

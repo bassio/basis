@@ -7,7 +7,7 @@ Deep dives into how Basis works under the hood, and how to get the most out of t
 ## Server-Side Rendering
 
 - **[Server-Side Rendering (SSR)](03_server/ssr.md)** — The SSR lifecycle, `server_load` hooks, HTML generation, and handling isomorphic imports.
-- **[SSR & Client Hydration](05_reactivity/ssr-hydration.md)** — The two worlds (canonical default + legacy), the canonical tree, hydration markers and text ordinals, the matching pipeline, diagnostics, and the fallback re-render.
+- **[SSR & Client Hydration](05_reactivity/ssr-hydration.md)** — The single canonical hydration model, the canonical tree, hydration markers and text ordinals, the matching pipeline, diagnostics, and the fallback re-render.
 
 ## Developer Experience
 

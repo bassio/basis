@@ -31,10 +31,9 @@ deterministic *text ordinal* stamped on the parent element (``data-basis-text``
 = comma-separated 0-based ordinals of its reactive text children, computed over
 the *normalized* children).  See ``stamp_text_ordinals`` / ``text_ordinal``.
 
-The legacy implementation lives on in ``server/ssr.py`` and ``shared/page.py``
-(``_apply_hydration_logic``).  This module is the Phase B replacement; it is
-not wired into the live SSR path yet — parity is proven by the test suite
-(``tests/test_hydration_determinism.py``) before the switch.
+This module is the single source of truth for both SSR renderers
+(``server/ssr.py`` and ``shared/page.py``) and the client — there is no
+separate legacy path.
 """
 
 from __future__ import annotations
@@ -45,41 +44,6 @@ from collections import defaultdict
 HYDRATION_ID_ATTR = "data-hydration-id"
 COMPONENT_HYDRATION_ID_ATTR = "data-component-hydration-id"
 TEXT_ORDINALS_ATTR = "data-basis-text"
-
-
-# ---------------------------------------------------------------------------
-# Hydration mode (A/B toggle)
-# ---------------------------------------------------------------------------
-# The server can run in one of two worlds:
-#   * canonical (DEFAULT) — preserved-text tree + the canonical set-based
-#                algorithm + ``data-basis-text`` text ordinals;
-#   * legacy              — stripped-text tree + the original DFS marker
-#                algorithm (kept for A/B and rollback via BASIS_HYDRATION=legacy).
-# ``BASIS_HYDRATION=legacy`` opts back into the legacy world at startup;
-# ``set_hydration_mode()`` can flip it at runtime for tests/A-B.  The client
-# detects which world produced the SSR page by the presence of
-# ``data-basis-text`` (canonical) vs its absence (legacy), so it needs no env.
-_canonical_override: bool | None = None
-
-
-def _env_is_canonical() -> bool:
-    try:
-        import os
-        mode = os.environ.get("BASIS_HYDRATION", "canonical").strip().lower()
-        return mode == "canonical"
-    except Exception:
-        return True
-
-
-def hydration_mode_is_canonical() -> bool:
-    """Effective mode (runtime override wins over the env-derived default)."""
-    return _env_is_canonical() if _canonical_override is None else _canonical_override
-
-
-def set_hydration_mode(canonical: bool | None) -> None:
-    """Override the hydration mode at runtime (``None`` re-follows the env)."""
-    global _canonical_override
-    _canonical_override = canonical
 
 
 # ---------------------------------------------------------------------------
@@ -179,8 +143,6 @@ def iter_tree_paths(root):
 
 def apply_hydration_markers(root, binding_nodes, component_nodes):
     """Stamp ``data-hydration-id`` / ``data-component-hydration-id``.
-
-    Unlike the legacy implementation:
 
     * membership is set-based (O(nodes) instead of O(nodes x bindings));
     * stamping problems are surfaced in the returned report instead of being
@@ -283,55 +245,7 @@ def stamp_text_ordinals(root, text_nodes):
 
 
 # ---------------------------------------------------------------------------
-# Legacy algorithm (faithful ports — the default branch until parity lands)
-# ---------------------------------------------------------------------------
-
-def legacy_map_hydration_ids(root):
-    """Faithful port of the legacy DFS previously nested in the old
-    ``_apply_hydration_logic`` (duplicated in server/ssr.py and shared/page.py).
-
-    The old algorithm strips comments from the child list but does NOT skip
-    whitespace-only text — it was only correct because the legacy tree-builder
-    had already deleted those nodes.
-    """
-    stack = [(root, 0, [0])]
-    result = {}
-    while stack:
-        obj, depth, path = stack.pop()
-        path_str = "r:" + ":".join(map(str, path))
-        result[path_str] = obj
-        children = getattr(obj, "children", [])
-        valid_children = [c for c in children if type(c).__name__ != "Comment"]
-        for i, child in reversed(list(enumerate(valid_children))):
-            stack.append((child, depth + 1, path + [i]))
-    return result
-
-
-def legacy_apply_hydration_logic(app, root_component_plus_child_components):
-    """Faithful port of the legacy marker-stamping loop (O(nodes x bindings),
-    silent ``except: pass``).  Kept byte-for-byte as the default branch.
-    """
-    hydration_ids_dict = legacy_map_hydration_ids(app.__element__)
-    root_component_plus_child_nodes = [
-        comp.__element__ for comp in root_component_plus_child_components
-    ]
-    all_bindings_recursive = list(app.get_bindings(recursive=True))
-    all_bindings_nodes_for_hydration = []
-    for b in all_bindings_recursive:
-        all_bindings_nodes_for_hydration.extend(b.marked_for_hydration())
-
-    for hid, node in hydration_ids_dict.items():
-        try:
-            if any(node is target for target in all_bindings_nodes_for_hydration):
-                node.setAttribute(HYDRATION_ID_ATTR, hid)
-            if any(node is target for target in root_component_plus_child_nodes):
-                node.setAttribute(COMPONENT_HYDRATION_ID_ATTR, hid)
-        except Exception:
-            pass
-
-
-# ---------------------------------------------------------------------------
-# Canonical entry point used by both SSR renderers
+# Entry point used by both SSR renderers
 # ---------------------------------------------------------------------------
 
 def apply_hydration_to_component(app, root_component_plus_child_components):
@@ -374,9 +288,7 @@ class HydrationReport:
     for ``window.__basisHydrationReport`` and the event ``detail``.
     """
 
-    def __init__(self, mode=None):
-        if mode is None:
-            mode = "canonical" if hydration_mode_is_canonical() else "legacy"
+    def __init__(self, mode="canonical"):
         self.mode = mode
         self.unhydrated_components = []
         self.unmatched_bindings = []

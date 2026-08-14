@@ -352,14 +352,13 @@ class Component(BaseComponent):
             own = None
             ssr_ordinals = None
             if matched_ssr_node_parent:
-                # Canonical path (Phase D): the SSR parent carries a deterministic
-                # text-ordinal marker (data-basis-text) computed over *normalized*
-                # children, so whitespace/comment nodes can never shift it.
+                # The SSR parent carries a deterministic text-ordinal marker
+                # (data-basis-text) computed over *normalized* children, so
+                # whitespace/comment nodes can never shift it.
                 ssr_ordinals = matched_ssr_node_parent.getAttribute("data-basis-text")
                 # In Pyodide, getAttribute returns a JsNull proxy (not Python
                 # None) when the attribute is absent — check capability, not
-                # ``is not None``, so legacy pages (no data-basis-text) fall
-                # through to positional matching instead of crashing.
+                # ``is not None``.
                 if getattr(ssr_ordinals, "split", None) is not None:
                     own = text_ordinal(tb.node.parentNode, tb.node)
                     if own is not None:
@@ -382,18 +381,6 @@ class Component(BaseComponent):
                                         matched_text = True
                                         break
                                     counter += 1
-                else:
-                    # Legacy path: match the text node by its positional index
-                    # within the parent's childNodes (unchanged behaviour).
-                    position_in_shadow = None
-                    for i, child_node in enumerate(tb.node.parentNode.childNodes):
-                        if child_node == tb.node:
-                            position_in_shadow = i
-                    for i, childNode in enumerate(matched_ssr_node_parent.childNodes):
-                        if childNode.nodeType == 3:
-                            if i == position_in_shadow:
-                                tb.node = childNode
-                                matched_text = True
 
             # A null/absent parent client-id means the text node sits inside an
             # if-node hidden by its condition (removed from the shadow) — it is
@@ -548,10 +535,7 @@ class Component(BaseComponent):
         marked_for_hydration_ids = [k for k in marked_for_hydration_dict.keys()]
 
         # ---- Diagnostics (Phase E) ----
-        # The client cannot read the server env; detect the mode from the tree
-        # (canonical pages carry data-basis-text, legacy pages do not).
-        mode = "canonical" if ssr_root.querySelector("[data-basis-text]") else "legacy"
-        report = HydrationReport(mode=mode)
+        report = HydrationReport(mode="canonical")
         fallback_needed = False
 
         for child_instance in root_plus_child_component_instances:

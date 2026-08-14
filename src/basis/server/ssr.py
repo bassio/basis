@@ -14,10 +14,7 @@ from fastapi import Request
 
 from basis.shared.store import Store
 from basis.shared.base_component import BaseComponent
-from basis.shared.hydration import (
-    apply_hydration_to_component,
-    hydration_mode_is_canonical,
-)
+from basis.shared.hydration import apply_hydration_to_component
 
 def _get_all_stores(
     page_cls,
@@ -89,45 +86,10 @@ def _serialize_initial_state(all_stores: dict[str, Store]) -> str:
 def _apply_hydration_logic(app, root_component_plus_child_components):
     """Apply hydration IDs and component IDs to the DOM tree.
 
-    In canonical mode (``BASIS_HYDRATION=canonical`` / ``set_hydration_mode``)
-    this delegates to the shared set-based algorithm in ``shared/hydration.py``
-    and stamps ``data-basis-text`` text ordinals.  Otherwise it runs the
-    original DFS below, kept verbatim for A/B comparison (default until
-    parity is confirmed in the browser).
+    Delegates to the shared set-based algorithm in ``shared/hydration.py``,
+    which also stamps ``data-basis-text`` text ordinals.
     """
-    if hydration_mode_is_canonical():
-        apply_hydration_to_component(app, root_component_plus_child_components)
-        return
-
-    def map_hydration_ids(root_element):
-        stack = [(root_element, 0, [0])]
-        stack_return = []
-        while stack:
-            obj, depth, path = stack.pop()
-            path_str = "r:" + ":".join(map(str, path))
-            stack_return.append((obj, depth, path_str))
-            children = getattr(obj, 'children', [])
-            valid_children = [c for c in children if type(c).__name__ != 'Comment']
-            for i, child in reversed(list(enumerate(valid_children))):
-                stack.append((child, depth + 1, path + [i]))
-        return {hid: obj for obj, depth, hid in stack_return}
-
-    hydration_ids_dict = map_hydration_ids(app.__element__)
-    root_component_plus_child_nodes = [comp.__element__ for comp in root_component_plus_child_components]
-    
-    all_bindings_recursive = list(app.get_bindings(recursive=True))
-    all_bindings_nodes_for_hydration = []
-    for b in all_bindings_recursive:
-        all_bindings_nodes_for_hydration.extend(b.marked_for_hydration())
-
-    for hid, node in hydration_ids_dict.items():
-        try:
-            if any(node is target for target in all_bindings_nodes_for_hydration):
-                node.setAttribute("data-hydration-id", hid)
-            if any(node is target for target in root_component_plus_child_nodes):
-                node.setAttribute("data-component-hydration-id", hid)
-        except:
-            pass
+    apply_hydration_to_component(app, root_component_plus_child_components)
 
 async def render_page_async(
     request: Request,
