@@ -1,19 +1,7 @@
-import asyncio
 import json
 from basis.shared.component import Component
 from basis.shared.element import Element, DocumentType
 from basis.shared.store import Store
-from basis.shared.hydration import apply_hydration_to_component
-from basis.shared.errors import ErrorCollector, get_error_sink, set_error_sink
-
-
-def _apply_hydration_logic(app, root_component_plus_child_components):
-    """Apply hydration IDs and component IDs to the DOM tree.
-
-    Delegates to the shared set-based algorithm in ``shared/hydration.py``,
-    which also stamps ``data-basis-text`` text ordinals.
-    """
-    apply_hydration_to_component(app, root_component_plus_child_components)
 
 
 class Page(Component):
@@ -23,16 +11,16 @@ class Page(Component):
     pyscript_src: str = "/pyscript"
     pyscript_json_url: str = "/pyscript.json"
     initial_state_json: str = "{}"
-    entrypoint_components = []
-    entrypoint_stores = []
+    root_component = None
+    stores = []
     
     @classmethod
     def load(cls, ssr=False, request=None):
         if ssr:
-            # Instantiate fresh versions of the entrypoint stores for this request if not already present.
+            # Instantiate fresh versions of the page stores for this request if not already present.
             # Reconstruct from the persistent blueprint so the proper subclass (with its constructor
             # args) is used — `store.__class__(name)` would drop extra args (e.g. ModelStore's model).
-            for store in getattr(cls, "entrypoint_stores", []):
+            for store in getattr(cls, "stores", []):
                 name = store.get_store_name()
                 if name not in Store._registry:
                     store_instance = Store.reinstantiate(name) or Store(name)
@@ -93,7 +81,7 @@ class Page(Component):
 
         if initial_state_json is None:
             initial_state = {}
-            for store in getattr(self.__class__, "entrypoint_stores", []):
+            for store in getattr(self.__class__, "stores", []):
                 initial_state[store.get_store_name()] = store.serialize()
             if initial_state:
                 initial_state_json = json.dumps(initial_state)
@@ -102,11 +90,15 @@ class Page(Component):
 
         # 1. Collect modules to import on the client side
         entrypoint_imports = {}
-        
-        page_module_file = request.app.get_component_pyscript_vfs_path(self.__class__)
 
-        if page_module_file and page_module_file != "basis.shared.page":
-            entrypoint_imports[self.__class__.__name__] = page_module_file
+        # Synthesized pages (built by @app.page / include_ssr_page) are server-side
+        # shell config only — the client boots from the component file and cannot
+        # import a class that was created at runtime, so don't emit it here.
+        if not getattr(self.__class__, "__synthesized__", False):
+            page_module_file = request.app.get_component_pyscript_vfs_path(self.__class__)
+
+            if page_module_file and page_module_file != "basis.shared.page":
+                entrypoint_imports[self.__class__.__name__] = page_module_file
 
         # 2. Locate <head> once; append client-configuration nodes.
         head_node = None
@@ -144,112 +136,3 @@ class Page(Component):
         """
         self._prepare_full_page(request, initial_state_json)
         return self.doctype.__html__() + "\n" + self.__element__.outerHTML
-
-    async def render_full_page_ssr(self, request, initial_state_json=None):
-        from basis.shared.store import Store
-
-        # Ensure the router's current path is up-to-date for this request
-        router_store = Store._registry.get("router")
-        if router_store and hasattr(request, "url"):
-            router_store.current_path = request.url.path
-
-        self._prepare_full_page(request, initial_state_json)
-
-        mounted_apps = []
-
-        basis_ssr_root = None
-        for node in self.__element__.descendants:
-            if hasattr(node, 'getAttribute') and node.getAttribute('id') == 'basis-ssr-root':
-                basis_ssr_root = node
-                break
-                
-        if not basis_ssr_root:
-            raise Exception("Could not find <div id='basis-ssr-root'> in page shell template")
-            basis_ssr_root = self.__element__.children[1]
-
-        for comp_cls in self.entrypoint_components:
-            app = comp_cls.mount_app(basis_ssr_root, replace=False)
-            mounted_apps.append(app)
-
-        session_token = None
-        session_generator = None
-        db_session = None
-
-        if hasattr(request, "app") and hasattr(request.app, "get_session") and request.app.get_session is not None:
-            import inspect
-            from basis.shared.context import db_session_var
-            get_session_func = request.app.get_session
-            
-            if inspect.isgeneratorfunction(get_session_func):
-                session_generator = get_session_func()
-                try:
-                    db_session = next(session_generator)
-                except StopIteration:
-                    pass
-            else:
-                db_session = get_session_func()
-                
-            if db_session is not None:
-                session_token = db_session_var.set(db_session)
-
-        # Phase 5 #4 — collect binding-eval errors during this SSR render so they
-        # can be surfaced in the client overlay (__basis_errors__ in initial state).
-        error_collector = ErrorCollector()
-        _prev_sink = get_error_sink()
-        set_error_sink(error_collector)
-        try:
-            # Collect components for server_load (pre-data collection)
-            all_components = []
-            for app in mounted_apps:
-                child_bindings = list(app.get_child_bindings(recursive=True))
-                child_components = [cb.childinstance for cb in child_bindings]
-                all_components.extend([app] + child_components)
-                if hasattr(app, '_mounted_providers'):
-                    for provider in app._mounted_providers:
-                        if provider not in all_components:
-                            all_components.append(provider)
-
-            # Run server_load FIRST so stores get populated and reactive loops create nodes
-            preload_tasks = []
-            for comp in all_components:
-                if hasattr(comp, 'server_load') and asyncio.iscoroutinefunction(comp.server_load):
-                    preload_tasks.append(comp.server_load())
-                    
-            if preload_tasks:
-                await asyncio.gather(*preload_tasks)
-
-            # Apply Hydration AFTER server_load — the tree now contains loop-generated nodes
-            for app in mounted_apps:
-                child_bindings = list(app.get_child_bindings(recursive=True))
-                child_components = [cb.childinstance for cb in child_bindings]
-                island_components = [app] + child_components
-                _apply_hydration_logic(app, island_components)
-
-            # Serialize ALL stores (including ones created by StoreProvider) into initial state
-            initial_state = {}
-            for store_name, store_instance in Store._registry.items():
-                initial_state[store_name] = store_instance.serialize()
-
-            if not error_collector.is_empty:
-                initial_state["__basis_errors__"] = error_collector.to_dict()
-
-            if initial_state:
-                initial_state_json = json.dumps(initial_state)
-            else:
-                initial_state_json = json.dumps({})
-
-            self.initial_state_json = initial_state_json
-            
-            # Final render with initial state JSON
-            return self.doctype.__html__() + "\n" + self.__element__.outerHTML
-
-        finally:
-            set_error_sink(_prev_sink)
-            if session_token is not None:
-                from basis.shared.context import db_session_var
-                db_session_var.reset(session_token)
-            if session_generator is not None:
-                try:
-                    next(session_generator)
-                except StopIteration:
-                    pass

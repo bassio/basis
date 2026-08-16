@@ -61,19 +61,21 @@ def health_check():
 
 ## Core Framework APIs
 
-### `@app.entrypoint`
+### `@app.page(path="/")`
 
-The simplest way to configure a single-page Basis app. Decorating your root component class:
+The simplest way to expose a root component as a page. Decorating your root component class:
 
 - Calls `app.bootstrap()` to initialize framework infrastructure.
-- Registers a GET route at `/` that server-renders the decorated component.
+- Registers a GET route at `path` (default `/`) that server-renders the decorated component.
 - Detects the component module file and mounts its parent directory so PyScript can fetch dependencies.
 
+`@app.page` decorates a **root component** (a `Component` subclass) — never a `Page`. It is the "quick and dirty" path: **page-level `stores` are not supported here** (the client boots from the component file, so it cannot hydrate page stores). To declare page stores, write a `Page` subclass and register it with `@app.include_page(path)` or `app.include_page(path, page_cls=MyPage)`.
+
 > [!NOTE]
-> `@app.entrypoint` configures PyScript to load from the **online** CDN (`https://pyscript.net/releases/2026.3.1`) by default. Pass `pyscript_src="/pyscript"` to use the offline bundle that `bootstrap()` mounts instead. See [The Page Component](../04_components/page-component.md) for details.
+> `@app.page` configures PyScript to load from the **online** CDN (`https://pyscript.net/releases/2026.3.1`) by default. Pass `pyscript_src="/pyscript"` to use the offline bundle that `bootstrap()` mounts instead. See [The Page Component](../04_components/page-component.md) for details.
 
 ```python
-@app.entrypoint
+@app.page(path="/")
 class MyApp(Component):
     ...
 ```
@@ -121,17 +123,18 @@ app.include_components_dir(
 
 ---
 
-### `app.include_ssr_page(path, component_cls, ...)`
+### `app.include_page(path, *, page_cls=MyPage)`
 
-Registers a GET route that server-renders a specific component:
+Registers a GET route that server-renders a `Page`. The Page is a complete recipe — `root_component`, `stores`, `title`, and PyScript config all live on the class. Usable as a method or as a decorator on a Page subclass:
 
 ```python
-app.include_ssr_page(
-    "/profile",
-    ProfileComponent,
-    title="User Profile",
-    page_cls=MyCustomPage,  # optional custom Page shell
-)
+app.include_page("/admin", page_cls=MyAdminPage)
+
+# or as a decorator
+@app.include_page("/admin")
+class AdminPage(Page):
+    root_component = Admin
+    stores = [AppState("app_state"), RouterStore("router")]
 ```
 
 ---

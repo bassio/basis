@@ -33,15 +33,16 @@ if imports_element:
                 page_cls_from_module = getattr(module, component_name)
 
                 # Load and register page-level stores on the client side
-                if hasattr(page_cls_from_module, "entrypoint_stores"):
-                    for store in page_cls_from_module.entrypoint_stores:
+                if hasattr(page_cls_from_module, "stores"):
+                    for store in page_cls_from_module.stores:
                         try:
                             print(f"[Basis] Loaded page store: {store.get_store_name()}")
                         except Exception as store_err:
                             print(f"[Basis] Error registering store {store}: {store_err}")
 
-                for entrypoint_component in page_cls_from_module.entrypoint_components:
-                    entrypoint_component.mount_app(document.body)
+                root_component = getattr(page_cls_from_module, "root_component", None)
+                if root_component is not None:
+                    root_component.mount_app(document.body)
 
             except Exception as e:
                 print(f"[Basis] Error loading {module_path}: {e}")

@@ -46,6 +46,8 @@ Your reactive components mount inside `<div id="basis-ssr-root">` during both se
 | Attribute | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `title` | `str` | `"Basis App"` | Browser tab title. |
+| `root_component` | `Component` | `None` | The root component mounted inside the page (the single reactive tree). `None` = abstract/static shell (no reactive root). |
+| `stores` | `list[Store]` | `[]` | Page-level stores registered on the client at boot and serialized into initial state. |
 | `entry_module` | `str` | `"/main.py"` | URL path to the Python file PyScript executes on load. |
 | `pyscript_src` | `str` | `"/pyscript"` | Base path for the (offline) PyScript bundle. |
 | `pyscript_json_url` | `str` | `"/pyscript.json"` | URL of the manifest PyScript uses to resolve imports. |
@@ -54,28 +56,28 @@ Your reactive components mount inside `<div id="basis-ssr-root">` during both se
 `initial_state_json` is populated automatically during server-side rendering — you should not set it manually.
 
 > [!NOTE]
-> **Online vs. offline PyScript.** `Page` and `include_ssr_page()` default `pyscript_src` to `/pyscript`, which `app.bootstrap()` mounts with the offline PyScript bundle shipped inside `basis/static/pyscript`. However, the `@app.entrypoint` decorator overrides this default and points `pyscript_src` at the **online** PyScript CDN release (`https://pyscript.net/releases/2026.3.1`) unless you pass `pyscript_src` explicitly. If you want offline serving with `@app.entrypoint`, pass `pyscript_src="/pyscript"`.
+> **Online vs. offline PyScript.** `Page` and `include_page()` default `pyscript_src` to `/pyscript`, which `app.bootstrap()` mounts with the offline PyScript bundle shipped inside `basis/static/pyscript`. However, the `@app.page` decorator overrides this default and points `pyscript_src` at the **online** PyScript CDN release (`https://pyscript.net/releases/2026.3.1`) unless you pass `pyscript_src` explicitly. If you want offline serving with `@app.page`, pass `pyscript_src="/pyscript"`.
 
 ---
 
 ## Customizing the page shell
 
-To add custom fonts, meta tags, or stylesheets, subclass `Page` and pass the subclass to `include_ssr_page()`:
+To add custom fonts, meta tags, or stylesheets, subclass `Page` and register it with `include_page()` (or the `@app.include_page` decorator):
 
 ```python
 from basis.shared.page import Page
-from basis.shared.component import Basis
+from basis.shared.component import Basis, Component
+
+class Dashboard(Component):
+    """<div>Dashboard</div>"""
 
 class MyPage(Page):
     title = "My App"
+    root_component = Dashboard
 
 app = Basis()
 
-app.include_ssr_page(
-    "/dashboard",
-    DashboardComponent,
-    page_cls=MyPage,
-)
+app.include_page("/dashboard", page_cls=MyPage)
 ```
 
 If you need to inject additional `<head>` elements, subclass `Page` and add them by appending to the document tree inside an overridden method. The `head()` method exists on `Page` as a placeholder but is not currently consumed by the renderer — direct DOM manipulation on the page instance is the reliable approach for now.

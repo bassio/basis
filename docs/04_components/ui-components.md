@@ -2,7 +2,7 @@
 
 Basis ships with a built-in suite of UI components (`basis.ui`) designed for high visual appeal, accessibility, and smooth integration into Basis apps without requiring external CSS libraries or build steps.
 
-When `app.bootstrap()` runs (or when using `@app.entrypoint`), Basis automatically mounts the UI suite at `/basis/ui/`.
+When `app.bootstrap()` runs (or when using `@app.page`), Basis automatically mounts the UI suite at `/basis/ui/`.
 
 ---
 

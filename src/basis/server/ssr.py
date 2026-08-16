@@ -100,26 +100,36 @@ def _apply_hydration_logic(app, root_component_plus_child_components):
     """
     apply_hydration_to_component(app, root_component_plus_child_components)
 
-async def render_page_async(
+async def render_page_ssr(
     request: Request,
-    root_component_cls,
-    *,
     page_cls = None,
-    title: str = "Basis App",
-    stores: dict | None = None,
+    *,
+    root_component = None,
     global_stores: list | None = None,
-    entry_module: str = "/basis/client/entrypoint_ssr.py",
-    pyscript_src: str = "/pyscript",
-    pyscript_json_url: str = "/pyscript.json",
-    extra_head: str = "",
-    **kwargs,
 ) -> str:
+    """Server-side render a Page (and its root component) to a full HTML document.
+
+    This is the single SSR entry point used by ``app.include_page`` / ``@app.page``
+    and by direct ``Page`` usage.
+
+    Everything is read from ``page_cls``: ``root_component`` (the single reactive
+    tree; ``None`` = static page), ``stores``, ``title``, ``entry_module`` and the
+    PyScript config. ``root_component`` may be passed explicitly as an escape
+    hatch, otherwise it defaults to ``page_cls.root_component``.
+    """
+    from basis.shared.page import Page as PageBase
+    from basis.shared.router import Route
 
     if page_cls is None:
-        from basis.shared.page import Page
-        page_cls = Page
+        page_cls = PageBase
 
-    from basis.shared.router import Route
+    if root_component is None:
+        root_component = getattr(page_cls, "root_component", None)
+
+    title = getattr(page_cls, "title", "Basis App")
+    entry_module = getattr(page_cls, "entry_module", "/basis/client/entrypoint_ssr.py")
+    pyscript_src = getattr(page_cls, "pyscript_src", "/pyscript")
+    pyscript_json_url = getattr(page_cls, "pyscript_json_url", "/pyscript.json")
 
     # Reset global registries to isolate per-request SSR state and avoid DetachedInstanceError
     Store._registry.clear()
@@ -134,17 +144,43 @@ async def render_page_async(
     page_instance.entry_module = entry_module
     page_instance.pyscript_src = pyscript_src
     page_instance.pyscript_json_url = pyscript_json_url
+
+    # Keep the router's current path in sync with the request URL.
+    router_store = Store._registry.get("router")
+    if router_store is not None and hasattr(request, "url"):
+        router_store.current_path = request.url.path
+
     # 2. Collect stores
-    all_stores = _get_all_stores(page_cls, root_component_cls, stores, global_stores)
-    # 3. Mount App
+    all_stores = _get_all_stores(page_cls, root_component, None, global_stores)
+
+    # 3. Locate the SSR mount point in the page shell
     basis_ssr_root = None
     for node in page_instance.__element__.descendants:
         if hasattr(node, 'getAttribute') and node.getAttribute('id') == 'basis-ssr-root':
             basis_ssr_root = node
             break
-            
-    if not basis_ssr_root:
+    if basis_ssr_root is None:
         basis_ssr_root = page_instance.__element__.children[1]
+
+    # 4. Optional DB session for the request (DBAppMixin apps)
+    session_token = None
+    session_generator = None
+    if hasattr(request, "app") and hasattr(request.app, "get_session") and request.app.get_session is not None:
+        import inspect
+        from basis.shared.context import db_session_var
+        get_session_func = request.app.get_session
+
+        if inspect.isgeneratorfunction(get_session_func):
+            session_generator = get_session_func()
+            try:
+                db_session = next(session_generator)
+            except StopIteration:
+                db_session = None
+        else:
+            db_session = get_session_func()
+
+        if db_session is not None:
+            session_token = db_session_var.set(db_session)
 
     # Phase 5 #4 — collect every binding-evaluation error raised during this
     # SSR render so it can be surfaced in the client overlay.  With the sink
@@ -153,13 +189,23 @@ async def render_page_async(
     _prev_sink = get_error_sink()
     set_error_sink(error_collector)
     try:
-        app = root_component_cls.mount_app(basis_ssr_root)
+        # 5. Mount the root component (if any — static pages have none)
+        mounted_apps = []
+        if root_component is not None:
+            mounted_apps.append(root_component.mount_app(basis_ssr_root, replace=False))
 
-        # 4. Async Preload Phase
-        child_bindings = list(app.get_child_bindings(recursive=True))
-        child_components = [cb.childinstance for cb in child_bindings]
-        all_components = [app] + child_components
+        # 6. Collect every component for the server_load preload phase
+        all_components = []
+        for app in mounted_apps:
+            child_bindings = list(app.get_child_bindings(recursive=True))
+            child_components = [cb.childinstance for cb in child_bindings]
+            all_components.extend([app] + child_components)
+            if hasattr(app, '_mounted_providers'):
+                for provider in app._mounted_providers:
+                    if provider not in all_components:
+                        all_components.append(provider)
 
+        # 7. Run server_load hooks concurrently; re-check stores created by them
         preload_tasks = []
         for comp in all_components:
             if hasattr(comp, 'server_load') and asyncio.iscoroutinefunction(comp.server_load):
@@ -168,22 +214,31 @@ async def render_page_async(
         if preload_tasks:
             await asyncio.gather(*preload_tasks)
 
-            # Re-check Store registry in case server_load created new stores
             for store_name, store_instance in Store._registry.items():
                 if store_name not in all_stores:
                     all_stores[store_name] = store_instance
 
-        # 5. Apply Hydration — re-collect after server_load so loop-generated nodes are included
-        fresh_child_bindings = list(app.get_child_bindings(recursive=True))
-        fresh_child_components = [cb.childinstance for cb in fresh_child_bindings]
-        fresh_all_components = [app] + fresh_child_components
-        _apply_hydration_logic(app, fresh_all_components)
+        # 8. Apply Hydration — re-collect after server_load so loop-generated nodes are included
+        for app in mounted_apps:
+            child_bindings = list(app.get_child_bindings(recursive=True))
+            child_components = [cb.childinstance for cb in child_bindings]
+            fresh_all_components = [app] + child_components
+            _apply_hydration_logic(app, fresh_all_components)
 
-        # 6. Final render
+        # 9. Final render: serialize all stores into the initial state
         for store_name, store_instance in Store._registry.items():
             if store_name not in all_stores:
                 all_stores[store_name] = store_instance
         initial_state_json = _serialize_initial_state(all_stores, errors=error_collector)
     finally:
         set_error_sink(_prev_sink)
+        if session_token is not None:
+            from basis.shared.context import db_session_var
+            db_session_var.reset(session_token)
+        if session_generator is not None:
+            try:
+                next(session_generator)
+            except StopIteration:
+                pass
+
     return page_instance.render_full_page(request=request, initial_state_json=initial_state_json)

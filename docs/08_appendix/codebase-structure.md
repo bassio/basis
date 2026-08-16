@@ -20,8 +20,8 @@ src/basis/
 │   ├── plugin.py         # Client-side BasisPlugin shim
 │   └── plugins.py        # Client-side plugin helpers
 ├── server/               # FastAPI-side runtime
-│   ├── app.py            # Basis (FastAPI subclass): bootstrap, entrypoint, RPC endpoints
-│   ├── ssr.py            # SSR pipeline (render_page_async, hydration IDs)
+│   ├── app.py            # Basis (FastAPI subclass): bootstrap, page/include_page, RPC endpoints
+│   ├── ssr.py            # SSR pipeline (render_page_ssr, hydration IDs)
 │   ├── tree_builder.py   # HTML → Element tree builder (r:0:1 path IDs)
 │   ├── ast_utils.py      # @server_action AST body stripper
 │   ├── static.py         # BasisStaticFiles / BasisStaticFilesPyc

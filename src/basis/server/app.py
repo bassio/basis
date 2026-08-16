@@ -26,6 +26,56 @@ logger = logging.getLogger('uvicorn.error')
 logger.setLevel(logging.DEBUG)
 
 
+def _synthesize_page(
+    component_cls,
+    *,
+    page_cls=None,
+    title=None,
+    stores=None,
+    entry_module=None,
+    pyscript_src=None,
+):
+    """Build a synthesized Page subclass that carries ``component_cls`` as its root.
+
+    Used by ``@app.page`` (and the deprecated ``include_ssr_page``) to turn a root
+    Component into a page without the developer writing a ``Page`` subclass. The
+    synthesized class is server-side shell config only; it is marked
+    ``__synthesized__`` so the client (which boots from the component file) never
+    tries to import it via ``#basis-entrypoint-imports``.
+
+    Because of that client boot path, page-level ``stores`` cannot reach the
+    browser here — a shell that declares its own ``root_component`` or ``stores``
+    is a complete page and belongs in ``app.include_page`` instead.
+    """
+    from basis.shared.page import Page as PageBase
+
+    base = page_cls or PageBase
+
+    if getattr(base, "root_component", None) is not None or getattr(base, "stores", None):
+        raise ValueError(
+            f"{base.__name__} already declares root_component/stores — it's a complete "
+            f"page. Register it with app.include_page(path, page_cls={base.__name__}) "
+            f"instead of decorating a component with it."
+        )
+
+    derived = type(
+        f"{component_cls.__name__}Page",
+        (base,),
+        {
+            "__module__": component_cls.__module__,
+            "root_component": component_cls,
+            "title": title if title is not None else getattr(base, "title", "Basis App"),
+            "stores": list(stores) if stores is not None else list(getattr(base, "stores", [])),
+            "__synthesized__": True,
+        },
+    )
+    if entry_module is not None:
+        derived.entry_module = entry_module
+    if pyscript_src is not None:
+        derived.pyscript_src = pyscript_src
+    return derived
+
+
 def initialize_pyscript_registry(app: FastAPI):
     """
     Initializes the PyScript VFS and module registry on startup.
@@ -695,12 +745,75 @@ class Basis(FastAPI, DBAppMixin):
         self.routes.append(ui_mount)
         self._component_routes.append(ui_mount)
 
+    def include_page(
+        self,
+        path: str,
+        *,
+        page_cls=None,
+        name: str | None = None,
+    ):
+        """
+        Register a GET route that server-renders a Page.
+
+        The Page is a complete recipe — ``root_component``, ``stores``, ``title``
+        and PyScript config all live on the class. ``root_component`` may be
+        ``None`` for a static page (no reactive root).
+
+        Usable as a method (``app.include_page(path, page_cls=MyPage)``) or as a
+        decorator on a Page subclass (``@app.include_page(path)``). Returns the
+        Page class so it works as a decorator.
+
+        Parameters
+        ----------
+        path:
+            The URL path, e.g. "/" or "/admin".
+        page_cls:
+            The Page subclass to serve (required; carries root, stores, title).
+        name:
+            Optional route name.
+        """
+        # Decorator form: @app.include_page("/admin")
+        if page_cls is None:
+            def _register_page(cls):
+                return self.include_page(path=path, page_cls=cls, name=name)
+            return _register_page
+
+        from basis.shared.page import Page
+
+        if not (isinstance(page_cls, type) and issubclass(page_cls, Page)):
+            raise TypeError(
+                f"include_page(path={path!r}) requires a Page subclass, got "
+                f"{page_cls!r}. To expose a root Component as a page, use "
+                f"@app.page(path=...) instead."
+            )
+
+        from basis.server.ssr import render_page_ssr
+
+        async def _ssr_handler(request: Request):
+
+            from basis.shared.context import base_url_var
+
+            # Set the base URL context for this request lifecycle
+            token = base_url_var.set(str(request.base_url))
+            try:
+                html = await render_page_ssr(
+                    request,
+                    page_cls,
+                    global_stores=self._global_stores,
+                )
+                return HTMLResponse(html)
+            finally:
+                base_url_var.reset(token)
+
+        self.add_route(path, _ssr_handler, methods=['GET'], name=name)
+        return page_cls
+
     def include_ssr_page(
         self,
         path: str,
         component_cls,
         *,
-        page_cls = None,
+        page_cls=None,
         entry_module: str = "/main.py",
         title: str = "Basis App",
         stores: dict | None = None,
@@ -708,55 +821,27 @@ class Basis(FastAPI, DBAppMixin):
         pyscript_json_url: str = "/pyscript.json",
         name: str | None = None,
     ):
+        """Deprecated alias for :meth:`include_page`.
+
+        Preserves the pre-``@app.page`` API: register a root component (and
+        optionally a custom Page shell) at ``path`` by synthesizing a page.
         """
-        Register a GET route that returns a fully server-rendered HTML page.
+        from basis.shared.page import Page
 
-        Parameters
-        ----------
-        path:
-            The URL path, e.g. "/" or "/home".
-        component_cls:
-            A ServerComponent subclass to render for this route.
-        entry_module:
-            URL path for the PyScript entry .py file.
-        title:
-            HTML <title> for the page.
-        stores:
-            Dict of {name: Store instance} to embed as initial-state JSON.
-        name:
-            Optional route name.
-        """
-        if page_cls is None:
-            from basis.shared.page import Page
-            page_cls = Page
+        base = page_cls or Page
 
-        from basis.server.ssr import render_page_async
+        # Normalize the legacy `stores` dict ({name: Store}) into the class form (list).
+        store_list = list(stores.values()) if stores else None
 
-        async def _ssr_handler(request: Request):
-
-            from basis.shared.context import base_url_var
-            
-            # Set the base URL context for this request lifecycle
-            token = base_url_var.set(str(request.base_url))
-            try:
-                # Merge global stores with page-specific ones
-                page_stores = stores or {}
-                html = await render_page_async(
-                    request,
-                    component_cls,
-                    page_cls=page_cls,
-                    title=title,
-                    stores=page_stores,
-                    global_stores=self._global_stores,
-                    entry_module=entry_module,
-                    pyscript_src=pyscript_src,
-                    pyscript_json_url=str(request.url_for('pyscript_json')),
-                )
-                return HTMLResponse(html)
-            finally:
-                base_url_var.reset(token)
-
-        self.add_route(path, _ssr_handler, methods=['GET'], name=name)
+        page_cls = _synthesize_page(
+            component_cls,
+            page_cls=base,
+            title=title,
+            stores=store_list,
+            entry_module=entry_module,
+            pyscript_src=pyscript_src,
+        )
+        return self.include_page(path, page_cls=page_cls, name=name)
 
 
     def bootstrap(self, include_offline_pyscript=True):
@@ -1024,9 +1109,17 @@ class Basis(FastAPI, DBAppMixin):
                 name=plugin.name,
             )
 
-        # 3. Optional SSR page.
+        # 3. Optional SSR page (synthesized from the plugin's root component).
         if hasattr(plugin, "root_component") and plugin.root_component:
-            self.include_ssr_page(plugin.prefix or "/", plugin.root_component)
+            try:
+                entry_module = f"/{Path(inspect.getfile(plugin.root_component)).name}"
+            except (TypeError, OSError):
+                entry_module = "/main.py"
+            plugin_page = _synthesize_page(
+                plugin.root_component,
+                entry_module=entry_module,
+            )
+            self.include_page(plugin.prefix or "/", page_cls=plugin_page)
 
         # 4. Register the plugin's models into the app's models set.
         if not hasattr(self, "models"):
@@ -1044,16 +1137,52 @@ class Basis(FastAPI, DBAppMixin):
             logger.error(f"\u274c Plugin '{plugin.name}' on_register failed: {e}")
             raise
 
-    def entrypoint(self, component_cls=None, *, pyscript_src=ONLINE_PYSCRIPT):
+    def page(
+        self,
+        component_cls=None,
+        *,
+        path: str = "/",
+        page_cls=None,
+        title: str | None = None,
+        pyscript_src: str = ONLINE_PYSCRIPT,
+        name: str | None = None,
+    ):
         """
-        Configure the app with bootstrap, component routes, and SSR page in one go.
-        Returns the component class so it can be used as a decorator.
-        """
-        
-        #handle optional argument case (i.e. @entrypoint decorator with no args)
-        if component_cls is None:
-            return functools.partial(self.entrypoint, pyscript_src=pyscript_src)
+        Turn a root Component into a page at ``path`` (default ``"/"``) in one go:
+        bootstrap, synthesize a Page shell carrying the decorated component as its
+        root, register the SSR route, and serve the component's directory.
 
+        ``@app.page`` decorates a *root component* (a ``Component`` subclass) —
+        never a ``Page``. It is the "quick and dirty" path: page-level ``stores``
+        are NOT supported here (the client boots from the component file, so it
+        cannot hydrate page stores). To declare page stores, write a ``Page``
+        subclass and register it with ``@app.include_page(path)`` or
+        ``app.include_page(path, page_cls=MyPage)``.
+
+        Returns the decorated component class.
+        """
+        # Support both `@app.page` (bare) and `@app.page(path=..., ...)` (with args).
+        if component_cls is None:
+            return functools.partial(
+                self.page,
+                path=path,
+                page_cls=page_cls,
+                title=title,
+                pyscript_src=pyscript_src,
+                name=name,
+            )
+
+        from basis.shared.page import Page as PageBase
+
+        # Contract: @app.page decorates a root Component, not a Page shell.
+        if isinstance(component_cls, type) and issubclass(component_cls, PageBase):
+            raise TypeError(
+                f"{component_cls.__name__} is a Page, not a root component. "
+                "A Page is the document shell.\n"
+                f"  • To expose a root component: decorate a Component with @app.page(path=...)\n"
+                f"  • To register a Page: decorate it with @app.include_page(path) "
+                f"or app.include_page(path, page_cls={component_cls.__name__})"
+            )
 
         self.bootstrap()
 
@@ -1061,23 +1190,33 @@ class Basis(FastAPI, DBAppMixin):
         try:
             component_file = Path(inspect.getfile(component_cls)).absolute()
         except (TypeError, OSError):
-            # Fallback to the file that called entrypoint()
+            # Fallback to the file that called page()
             caller_frame = inspect.stack()[1]
             component_file = Path(caller_frame.filename).absolute()
         
         app_dir = component_file.parent
         entry_module = f"/{component_file.name}"
-        
-        # Register the main SSR page
-        self.include_ssr_page("/", component_cls, entry_module=entry_module, pyscript_src=pyscript_src)
 
-        self.state.entry_module = entry_module
-        self.state.pyscript_src = pyscript_src
+        # Synthesize the page shell carrying this component as its root.
+        synthesized = _synthesize_page(
+            component_cls,
+            page_cls=page_cls,
+            title=title,
+            entry_module=entry_module,
+            pyscript_src=pyscript_src,
+        )
+
+        # Register the SSR page for this component
+        self.include_page(path, page_cls=synthesized, name=name)
 
         # Serve the application directory so PyScript can find the code
         self.include_components_dir("/", str(app_dir), name="app_root")
 
-        return self
+        return component_cls
+
+    def entrypoint(self, component_cls=None, **kwargs):
+        """Deprecated alias for :meth:`page`."""
+        return self.page(component_cls, **kwargs)
 
     def serve(self, component_cls, port=8000, **kwargs):
         """

@@ -13,9 +13,12 @@ if IS_CLIENT:
     Component = ClientComponent
 
     class Basis(object):
-        def entrypoint(self, component):
+        def page(self, component, **kwargs):
             component.mount_app_ssr()
             return component
+
+        # Deprecated alias (pre-terminology-cleanup name).
+        entrypoint = page
 
     Basis = Basis
 

@@ -22,8 +22,8 @@ from basis.shared.component import Basis, Component
 # 1. Initialize the Basis application
 app = Basis()
 
-# 2. Define the application entrypoint
-@app.entrypoint
+# 2. Define the page (root component)
+@app.page
 class HelloBasis(Component):
     """
     <div>
@@ -37,9 +37,9 @@ class HelloBasis(Component):
 ### 1. The `Basis` App
 The `Basis` class extends FastAPI. It handles serving your components, managing PyScript assets, and enabling Hot Module Replacement (HMR) during development.
 
-### 2. The `@app.entrypoint` Decorator
+### 2. The `@app.page` Decorator
 This single decorator handles the entire application lifecycle:
-- **On the Server**: It registers the component for Server-Side Rendering (SSR) and sets up the root route.
+- **On the Server**: It registers the component for Server-Side Rendering (SSR) and sets up a page route (default `/`).
 - **In the Browser**: It automatically triggers the hydration process (`mount_app_ssr()`), waking up the static HTML without any extra code.
 
 ## Running the App

@@ -26,7 +26,7 @@ from basis.shared.component import Basis, Component
 
 app = Basis()
 
-@app.entrypoint
+@app.page
 class HelloBasis(Component):
     """
     <div style="font-family: sans-serif; max-width: 400px; margin: 40px auto; padding: 24px; border-radius: 12px; border: 1px solid #e2e8f0;">
@@ -41,7 +41,7 @@ class HelloBasis(Component):
 Three things are happening here:
 
 - `app = Basis()` creates the application, which is a FastAPI subclass.
-- `@app.entrypoint` registers `HelloBasis` as the root component, sets up the SSR route at `/`, and configures PyScript to load the component in the browser.
+- `@app.page` registers `HelloBasis` as the root component, sets up the SSR route at `/`, and configures PyScript to load the component in the browser.
 - `name = "World"` is a reactive state variable. The `bind="{name}"` attribute on the input creates a two-way binding: typing updates `self.name`, and the `{name}` in the heading reflects the change immediately.
 
 ---
@@ -70,7 +70,7 @@ Open [http://localhost:8000](http://localhost:8000) and type in the input box â€
 
 When the browser first requests `/`:
 
-1. FastAPI calls the Basis SSR handler registered by `@app.entrypoint`.
+1. FastAPI calls the Basis SSR handler registered by `@app.page`.
 2. Basis parses the component's HTML template and renders it with the initial state (`name = "World"`).
 3. The response is a complete HTML document including rendered markup, PyScript configuration, and a JSON block containing initial state.
 

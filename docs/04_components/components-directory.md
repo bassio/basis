@@ -40,7 +40,7 @@ app.include_components_dir(
     name="my_components",       # Unique identifier for FastAPI's router
 )
 
-@app.entrypoint
+@app.page
 class MainApp(Component):
     """
     <div>

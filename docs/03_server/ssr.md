@@ -6,7 +6,7 @@ Basis performs an initial server-side render (SSR) of your application before se
 
 ## 1. The Rendering Lifecycle
 
-When a user visits a Basis URL mapped via `@app.entrypoint` or `@app.include_ssr_page`, the FastAPI server executes the following sequence:
+When a user visits a Basis URL mapped via `@app.page` or `app.include_page`, the FastAPI server executes the following sequence:
 
 ### Step 1: Component Instantiation
 The server looks up the root component for the requested route (e.g., `Dashboard`) and instantiates it within the context of a `Page` shell. 

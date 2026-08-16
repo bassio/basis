@@ -6,7 +6,7 @@ Lookup-oriented documentation for the framework's core APIs and catalogues. For 
 
 ## Application
 
-- **[The Basis App](03_server/basis-app.md)** — The `Basis` FastAPI subclass: initialization parameters, `bootstrap()`, `@app.entrypoint`, and the core framework APIs.
+- **[The Basis App](03_server/basis-app.md)** — The `Basis` FastAPI subclass: initialization parameters, `bootstrap()`, `@app.page`, and the core framework APIs.
 
 ## Reactivity Engine
 

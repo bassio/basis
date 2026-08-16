@@ -76,7 +76,7 @@ from basis.shared.component import Basis, Component
 
 app = Basis()
 
-@app.entrypoint
+@app.page
 class HelloBasis(Component):
     """
     <div>
