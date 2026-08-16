@@ -8,7 +8,7 @@ Basis is a component-based web framework that runs the *same* Python on your ser
 
 No JavaScript for you to write, no build step, no `package.json`!
 
-If you've ever wanted the React or Svelte developer experience without leaving Python, Basis is for you.
+If you've ever wanted the React or Svelte developer experience without having to deal with complicated build steps, and without leaving Python, then Basis is for you.
 
 
 ### Show me the code: a simple Basis Web Component
