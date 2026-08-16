@@ -11,24 +11,40 @@ No JavaScript for you to write, no build step, no `package.json`!
 If you've ever wanted the React or Svelte developer experience without leaving Python, Basis is for you.
 
 
-### If you know React or Svelte, you already know Basis
+### Show me the code: a simple Basis Web Component
 
-Basis components are **real web components** — native HTML custom elements — built on a component model you already know:
+A Basis component is a Python class that compiles to a **real web component** — a native HTML custom element, styled with standard CSS you can override. Template, state, and logic live in one class:
 
-| You know this… | …it's this in Basis |
-| :--- | :--- |
-| React function / Svelte component | `class Counter(Component)` |
-| JSX / `.svelte` template | A Python docstring or `template()` method |
-| Props / attributes | Class attributes + HTML attributes on the tag |
-| State | Reactive class attributes — `self.count += 1` |
-| Derived state | `@computed` properties |
-| Using a component in markup | Its custom tag: `<my-counter>` |
-| Children / slots | Standard `<slot>` projection |
-| Event handlers | `onclick="{method}"` |
+```python
+from basis.shared.component import Component
+from basis.shared.reactive import computed
 
-A `class Counter(Component)` compiles to the `<my-counter>` custom element — plain HTML templates, standard CSS you can actually override, and Python logic, all running identically on the server and in the browser.
+class Counter(Component):
+    """
+    <button onclick="{increment}">Count: {count} (double: {double_count})</button>
+    """
 
-> The full mental model — and every way to customize a component — is in the docs: [Extending & Customizing Components](docs/04_components/extending-components.md) and [Styling Components](docs/04_components/styling-components.md).
+    __tag__ = "my-counter"      # custom element tag including "-" — drop this into your html
+
+    count = 0                   # reactive state
+
+    @computed                   # derived state, recomputed when `count` changes
+    def double_count(self):
+        return self.count * 2
+
+    def increment(self):        # event handler wired by onclick in the template
+        self.count += 1
+```
+
+Drop it into any template like a built-in element:
+
+```html
+<my-counter></my-counter>
+```
+
+Click the button: `count` updates, `double_count` recomputes, and only that node re-renders — no virtual DOM, no JavaScript, no build step. The **same Python class** renders this HTML on the server (SSR) and hydrates it in the browser.
+
+Mimic the React/Svelte component model (components, props, state, slots), but in Python. For the full mental model, see [Extending & Customizing Components](docs/04_components/extending-components.md) and [Styling Components](docs/04_components/styling-components.md).
 
 
 ### Why Basis?
@@ -71,7 +87,9 @@ class HelloBasis(Component):
     name = "World"
 ```
 
-That's the whole app: two-way binding, reactive state, and server-side rendering included. Type into the box and the `<h1>` updates live — no JavaScript written by you.
+Save this as `app.py`.
+
+That's the whole app: two-way binding, reactive state, and server-side rendering included. Type into the box and the `<h1>` updates live.
 
 ### 3. Run it
 
@@ -79,7 +97,7 @@ That's the whole app: two-way binding, reactive state, and server-side rendering
 basis dev          # dev server with live hot-module reload (default)
 ```
 
-or directly via Uvicorn:
+or directly via Uvicorn (similar to any FastAPI application):
 
 ```bash
 uvicorn app:app --reload
