@@ -47,7 +47,7 @@ Your reactive components mount inside `<div id="basis-ssr-root">` during both se
 | :--- | :--- | :--- | :--- |
 | `title` | `str` | `"Basis App"` | Browser tab title. |
 | `root_component` | `Component` | `None` | The root component mounted inside the page (the single reactive tree). `None` = abstract/static shell (no reactive root). |
-| `stores` | `list[Store]` | `[]` | Page-level stores registered on the client at boot and serialized into initial state. |
+| `stores` | `list[Store \| str]` | `[]` | Page-level stores registered on the client at boot and serialized into initial state. May be a list of store *instances* (legacy), a list of store *names* (`["app_state", ...]`), or **empty** (`[]` = all auto-discovered stores from `stores/`). |
 | `entry_module` | `str` | `"/main.py"` | URL path to the Python file PyScript executes on load. |
 | `pyscript_src` | `str` | `"/pyscript"` | Base path for the (offline) PyScript bundle. |
 | `pyscript_json_url` | `str` | `"/pyscript.json"` | URL of the manifest PyScript uses to resolve imports. |
@@ -81,7 +81,7 @@ class MyPage(Page):
 
 This is equivalent to the explicit form `app.include_page("/dashboard", page_cls=MyPage)` — both register a GET route that server-renders the page.
 
-Unlike `@app.page` (which synthesizes a shell from a root `Component` and cannot carry page-level `stores`), a `Page` subclass like `MyPage` is a complete recipe: it can declare `root_component`, `stores`, `title`, and its own `entry_module` / PyScript config, all of which are read from the class at render time.
+Unlike `@app.page` (which synthesizes a shell from a root `Component` and cannot carry page-level `stores`), a `Page` subclass like `MyPage` is a complete recipe: it can declare `root_component`, `stores`, `title`, and its own `entry_module` / PyScript config, all of which are read from the class at render time. `stores` may be a name-list or empty (all auto-discovered) — see [Importing Components & the Isomorphism Principle](importing-components.md).
 
 If you need to inject additional `<head>` elements, subclass `Page` and add them by appending to the document tree inside an overridden method. The `head()` method exists on `Page` as a placeholder but is not currently consumed by the renderer — direct DOM manipulation on the page instance is the reliable approach for now.
 

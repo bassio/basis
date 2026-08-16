@@ -28,6 +28,49 @@ The constructor string (`"session"`) registers the store globally under that nam
 
 ---
 
+## 1b. The `stores/` auto-discovery convention
+
+For shared app stores, put them in a `stores/` package inside your app package
+(`src/your_app/stores/__init__.py`) and **instantiate each store at module
+scope**:
+
+```python
+# stores/state.py
+from basis.shared.store import Store
+from basis.shared.router import RouterStore
+
+class AppState(Store):
+    theme = "dark"
+
+app_state = AppState("app_state")   # module-scope instance
+router = RouterStore("router")
+```
+
+At bootstrap, Basis:
+
+1. **Mounts** `stores/` at its package path (e.g. `/your_app/stores/`) so the
+   modules are importable in the browser under the same name as on disk —
+   see [Importing Components & the Isomorphism Principle](../04_components/importing-components.md).
+2. **Imports** every `.py` module, so the module-scope instances register their
+   persistent **blueprints** (name → class + constructor config).
+3. Emits the module list to the client (`#basis-store-imports`), which imports
+   them on boot so the same instances exist in the browser and hydrate from
+   `#basis-initial-state`.
+
+Then a `Page` can reference stores **by name**, or leave `stores` empty to
+include **all auto-discovered stores**:
+
+```python
+class HomePage(Page):
+    stores = ["app_state", "router"]   # name-list (subset)
+    # or: stores = []  → all auto-discovered stores
+```
+
+`Store.resolve(name)` rebuilds a store from its blueprint (preserving subclass
+constructor args), which is what SSR and store-bound server actions use.
+
+---
+
 ## 2. Subscribing in Component Templates
 
 Use the `$store_name.attribute` syntax inside template braces:

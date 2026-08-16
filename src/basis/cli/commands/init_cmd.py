@@ -56,7 +56,7 @@ def init(
     dirs = [
         src_dir / "components",
         src_dir / "plugins",
-        src_dir / "state",
+        src_dir / "stores",
         src_dir / "static",
     ]
     for d in dirs:
@@ -66,7 +66,10 @@ def init(
     _write_pyproject(project_dir, project_name, project_slug)
     _write_package_init(src_dir, project_slug)
     _write_root_component(src_dir / "components")
-    _write_example_store(src_dir / "state")
+    # components/ must be a proper package for auto-discovery (isomorphism:
+    # client VFS namespace == filesystem import namespace).
+    (src_dir / "components" / "__init__.py").write_text("")
+    _write_example_store(src_dir / "stores")
     _write_plugins_init(src_dir / "plugins")
     _write_readme(project_dir, project_name)
     _write_gitignore(project_dir)
@@ -161,22 +164,11 @@ from basis.server.app import Basis
 
 app = Basis()
 
-# Bootstrap the framework (serves PyScript runtime, UI components, etc.)
+# Bootstrap the framework. Conventional subdirectories (components/, stores/,
+# plugins/) are auto-discovered: components/ and stores/ are mounted with
+# package-derived paths (so client VFS == filesystem == IDE import names), and
+# stores/ modules are imported so their module-scope store instances register.
 app.bootstrap()
-
-# Serve components from this package's components/ directory
-app.include_components_dir(
-    "/{project_slug}/components/",
-    str(__import__("pathlib").Path(__file__).parent / "components"),
-    name="app_components",
-)
-
-# Serve state modules
-app.include_components_dir(
-    "/{project_slug}/state/",
-    str(__import__("pathlib").Path(__file__).parent / "state"),
-    name="app_state",
-)
 '''
     (src_dir / "__init__.py").write_text(content)
 
@@ -318,24 +310,25 @@ code {
     (components_dir / "app.css").write_text(css_content)
 
 
-def _write_example_store(state_dir: Path):
+def _write_example_store(stores_dir: Path):
     content = '''\
 from basis.shared.store import Store
 
 
 class AppStore(Store):
-    """Global application state."""
+    """Global application state. Class attributes become reactive state."""
 
-    store_name = "app_store"
+    user = None
+    theme = "dark"
 
-    def state(self):
-        return {
-            "user": None,
-            "theme": "dark",
-        }
+
+# Module-scope instance — the stores auto-discovery convention. Instantiating
+# at module scope registers this store's blueprint (name → class + config) so
+# Page.stores can resolve it by name and SSR/RPC can rebuild it.
+app_store = AppStore("app_store")
 '''
-    (state_dir / "__init__.py").write_text("")
-    (state_dir / "app_store.py").write_text(content)
+    (stores_dir / "__init__.py").write_text("")
+    (stores_dir / "app_store.py").write_text(content)
 
 
 def _write_plugins_init(plugins_dir: Path):
@@ -381,10 +374,12 @@ basis dev
 ```
 src/{project_name.replace("-", "_")}/
 ├── __init__.py          # App setup (Basis instance)
-├── components/          # UI components (.py + .html + .css)
+├── components/          # UI components (.py + .html + .css), auto-discovered
+│   ├── __init__.py
 │   └── app.py           # Root component
 ├── plugins/             # Auto-discovered plugins
-├── state/               # Global stores
+├── stores/              # Global stores, auto-discovered
+│   ├── __init__.py
 │   └── app_store.py     # Example store
 └── static/              # Static assets
 ```

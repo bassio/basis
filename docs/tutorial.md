@@ -19,6 +19,7 @@ Learn Basis by building. This track walks you from an empty directory to a react
 - **[Styling Components](04_components/styling-components.md)** — Theme and restyle any component's look: CSS design tokens, plain CSS overrides, and inline host styling — no Python required.
 - **[Parent & Child Composition](04_components/child-components.md)** — Custom element tags, passing attributes down the tree, and content projection with `<slot>`.
 - **[Component Directories](04_components/components-directory.md)** — Mounting component directories and registering them with the PyScript module manifest.
+- **[Importing Components & the Isomorphism Principle](04_components/importing-components.md)** — Why a component's import name is the same on the server, in the browser, and in your IDE, and how `components/` / `stores/` / `plugins/` are auto-discovered.
 - **[The Page Component](04_components/page-component.md)** — Customizing the HTML shell and initial store-state injection.
 - **[Forms & Validation](04_components/forms-and-validation.md)** — Automatic two-way bindings for `SQLModel` or dataclasses using `FormModelBinding`, event interception, and the `{model}_errors` dictionary.
 - **[Client SPA Router](04_components/client-router.md)** — Client-side SPA routing with `Router` and `Route`.

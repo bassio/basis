@@ -8,6 +8,7 @@ Deep dives into how Basis works under the hood, and how to get the most out of t
 
 - **[Server-Side Rendering (SSR)](03_server/ssr.md)** — The SSR lifecycle, `server_load` hooks, HTML generation, and handling isomorphic imports.
 - **[SSR & Client Hydration](05_reactivity/ssr-hydration.md)** — The single canonical hydration model, the canonical tree, hydration markers and text ordinals, the matching pipeline, diagnostics, and the fallback re-render.
+- **[Importing Components & the Isomorphism Principle](04_components/importing-components.md)** — Why every import name is identical on the server, in the client VFS, and in your IDE, and how conventional directories are auto-discovered without breaking that invariant.
 
 ## Developer Experience
 

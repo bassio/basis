@@ -2,6 +2,8 @@
 
 As an application grows, a flat collection of component files becomes hard to navigate. Basis lets you group all components into a directory that the server mounts and serves to both the SSR renderer and the browser's PyScript runtime.
 
+> **Convention over configuration.** In the common case you need none of the manual calls below: a `components/` *package* inside your app package is **auto-discovered** at bootstrap and mounted at its package path (so the client VFS namespace equals the filesystem import namespace). See [Importing Components & the Isomorphism Principle](importing-components.md). The manual `include_components_dir()` API below exists for custom directories.
+
 ---
 
 ## Directory layout
@@ -26,6 +28,8 @@ my_project/
 ---
 
 ## Registering the directory
+
+> **Auto-discovery.** If your components live in `<app>/components/` (a package with an `__init__.py`), `app.bootstrap()` mounts it for you at `/your_package/components/` — no call needed. The manual API below is for directories that don't follow the convention.
 
 Call `include_components_dir()` on your `Basis` app before registering routes:
 

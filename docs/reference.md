@@ -7,6 +7,7 @@ Lookup-oriented documentation for the framework's core APIs and catalogues. For 
 ## Application
 
 - **[The Basis App](03_server/basis-app.md)** — The `Basis` FastAPI subclass: initialization parameters, `bootstrap()`, `@app.page`, and the core framework APIs.
+- **[Importing Components & the Isomorphism Principle](04_components/importing-components.md)** — The VFS == filesystem import invariant, and conventional `components/` / `stores/` / `plugins/` auto-discovery.
 
 ## Reactivity Engine
 

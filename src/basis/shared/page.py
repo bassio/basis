@@ -18,12 +18,13 @@ class Page(Component):
     def load(cls, ssr=False, request=None):
         if ssr:
             # Instantiate fresh versions of the page stores for this request if not already present.
-            # Reconstruct from the persistent blueprint so the proper subclass (with its constructor
-            # args) is used — `store.__class__(name)` would drop extra args (e.g. ModelStore's model).
-            for store in getattr(cls, "stores", []):
-                name = store.get_store_name()
+            # `stores` may be a list of store *instances* (legacy) or a list of store *names* (strings).
+            # An empty list means "all auto-discovered stores" (the persistent blueprint registry).
+            store_refs = getattr(cls, "stores", None) or Store.all_names()
+            for store in store_refs:
+                name = store.get_store_name() if not isinstance(store, str) else store
                 if name not in Store._registry:
-                    store_instance = Store.reinstantiate(name) or Store(name)
+                    store_instance = Store.resolve(name)
                     if name == "router" and request and hasattr(request, "url"):
                         store_instance.current_path = request.url.path
 
@@ -81,8 +82,11 @@ class Page(Component):
 
         if initial_state_json is None:
             initial_state = {}
-            for store in getattr(self.__class__, "stores", []):
-                initial_state[store.get_store_name()] = store.serialize()
+            store_refs = getattr(self.__class__, "stores", None) or Store.all_names()
+            for store in store_refs:
+                name = store.get_store_name() if not isinstance(store, str) else store
+                instance = Store._registry.get(name) or Store.resolve(name)
+                initial_state[name] = instance.serialize()
             if initial_state:
                 initial_state_json = json.dumps(initial_state)
 
@@ -119,6 +123,17 @@ class Page(Component):
                 }, [ElementString(json_str)])
 
                 head_node.appendChild(imports_script)
+
+            # 2aa. Append the auto-discovered store module imports. The client
+            # must import these modules so their module-scope store instances
+            # exist and hydrate from #basis-initial-state.
+            store_modules = getattr(request.app, "_discovered_store_modules", [])
+            if store_modules:
+                store_imports_script = Element("script", {
+                    "id": "basis-store-imports",
+                    "type": "application/json",
+                }, [ElementString(json.dumps(store_modules))])
+                head_node.appendChild(store_imports_script)
 
             # 2b. Dev-mode marker read by client tooling (e.g. the error
             # overlay).  Mirrors the HMR dev affordance: `basis dev --hmr`

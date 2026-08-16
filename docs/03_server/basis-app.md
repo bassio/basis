@@ -26,6 +26,8 @@ from basis import Basis
 
 app = Basis(
     pyc_mode=False,
+    components_dir="components",
+    stores_dir="stores",
     plugins_dir="plugins",
     plugins=True,
     exclude_plugins=None,
@@ -37,6 +39,8 @@ app = Basis(
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `pyc_mode` | `bool` | `False` | When `True` (or when `BASIS_PYC_MODE=1` is set in environment), enables on-the-fly PYC bytecode compilation for served Python files. |
+| `components_dir` | `str` | `"components"` | Conventional auto-discovered component directory name (relative to the app directory). Must be a package (has `__init__.py`). |
+| `stores_dir` | `str` | `"stores"` | Conventional auto-discovered stores directory name (relative to the app directory). Must be a package; modules are imported so their module-scope store instances register. |
 | `plugins_dir` | `str` | `"plugins"` | Directory path relative to the app where local plugins reside. |
 | `plugins` | `bool \| list[str] \| None` | `None` | Controls plugin discovery. `None` (the default) and `True` both discover all installed plugins; `["name1"]` restricts to specific plugins (allowlist); `False` disables installed-plugin discovery. Local `plugins/` scanning always runs. |
 | `exclude_plugins` | `list[str]` | `None` | Optional list of plugin names to exclude from loading. |
@@ -65,9 +69,9 @@ def health_check():
 
 The simplest way to expose a root component as a page. Decorating your root component class:
 
-- Calls `app.bootstrap()` to initialize framework infrastructure.
+- Calls `app.bootstrap()` to initialize framework infrastructure (including conventional `components/`, `stores/`, `plugins/` auto-discovery).
 - Registers a GET route at `path` (default `/`) that server-renders the decorated component.
-- Detects the component module file and mounts its parent directory so PyScript can fetch dependencies.
+- Serves the component's code **isomorphically**: if the component already lives inside a discovered `components/` package, it is served from that package-derived mount (no legacy `/` mount, so the VFS name equals the filesystem name); only a bare single-file app falls back to mounting its directory at `/`. See [Importing Components & the Isomorphism Principle](../04_components/importing-components.md).
 
 `@app.page` decorates a **root component** (a `Component` subclass) — never a `Page`. It is the "quick and dirty" path: **page-level `stores` are not supported here** (the client boots from the component file, so it cannot hydrate page stores). To declare page stores, write a `Page` subclass and register it with `@app.include_page(path)` or `app.include_page(path, page_cls=MyPage)`.
 
@@ -91,7 +95,8 @@ Initializes framework-level assets and endpoints in a single call:
 3. **Runtime Libraries**: Mounts `basis.client` and `basis.shared`.
 4. **UI Components**: Mounts the `basis.ui` component library at `/basis/ui/`.
 5. **RPC Endpoint**: Registers `/basis/api/action` for global server actions and `/basis/api/plugin-action` for plugin actions.
-6. **Plugin Auto-Discovery**: Scans `plugins/` directory and `basis.plugins` entry points.
+6. **Conventional Directory Auto-Discovery**: mounts `components/` and `stores/` at their package paths (isomorphic VFS namespace) and imports `stores/` modules so their module-scope store instances register.
+7. **Plugin Auto-Discovery**: Scans `plugins/` directory and `basis.plugins` entry points.
 
 ---
 

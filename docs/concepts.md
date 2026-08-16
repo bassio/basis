@@ -15,7 +15,7 @@ If you are new to Basis, you may prefer to start with the [Tutorial](tutorial.md
 - **[Core Philosophy](01_introduction/philosophy.md)** — The six design principles: web standards, Python-first, buildless, component-driven, isomorphic.
 
 > [!TIP]
-> The fastest way to *get* Basis: a Basis component **is** a web component — the React/Svelte mental model maps 1:1 (see [A Basis component is a web component](01_introduction/philosophy.md#1-embrace-web-standards)). Then jump to the hands-on guides: [Extending & Customizing Components](04_components/extending-components.md) and [Styling Components](04_components/styling-components.md).
+> The fastest way to *get* Basis: a Basis component **is** a web component — the React/Svelte mental model maps 1:1 (see [A Basis component is a web component](01_introduction/philosophy.md#1-embrace-web-standards)). Then jump to the hands-on guides: [Extending & Customizing Components](04_components/extending-components.md) and [Styling Components](04_components/styling-components.md). And because Basis is isomorphic, your components run under the *same import names* on the server, in the browser, and in your IDE — see [Importing Components & the Isomorphism Principle](04_components/importing-components.md).
 
 ## Non-Goals
 

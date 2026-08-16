@@ -80,7 +80,7 @@ def _emit_hydration_report(report):
         pass
 
 
-def _fallback_rerender(ssr_root, shadow, report):
+def _fallback_rerender(ssr_root, shadow, report, snapshot=None):
     """Whole-app client re-render fallback: replace the SSR content with the
     already-mounted client app, so the page stays reactive even when hydration
     could not match.
@@ -89,6 +89,14 @@ def _fallback_rerender(ssr_root, shadow, report):
     not just the app element — because ``mount_app`` *prepends* scoped
     ``<style>`` elements into the shadow root, and losing them would render the
     moved app unstyled.
+
+    ``snapshot`` (optional) holds, for every component instance, its
+    pre-hydration shadow element and the shadow node each binding pointed at.
+    ``initialize_ssr`` repoints all bindings/``__element__`` at SSR nodes; once
+    those SSR nodes are discarded by ``replaceChildren`` the moved shadow app
+    would be left pointing at detached nodes (dead events / dead reactivity).
+    So on fallback we restore every binding and the instance element to the
+    shadow nodes that now live in the DOM.
     """
     try:
         if ssr_root is None:
@@ -99,6 +107,24 @@ def _fallback_rerender(ssr_root, shadow, report):
         ssr_root.replaceChildren()
         for child in children:
             ssr_root.appendChild(child)
+
+        if snapshot:
+            for instance, shadow_element, bindings in snapshot:
+                try:
+                    instance.set_selfbinding(shadow_element)
+                except Exception:
+                    pass
+                for binding, node, anchor, parent in bindings:
+                    try:
+                        if node is not None and hasattr(binding, "node"):
+                            binding.node = node
+                        if anchor is not None and hasattr(binding, "anchor"):
+                            binding.anchor = anchor
+                        if parent is not None and hasattr(binding, "parent"):
+                            binding.parent = parent
+                    except Exception:
+                        pass
+
         report.set_fallback("whole-app client re-render")
     except Exception as exc:
         report.set_fallback(f"fallback re-render failed: {exc}")
@@ -538,6 +564,25 @@ class Component(BaseComponent):
         report = HydrationReport(mode="canonical")
         fallback_needed = False
 
+        # Snapshot the client-side (shadow) nodes before initialize_ssr repoints
+        # every binding/`__element__` at SSR nodes.  If hydration fails and the
+        # fallback re-render fires, we restore these so the moved shadow app
+        # stays bound to the DOM it actually lives in (otherwise events and
+        # reactivity dangle at detached SSR nodes).
+        fallback_snapshot = []
+        for child_instance in root_plus_child_component_instances:
+            try:
+                shadow_element = child_instance.__element__
+                bindings = []
+                for b in child_instance.__bindings__:
+                    node = getattr(b, "node", None)
+                    anchor = getattr(b, "anchor", None)
+                    parent = getattr(b, "parent", None)
+                    bindings.append((b, node, anchor, parent))
+                fallback_snapshot.append((child_instance, shadow_element, bindings))
+            except Exception:
+                fallback_snapshot.append((child_instance, None, []))
+
         for child_instance in root_plus_child_component_instances:
             cid = child_instance.client_id
             if cid \
@@ -566,7 +611,7 @@ class Component(BaseComponent):
                         fallback_needed = True
 
         if fallback_needed and hydration_fallback_enabled():
-            _fallback_rerender(ssr_root, shadow, report)
+            _fallback_rerender(ssr_root, shadow, report, snapshot=fallback_snapshot)
 
         _emit_hydration_report(report)
     

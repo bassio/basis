@@ -214,6 +214,22 @@ def initialize_pyscript_registry(app: FastAPI):
                     vfs_to_server_module[vfs_module_path] = ".".join(server_parts)
                     break
 
+    # Isomorphism guard: every client VFS import name must equal the server
+    # import name. The whole framework — SSR, the client VFS, server RPC and IDE
+    # resolution — assumes the SAME namespace, so a mount path that diverges
+    # from the filesystem package path silently breaks imports. Warn loudly so
+    # it can never slip in by accident. (Only entries with a resolvable server
+    # module are comparable; files outside any sys.path package are covered by
+    # conventional-dir discovery.)
+    for vfs_name, server_name in vfs_to_server_module.items():
+        if vfs_name != server_name:
+            logger.warning(
+                f"⚠️  Isomorphism violation: VFS module '{vfs_name}' maps to "
+                f"server module '{server_name}'. Component mount paths must "
+                f"reproduce the filesystem package path so client VFS, server "
+                f"and IDEs resolve the same import names."
+            )
+
     app.state.vfs_files = files_dict
     app.state.client_modules = client_modules
     app.state.vfs_to_server_module = vfs_to_server_module
@@ -333,6 +349,12 @@ def _resolve_canonical_package(path: Path) -> str | None:
     recognisable Python package tree.
 
     Example: /home/user/project/src/myapp/plugins → "myapp.plugins"
+
+    Note: the conventional subdirectories (components/, stores/, plugins/)
+    are expected to be *regular* packages (they carry an ``__init__.py``) so
+    this stays simple and IDE resolution stays reliable. Namespace packages
+    (no ``__init__.py``) are intentionally NOT resolved here — they return
+    ``None`` and auto-discovery skips them with a warning.
     """
     parts = []
     current = path.resolve()
@@ -343,6 +365,57 @@ def _resolve_canonical_package(path: Path) -> str | None:
         return None
     parts.reverse()
     return ".".join(parts)
+
+
+# ------------------------------------------------------------------
+# Conventional directory auto-discovery (components/ stores/)
+# ------------------------------------------------------------------
+
+def _discover_conventional_dirs(
+    app_dir: Path,
+    components_dir: str = "components",
+    stores_dir: str = "stores",
+) -> list[dict]:
+    """
+    Find conventional subdirectories under *app_dir* (``components/``,
+    ``stores/``) that exist as proper Python packages.
+
+    Isomorphism invariant: the mount path for a discovered dir reproduces its
+    package path, so the client VFS import name equals the filesystem import
+    name (and what IDEs resolve). A conventional dir is only discovered if it
+    is a real package (has an ``__init__.py``); otherwise it is skipped with a
+    warning — silently inventing a VFS-only namespace would break IDE parity.
+    """
+    found = []
+    for name, subdir in (("components", components_dir), ("stores", stores_dir)):
+        path = app_dir / subdir
+        if not path.is_dir():
+            continue
+        pkg = _resolve_canonical_package(path)
+        if pkg is None:
+            logger.warning(
+                f"⚠️  Skipping '{subdir}/' auto-discovery: not a Python package. "
+                f"Add an (even empty) '{subdir}/__init__.py' so the client VFS "
+                f"namespace can match the filesystem import namespace."
+            )
+            continue
+        found.append({"name": name, "subdir": subdir, "dir": path, "pkg": pkg})
+    return found
+
+
+def _component_entry_url(app, component_file: Path) -> str | None:
+    """
+    Return the URL of *component_file* under the first component mount that
+    contains it. Used as the isomorphic PyScript entry URL for ``@app.page``
+    when the component already lives inside a discovered component dir.
+    """
+    for m in app._component_routes:
+        c_dir = Path(m.app.directory).absolute()
+        if component_file.is_relative_to(c_dir):
+            clean_mount = m.path.rstrip("/")
+            rel = component_file.relative_to(c_dir).as_posix()
+            return f"{clean_mount}/{rel}"
+    return None
 
 
 def discover_installed_plugins(
@@ -417,6 +490,8 @@ class Basis(FastAPI, DBAppMixin):
     hmr_manager = HMRManager()
 
     def __init__(self, *args, plugins_dir: str = "plugins",
+                 components_dir: str = "components",
+                 stores_dir: str = "stores",
                  plugins: list[str] | bool | None = None,
                  exclude_plugins: list[str] | None = None,
                  pyc_mode: bool = False,
@@ -425,6 +500,9 @@ class Basis(FastAPI, DBAppMixin):
         # (set by ``basis dev --hmr``), or programmatically via run_with_hmr().
         self._start_hmr_watcher = os.environ.get("BASIS_HMR", "").lower() in ("1", "true", "yes")
         self._plugins_dir = plugins_dir
+        # Conventional auto-discovered directory names (see _auto_discover_dirs).
+        self._components_dir = components_dir
+        self._stores_dir = stores_dir
         # plugins=True/None → auto-discover all; plugins=["a","b"] → allowlist;
         # plugins=False → disable installed-plugin discovery (local still works)
         self._plugins_config = plugins
@@ -432,6 +510,9 @@ class Basis(FastAPI, DBAppMixin):
         self.pyc_mode = pyc_mode or os.environ.get("BASIS_PYC_MODE", "").lower() in ("1", "true", "yes")
         if not hasattr(self, "_plugins"):
             self._plugins = []
+        # Populated by _auto_discover_dirs / _auto_import_stores.
+        self._discovered_dirs = {}
+        self._discovered_store_modules = []
         # Capture the app directory now (call stack has the user's module)
         self._app_dir = self._detect_app_directory()
 
@@ -513,9 +594,12 @@ class Basis(FastAPI, DBAppMixin):
                 self.hmr_manager.disconnect(websocket)
 
     def get_component_pyscript_vfs_path(self, component:"Component"):
-        
-        component_module_file = Path(inspect.getfile(component))
-        
+        try:
+            component_module_file = Path(inspect.getfile(component))
+        except (TypeError, OSError):
+            # Dynamic / -c defined classes have no source file.
+            return None
+
         if not component_module_file:
             return None
 
@@ -855,6 +939,12 @@ class Basis(FastAPI, DBAppMixin):
         self.include_server_actions()
         self.include_plugin_server_actions()
 
+        # --- Auto-discover conventional directories (components/, stores/) ---
+        # Mounts them with package-derived paths (isomorphic VFS namespace) and
+        # imports stores/ modules so their module-scope instances register.
+        self._auto_discover_dirs()
+        self._discovered_store_modules = self._auto_import_stores()
+
         # --- Auto-discover plugins ---
         self._auto_discover_plugins()
 
@@ -1032,6 +1122,64 @@ class Basis(FastAPI, DBAppMixin):
 
             self.add_route("/basis/api/plugins-registry", _plugins_registry_handler, methods=["GET"], name="basis_plugins_registry")
 
+    def _auto_discover_dirs(self):
+        """
+        Mount conventional subdirectories (``components/``, ``stores/``) with
+        package-derived mount paths so the client VFS namespace equals the
+        filesystem import namespace (isomorphism). Idempotent: an existing
+        mount wins. A conventional dir is only discovered if it is a real
+        Python package (has ``__init__.py``); otherwise it is skipped with a
+        warning (see ``_discover_conventional_dirs``).
+        """
+        self._discovered_dirs = {}
+        for cfg in _discover_conventional_dirs(
+            self._app_dir, self._components_dir, self._stores_dir
+        ):
+            mount = "/" + cfg["pkg"].replace(".", "/") + "/"
+            # Starlette strips the trailing slash from Mount paths; compare the
+            # normalized form for idempotency.
+            mount_key = mount.rstrip("/")
+            if any(getattr(r, "path", None) == mount_key for r in self._component_routes):
+                logger.debug(
+                    f"Isomorphism: {mount} already registered; "
+                    f"skipping auto-discovery of {cfg['dir']}"
+                )
+                continue
+            self.include_components_dir(mount, str(cfg["dir"]), name=cfg["name"])
+            self._discovered_dirs[cfg["name"]] = cfg | {"mount": mount}
+            logger.info(
+                f"🗂️  Auto-discovered {cfg['subdir']}/ at {mount} "
+                f"(package {cfg['pkg']})"
+            )
+
+    def _auto_import_stores(self) -> list[str]:
+        """
+        Import every module in the discovered ``stores/`` directory so its
+        module-scope store instances register their persistent blueprints.
+
+        Returns the dotted module names, which are also emitted to the client
+        (``#basis-store-imports``) so PyScript imports the same modules, creates
+        the same instances and hydrates them from ``#basis-initial-state``.
+        """
+        stores_cfg = self._discovered_dirs.get("stores")
+        if not stores_cfg:
+            return []
+        stores_dir = Path(stores_cfg["dir"])
+        pkg = stores_cfg["pkg"]
+        modules = []
+        for f in sorted(stores_dir.glob("*.py")):
+            if f.name.startswith("_"):
+                continue
+            module_name = f"{pkg}.{f.stem}"
+            try:
+                importlib.import_module(module_name)
+                modules.append(module_name)
+            except Exception as e:
+                logger.warning(
+                    f"⚠️  Failed to import store module '{module_name}': {e}"
+                )
+        return modules
+
     def _auto_discover_plugins(self):
         """
         Discover and register plugins from the local ``plugins/`` directory
@@ -1108,6 +1256,19 @@ class Basis(FastAPI, DBAppMixin):
                 str(plugin.static_dir),
                 name=plugin.name,
             )
+            # Isomorphism guard for plugin-served components: the static mount
+            # must reproduce the plugin dir's package path so VFS == filesystem.
+            pkg = _resolve_canonical_package(Path(plugin.static_dir).absolute())
+            if pkg is not None:
+                expected = "/" + pkg.replace(".", "/")
+                actual = (plugin.static_mount or "").rstrip("/")
+                if actual != expected:
+                    logger.warning(
+                        f"⚠️  Plugin '{plugin.name}' static_mount '{actual}' does "
+                        f"not reproduce package path '{expected}' — client VFS "
+                        f"names will not match the filesystem (isomorphism "
+                        f"violation)."
+                    )
 
         # 3. Optional SSR page (synthesized from the plugin's root component).
         if hasattr(plugin, "root_component") and plugin.root_component:
@@ -1193,9 +1354,20 @@ class Basis(FastAPI, DBAppMixin):
             # Fallback to the file that called page()
             caller_frame = inspect.stack()[1]
             component_file = Path(caller_frame.filename).absolute()
-        
+
         app_dir = component_file.parent
-        entry_module = f"/{component_file.name}"
+
+        # Isomorphism: if the component's file is already served by a discovered
+        # component dir (e.g. components/), its VFS import name equals the
+        # filesystem name and we must NOT add the legacy "/" mount — that would
+        # create a second, non-isomorphic namespace. Only a bare single-file app
+        # (the component file is inside no registered component dir) falls back
+        # to the "/" mount.
+        covered_module = self.get_component_pyscript_vfs_path(component_cls)
+        if covered_module:
+            entry_module = _component_entry_url(self, component_file)
+        else:
+            entry_module = f"/{component_file.name}"
 
         # Synthesize the page shell carrying this component as its root.
         synthesized = _synthesize_page(
@@ -1209,8 +1381,11 @@ class Basis(FastAPI, DBAppMixin):
         # Register the SSR page for this component
         self.include_page(path, page_cls=synthesized, name=name)
 
-        # Serve the application directory so PyScript can find the code
-        self.include_components_dir("/", str(app_dir), name="app_root")
+        if not covered_module:
+            # Serve the application directory so PyScript can find the code.
+            # Added AFTER include_page so the SSR route is matched before the
+            # catch-all "/" static mount (a root Mount shadows later routes).
+            self.include_components_dir("/", str(app_dir), name="app_root")
 
         return component_cls
 

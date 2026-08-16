@@ -18,6 +18,23 @@ print("[Basis] Running Python version:", sys.version)
 
 print("[Basis] Zero-Config CSR Entrypoint started.")
 
+# 0. Import auto-discovered store modules (stores/). Their module-scope
+# instances self-hydrate from #basis-initial-state, so Page.stores name-lists
+# and default-to-all resolution find them in Store._registry.
+store_imports_element = document.getElementById("basis-store-imports")
+if store_imports_element:
+    try:
+        store_modules = json.loads(store_imports_element.innerText)
+        print(f"[Basis] Importing store modules: {store_modules}")
+        for store_module in store_modules:
+            try:
+                importlib.import_module(store_module)
+                print(f"[Basis] Loaded store module: {store_module}")
+            except Exception as e:
+                print(f"[Basis] Error importing store module {store_module}: {e}")
+    except Exception as e:
+        print(f"[Basis] Error parsing store imports: {e}")
+
 # 1. Parse and import specifically registered entrypoint / page components
 imports_element = document.getElementById("basis-entrypoint-imports")
 if imports_element:
@@ -36,7 +53,15 @@ if imports_element:
                 if hasattr(page_cls_from_module, "stores"):
                     for store in page_cls_from_module.stores:
                         try:
-                            print(f"[Basis] Loaded page store: {store.get_store_name()}")
+                            if isinstance(store, str):
+                                # Name-list: ensure the store exists (blueprint
+                                # → proper subclass; otherwise plain Store).
+                                from basis.shared.store import Store
+                                if store not in Store._registry:
+                                    Store.resolve(store)
+                                print(f"[Basis] Loaded page store: {store}")
+                            else:
+                                print(f"[Basis] Loaded page store: {store.get_store_name()}")
                         except Exception as store_err:
                             print(f"[Basis] Error registering store {store}: {store_err}")
 

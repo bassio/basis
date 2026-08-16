@@ -133,6 +133,25 @@ class Store(ReactiveObject):
         return store_cls._restore(name, config)
 
     @classmethod
+    def all_names(cls) -> list[str]:
+        """
+        Names of every store ever declared (the persistent blueprint registry).
+
+        Used by the auto-discovery convention: a Page whose ``stores`` is empty
+        (or unset) defaults to hydrating *all* auto-discovered stores.
+        """
+        return list(cls._store_blueprints.keys())
+
+    @classmethod
+    def resolve(cls, name: str) -> "Store":
+        """
+        Create a store by name, preferring the canonical blueprint (proper
+        subclass + constructor args); falls back to a plain ``Store(name)``
+        for config-only names.
+        """
+        return cls.reinstantiate(name) or cls(name)
+
+    @classmethod
     def from_dict(cls, name:str, init_dict:dict):
         new_store = cls(name)
 
@@ -406,6 +425,50 @@ class ModelStore(Store):
         }
         if 'items' not in self.__dict__:
             self.__dict__['items'] = []
+
+        # SSR parity: when hydrated from #basis-initial-state the collection was
+        # serialized as plain dicts.  Re-validate them into typed model
+        # instances so a ModelStore's payload has the same shape as the CSR
+        # fetch path (fetch_all -> model_validate), whichever route produced
+        # the page.
+        self._revalidate_hydrated_payloads()
+
+    def _revalidate_hydrated_payloads(self) -> None:
+        """Re-validate SSR-hydrated model payloads into typed instances.
+
+        The SSR serializer emits ``items`` as plain dicts (``model_dump`` into
+        ``#basis-initial-state``), while the CSR fetch path runs
+        ``model_validate``.  This restores the invariant that ``items`` holds
+        model instances on the client regardless of route.
+
+        Only the collection attribute is touched: flat ``one=True`` fields,
+        ``loading``/``error``, and non-ModelStore state are left as-is.
+        Validation is best-effort — a payload that does not fit the schema
+        keeps its plain-dict shape rather than breaking hydration.
+        """
+        if not self.__dict__.get('_hydrated_from_ssr'):
+            return
+
+        items = self.__dict__.get('items')
+        if not isinstance(items, list) or not items:
+            return
+        # Already typed (instances), or a non-model payload — nothing to do.
+        if not isinstance(items[0], dict):
+            return
+
+        validate = getattr(self.model, "model_validate", None)
+        if validate is None:
+            return
+
+        try:
+            revalidated = [
+                validate(item) if isinstance(item, dict) else item
+                for item in items
+            ]
+            # Parity with the CSR shape (the provider wraps in ReactiveCollection).
+            setattr(self, "items", ReactiveCollection(revalidated))
+        except Exception:
+            pass
 
     def __setattr__(self, name, value):
         if name in self._CONFIG_ATTRS:
