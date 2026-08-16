@@ -13,7 +13,7 @@ If you've ever wanted the React or Svelte developer experience without leaving P
 
 ### Show me the code: a simple Basis Web Component
 
-A Basis component is a Python class that compiles to a **real web component** — a native HTML custom element, styled with standard CSS you can override. Template, state, and logic live in one class:
+A Basis component is a Python class that compiles to a **real web component** — a native HTML custom element, styled with standard CSS you can override. Template, state, and logic live in one file, one class (similar to Vue/Svelte single-file compoments):
 
 ```python
 from basis.shared.component import Component
