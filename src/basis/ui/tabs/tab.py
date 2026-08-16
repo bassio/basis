@@ -201,7 +201,7 @@ class TabContent(Component):
 
     def template(self):
         """
-        <div class="ui-tab-content" content-for="{value}" >
+        <div class="ui-tab-content">
             <slot></slot>
         </div>
         """

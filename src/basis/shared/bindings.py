@@ -940,8 +940,25 @@ class ChildBinding(NodeBinding):
     def from_blueprint(cls, component_instance, node, blueprint):
         tag = blueprint.kwargs['tag']
         childcomponent_py = component_instance.__class__._registry[tag]
-        dom_child_node_attrs = {a: node.getAttribute(a) for a in node.getAttributeNames()}
-        
+
+        # Only attributes with NO template expressions flow through to the
+        # child's mount() as creation kwargs.  An attribute like
+        # heading="{sign_heading}" is a PARENT-scope binding: the parent's
+        # AttributeBinding (and EventBinding for on* attrs) owns the expression,
+        # evaluates it in the parent's scope and syncs the rendered value onto
+        # the child's prop.  Passing the raw "{...}" value as a creation kwarg
+        # would make the CHILD synthesise a SelfAttributeBinding and evaluate
+        # the parent's expression in the child's scope — NameError.  Static
+        # attrs (label="...", variant="primary") still flow through as plain
+        # instance attributes.
+        dom_child_node_attrs = {}
+        for a in node.getAttributeNames():
+            value = node.getAttribute(a)
+            fieldnames, _ = extract_dependencies(value or "", ALLOWED_BUILTINS)
+            if fieldnames:
+                continue
+            dom_child_node_attrs[a] = value
+
         if not getattr(node, '__basis_mounted__', False):
             child_instance = childcomponent_py.mount(node, replace=False, **dom_child_node_attrs)
             node.__basis_mounted__ = True
@@ -1019,6 +1036,13 @@ class LoopBinding(NodeBinding):
         if '-' in (tag:=str.lower(self.clone.tagName)):
             c_attr_names = self.clone.getAttributeNames()
             for c_attr in c_attr_names:
+                # Loop-control attributes (for/in/key) are not child props —
+                # never format or pass them down.  In particular
+                # in="{$store.items}" is a $-store expression that cannot be
+                # resolved against the per-item attrs dict and would previously
+                # raise "invalid syntax" on every loop update.
+                if c_attr in ("for", "in", "key"):
+                    continue
                 if c_attr not in updated_child_node_attrs:
                     c_attr_value = self.clone.getAttribute(c_attr)
                     has_expr = any(fname is not None for _, fname, _, _ in _FORMATTER.parse(c_attr_value))
