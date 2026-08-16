@@ -6,11 +6,21 @@ import operator
 import re
 from string import Formatter
 import sys
+import traceback
 from typing import Any
 
 # Refrain has moved to reactive.py — re-export for backward compatibility
 from basis.shared.reactive import Refrain
 from basis.shared.validation import validate_field, validate_model, ValidationError
+# Phase 5 #4 — structured error capture (see module docstring in errors.py)
+from basis.shared.errors import (
+    ERROR_PREFIX,
+    EVAL_ERROR,
+    find_template_line,
+    import_error_hint,
+    is_error_string,
+    record_error,
+)
 
 
 # Module-level singleton — Formatter is stateless, no need to re-instantiate
@@ -231,7 +241,10 @@ class TextBinding(NodeBinding):
             ALLOWED_BUILTINS, 
             store_registry=store_registry, 
             component_instance_registry=self.component_instance.__class__._instance_registry,
-            ast_trees=self.ast_trees
+            ast_trees=self.ast_trees,
+            component=self.component_instance,
+            binding_type="TextBinding",
+            template=self.content,
         )
 
     def marked_for_hydration(self):
@@ -276,7 +289,10 @@ class AttributeBinding(NodeBinding):
 
         if self._is_single_expr:
             ast_tree = self.ast_trees.get(self._single_fname)
-            evaluated_val = safe_eval(self._single_fname, context, ALLOWED_BUILTINS, tree=ast_tree)
+            evaluated_val = safe_eval(self._single_fname, context, ALLOWED_BUILTINS, tree=ast_tree,
+                                      component=self.component_instance,
+                                      binding_type="AttributeBinding",
+                                      template=self.content)
             
             # For the DOM attribute, we convert to string/JSON
             if isinstance(evaluated_val, (list, dict)):
@@ -290,7 +306,10 @@ class AttributeBinding(NodeBinding):
                 ALLOWED_BUILTINS,
                 store_registry=store_registry,
                 component_instance_registry=instance_registry,
-                ast_trees=self.ast_trees
+                ast_trees=self.ast_trees,
+                component=self.component_instance,
+                binding_type="AttributeBinding",
+                template=self.content,
             )
             final_dom_val = evaluated_val
 
@@ -319,7 +338,7 @@ class AttributeBinding(NodeBinding):
             self.node.setAttribute(self.attr, str(final_dom_val))
 
         # Prop Synchronization: If the node is a Basis component instance, update its Python property.
-        if hasattr(self.node, '__basis_instance__'):
+        if hasattr(self.node, '__basis_instance__') and evaluated_val is not EVAL_ERROR:
             child_instance = self.node.__basis_instance__
             # We use the raw evaluated value to maintain object references (lists/dicts)
             # Use setattr to trigger the child's reactivity
@@ -361,7 +380,10 @@ class SelfAttributeBinding(AttributeBinding):
                                                 ALLOWED_BUILTINS,
                                                 store_registry,
                                                 self.component_instance.__class__._instance_registry,
-                                                ast_trees=self.ast_trees)
+                                                ast_trees=self.ast_trees,
+                                                component=self.component_instance,
+                                                binding_type="SelfAttributeBinding",
+                                                template=self.content)
 
             if self.is_boolean:
                 bool_val = str(final_val).lower() == 'true'
@@ -377,8 +399,14 @@ class SelfAttributeBinding(AttributeBinding):
 
         else:
             _, fname, _, _ = next(iter(_FORMATTER.parse(self.content)))
-            evaluated_val = safe_eval(fname, context, ALLOWED_BUILTINS, tree=self.ast_trees.get(fname))
-            final_val = json.dumps(evaluated_val)
+            evaluated_val = safe_eval(fname, context, ALLOWED_BUILTINS, tree=self.ast_trees.get(fname),
+                                      component=self.component_instance,
+                                      binding_type="SelfAttributeBinding",
+                                      template=self.content)
+            if evaluated_val is EVAL_ERROR:
+                final_val = ""
+            else:
+                final_val = json.dumps(evaluated_val)
             #self.component_instance.__dict__[self.attr] = final_val
             setattr(self.component_instance, self.attr, final_val)
 
@@ -415,7 +443,10 @@ class TextContentAttributeBinding(AttributeBinding):
             ALLOWED_BUILTINS,
             store_registry=store_registry,
             component_instance_registry=instance_registry,
-            ast_trees=self.ast_trees
+            ast_trees=self.ast_trees,
+            component=self.component_instance,
+            binding_type="TextContentAttributeBinding",
+            template=self.content,
         )
 
         #print("IN TextContentAttributeBinding : final_dom_val", final_dom_val)
@@ -636,7 +667,10 @@ class FormModelBinding(NodeBinding):
                 self.target_expression,
                 context,
                 ALLOWED_BUILTINS,
-                tree=ast_tree
+                tree=ast_tree,
+                component=self.component_instance,
+                binding_type="FormModelBinding",
+                template=self.target_expression,
             )
         except Exception:
             target_obj = None
@@ -861,7 +895,10 @@ class IfBinding(NodeBinding):
     fields: list
 
     def update(self):
-        expr_eval = bool(safe_eval(self.expr, self.component_instance, ALLOWED_BUILTINS, tree=self.ast_trees.get(self.expr)))
+        expr_eval = bool(safe_eval(self.expr, self.component_instance, ALLOWED_BUILTINS, tree=self.ast_trees.get(self.expr),
+                                   component=self.component_instance,
+                                   binding_type="IfBinding",
+                                   template=self.expr))
         if expr_eval == self.is_visible:
             return  # visibility unchanged — skip DOM mutation
         if expr_eval == False:
@@ -986,7 +1023,10 @@ class LoopBinding(NodeBinding):
                     c_attr_value = self.clone.getAttribute(c_attr)
                     has_expr = any(fname is not None for _, fname, _, _ in _FORMATTER.parse(c_attr_value))
                     if has_expr:
-                        val = safe_format(c_attr_value, updated_child_node_attrs, ALLOWED_BUILTINS)
+                        val = safe_format(c_attr_value, updated_child_node_attrs, ALLOWED_BUILTINS,
+                                          component=self.component_instance,
+                                          binding_type="LoopBinding",
+                                          template=c_attr_value)
                         updated_child_node_attrs[c_attr] = val
                     else:
                         updated_child_node_attrs[c_attr] = c_attr_value
@@ -1319,7 +1359,76 @@ def _eval_ast(node, context, allowed_builtins):
             
     return _eval(node)
 
-def safe_eval(expr_str, context, allowed_builtins, tree=None):
+def _report_binding_error(
+    expr_str,
+    context,
+    exc,
+    *,
+    component=None,
+    binding_type=None,
+    template=None,
+    template_line=None,
+    stage="eval",
+):
+    """Record a structured :class:`BindingError` (when a sink is registered) and
+    tell the caller whether it was handled.
+
+    Returns True when a sink consumed the record — the caller should then return
+    the empty value (``""``) so the raw ``[Error: ...]`` string never reaches the
+    rendered DOM.  Returns False when no sink is installed; the caller keeps the
+    legacy ``[Error: ...]`` sentinel (transition path).
+    """
+    # Callers pass a component *instance*; the record stores the class name
+    # (instances are not JSON-serializable and are useless to an overlay).
+    if component is not None and not isinstance(component, str):
+        _cls = getattr(component, "__class__", component)
+        component = getattr(_cls, "__name__", None) or str(component)
+    elif component is None and not isinstance(context, dict):
+        _cls = getattr(context, "__class__", None)
+        if _cls is not None:
+            component = getattr(_cls, "__name__", None) or type(context).__name__
+
+    # Prefer the component's authored template for ``template_line`` reporting
+    # (it has real line numbers); fall back to the binding's own content, then
+    # the expression itself.
+    src_template = None
+    if not isinstance(component, str) and component is not None:
+        src_template = getattr(getattr(component, "__class__", None), "__templatestr__", None)
+    if src_template is None and not isinstance(context, dict):
+        src_template = getattr(getattr(context, "__class__", None), "__templatestr__", None)
+    if src_template:
+        template = src_template
+    if template is None:
+        template = expr_str
+    if template_line is None:
+        template_line = find_template_line(template, expr_str)
+
+    phase = "client" if IS_CLIENT else "server"
+    recorded = record_error(
+        component=component,
+        binding_type=binding_type,
+        expr=expr_str,
+        template=template,
+        error=str(exc),
+        traceback=traceback.format_exc(),
+        phase=phase,
+        template_line=template_line,
+        hint=import_error_hint(exc, phase),
+    )
+
+    # Server-side: keep a log line (the overlay lives on the client).
+    # Client-side: the overlay/global replace console spam, so only log when
+    # nothing consumed the record (legacy path).  Also fixes the old bug where
+    # ``context`` was passed as print's ``file=`` positional argument.
+    if not recorded or phase == "server":
+        location = f" ({binding_type})" if binding_type else ""
+        print(f"[basis] {stage} error evaluating '{expr_str}'{location}: {exc}")
+    return recorded
+
+
+def safe_eval(expr_str, context, allowed_builtins, tree=None, *,
+              component=None, binding_type=None, template=None, template_line=None,
+              record=True):
 
     if expr_str in allowed_builtins:
         return allowed_builtins[expr_str]
@@ -1330,69 +1439,122 @@ def safe_eval(expr_str, context, allowed_builtins, tree=None):
             #desugared = desugar_expression(expr_str)
             #tree = ast.parse(desugared, mode='eval')
         except Exception as e:
-            print(f"Failed to parse {expr_str}: {e}")
-            return f"[Error: {expr_str}]"
-    
+            if not record:
+                return ""
+            if _report_binding_error(expr_str, context, e, component=component,
+                                     binding_type=binding_type, template=template,
+                                     template_line=template_line, stage="parse"):
+                return EVAL_ERROR
+            return f"{ERROR_PREFIX}{expr_str}]"
+
     try:
         return _eval_ast(tree.body if isinstance(tree, ast.Expression) else tree, context, allowed_builtins)
     except Exception as e:
-        print(f"Error evaluating expression '{expr_str}': {e}", context)
-        return f"[Error: {expr_str}]"
+        if not record:
+            return ""
+        if _report_binding_error(expr_str, context, e, component=component,
+                                 binding_type=binding_type, template=template,
+                                 template_line=template_line, stage="eval"):
+            return EVAL_ERROR
+        return f"{ERROR_PREFIX}{expr_str}]"
 
-def safe_format(template_str, context, allowed_builtins):
-    
+def safe_format(template_str, context, allowed_builtins, *,
+                component=None, binding_type=None, template=None, template_line=None,
+                record=True):
+
     result = ""
-    formatter = Formatter()
-    for literal_text, fname, format_spec, conversion in formatter.parse(template_str):
-        result += literal_text
-        if fname is not None:
-            val = safe_eval(fname, context, allowed_builtins)
-            if format_spec:
-                result += format(val, format_spec)
-            else:
-                result += str(val)
+    fname = None
+    try:
+        formatter = Formatter()
+        for literal_text, fname, format_spec, conversion in formatter.parse(template_str):
+            result += literal_text
+            if fname is not None:
+                val = safe_eval(fname, context, allowed_builtins,
+                                component=component, binding_type=binding_type,
+                                template=template, template_line=template_line,
+                                record=record)
+                if val is EVAL_ERROR:
+                    # A field failed and was recorded — abort the whole template
+                    # to the empty value rather than returning a partial string.
+                    return ""
+                if format_spec:
+                    result += format(val, format_spec)
+                else:
+                    result += str(val)
+    except Exception as e:
+        if not record:
+            return ""
+        if _report_binding_error(fname or template_str, context, e,
+                                 component=component, binding_type=binding_type,
+                                 template=template or template_str,
+                                 template_line=template_line, stage="eval"):
+            return ""
+        return f"{ERROR_PREFIX}{template_str}]"
     return result
 
-def safe_format_with_stores(template_str, context, allowed_builtins, store_registry, component_instance_registry, ast_trees=None):
-    
+def safe_format_with_stores(template_str, context, allowed_builtins, store_registry, component_instance_registry, ast_trees=None, *,
+                            component=None, binding_type=None, template=None, template_line=None,
+                            record=True):
+
     result = ""
-    for literal_text, fname, format_spec, conversion in _FORMATTER.parse(template_str):
-        result += literal_text
-        if fname is not None:
-            if fname in allowed_builtins:
-                val = allowed_builtins[fname]
-            else:
-                ast_tree = ast_trees.get(fname) if ast_trees else None
-                
-                # If we have an AST tree, it should be the desugared one.
-                # safe_eval will handle evaluating BaseComponent.S[...] or BaseComponent.C[...]
-                # if we provide the tree.
-                if ast_tree:
-                    val = safe_eval(fname, context, allowed_builtins, tree=ast_tree)
-                elif fname.startswith("$"):
-                    store_name, attr_name = fname.strip("$").split(".")
-                    store = store_registry.get(store_name)
-                    if store is None:
-                        val = None
-                    else:
-                        val = getattr(store, attr_name, None)
-                elif fname.startswith("#"):
-                    component_name, attr_name = fname.strip("#").split(".")
-                    if component_name in component_instance_registry:
-                        val = getattr(component_instance_registry[component_name], attr_name)
-                    else:
-                        val = ""
+    fname = None
+    try:
+        for literal_text, fname, format_spec, conversion in _FORMATTER.parse(template_str):
+            result += literal_text
+            if fname is not None:
+                if fname in allowed_builtins:
+                    val = allowed_builtins[fname]
                 else:
-                    val = safe_eval(fname, context, allowed_builtins)
-            
-            if val is None:
-                val = ""
-                
-            if format_spec:
-                result += format(val, format_spec)
-            else:
-                result += str(val)
-    
+                    ast_tree = ast_trees.get(fname) if ast_trees else None
+
+                    # If we have an AST tree, it should be the desugared one.
+                    # safe_eval will handle evaluating BaseComponent.S[...] or BaseComponent.C[...]
+                    # if we provide the tree.
+                    if ast_tree:
+                        val = safe_eval(fname, context, allowed_builtins, tree=ast_tree,
+                                        component=component, binding_type=binding_type,
+                                        template=template, template_line=template_line,
+                                        record=record)
+                    elif fname.startswith("$"):
+                        store_name, attr_name = fname.strip("$").split(".")
+                        store = store_registry.get(store_name)
+                        if store is None:
+                            val = None
+                        else:
+                            val = getattr(store, attr_name, None)
+                    elif fname.startswith("#"):
+                        component_name, attr_name = fname.strip("#").split(".")
+                        if component_name in component_instance_registry:
+                            val = getattr(component_instance_registry[component_name], attr_name)
+                        else:
+                            val = ""
+                    else:
+                        val = safe_eval(fname, context, allowed_builtins,
+                                        component=component, binding_type=binding_type,
+                                        template=template, template_line=template_line,
+                                        record=record)
+
+                if val is EVAL_ERROR:
+                    # A field failed and was recorded — abort the whole template
+                    # to the empty value rather than returning a partial string.
+                    return ""
+                if val is None:
+                    val = ""
+
+                if format_spec:
+                    result += format(val, format_spec)
+                else:
+                    result += str(val)
+    except Exception as e:
+        if not record:
+            return ""
+        if _report_binding_error(fname or template_str, context, e,
+                                 component=component, binding_type=binding_type,
+                                 template=template or template_str,
+                                 template_line=template_line, stage="eval"):
+            return ""
+        return f"{ERROR_PREFIX}{template_str}]"
+
     return result
 
 def extract_dependencies(template_str, allowed_builtins=ALLOWED_BUILTINS):

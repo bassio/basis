@@ -15,6 +15,7 @@ from fastapi import Request
 from basis.shared.store import Store
 from basis.shared.base_component import BaseComponent
 from basis.shared.hydration import apply_hydration_to_component
+from basis.shared.errors import ErrorCollector, get_error_sink, set_error_sink
 
 def _get_all_stores(
     page_cls,
@@ -54,8 +55,13 @@ def _get_all_stores(
                 all_stores[name] = store
     return all_stores
 
-def _serialize_initial_state(all_stores: dict[str, Store]) -> str:
-    """Serialize the current state of all collected stores."""
+def _serialize_initial_state(all_stores: dict[str, Store], errors=None) -> str:
+    """Serialize the current state of all collected stores.
+
+    ``errors`` (an :class:`~basis.shared.errors.ErrorCollector` or None) is
+    serialized under the reserved ``__basis_errors__`` key so the client overlay
+    can surface server-side (SSR) binding-evaluation failures.
+    """
     initial_state: dict[str, Any] = {}
     for store_name, store_instance in all_stores.items():
         initial_state[store_name] = store_instance.serialize()
@@ -80,7 +86,10 @@ def _serialize_initial_state(all_stores: dict[str, Store]) -> str:
         
     if basis_meta:
         initial_state["__basis_meta__"] = basis_meta
-        
+
+    if errors is not None and not errors.is_empty:
+        initial_state["__basis_errors__"] = errors.to_dict()
+
     return json.dumps(initial_state, indent=2)
 
 def _apply_hydration_logic(app, root_component_plus_child_components):
@@ -137,35 +146,44 @@ async def render_page_async(
     if not basis_ssr_root:
         basis_ssr_root = page_instance.__element__.children[1]
 
-    app = root_component_cls.mount_app(basis_ssr_root)
+    # Phase 5 #4 — collect every binding-evaluation error raised during this
+    # SSR render so it can be surfaced in the client overlay.  With the sink
+    # installed, safe_eval returns an empty value instead of "[Error: ...]".
+    error_collector = ErrorCollector()
+    _prev_sink = get_error_sink()
+    set_error_sink(error_collector)
+    try:
+        app = root_component_cls.mount_app(basis_ssr_root)
 
-    # 4. Async Preload Phase
-    child_bindings = list(app.get_child_bindings(recursive=True))
-    child_components = [cb.childinstance for cb in child_bindings]
-    all_components = [app] + child_components
+        # 4. Async Preload Phase
+        child_bindings = list(app.get_child_bindings(recursive=True))
+        child_components = [cb.childinstance for cb in child_bindings]
+        all_components = [app] + child_components
 
-    preload_tasks = []
-    for comp in all_components:
-        if hasattr(comp, 'server_load') and asyncio.iscoroutinefunction(comp.server_load):
-            preload_tasks.append(comp.server_load())
-            
-    if preload_tasks:
-        await asyncio.gather(*preload_tasks)
-        
-        # Re-check Store registry in case server_load created new stores
+        preload_tasks = []
+        for comp in all_components:
+            if hasattr(comp, 'server_load') and asyncio.iscoroutinefunction(comp.server_load):
+                preload_tasks.append(comp.server_load())
+
+        if preload_tasks:
+            await asyncio.gather(*preload_tasks)
+
+            # Re-check Store registry in case server_load created new stores
+            for store_name, store_instance in Store._registry.items():
+                if store_name not in all_stores:
+                    all_stores[store_name] = store_instance
+
+        # 5. Apply Hydration — re-collect after server_load so loop-generated nodes are included
+        fresh_child_bindings = list(app.get_child_bindings(recursive=True))
+        fresh_child_components = [cb.childinstance for cb in fresh_child_bindings]
+        fresh_all_components = [app] + fresh_child_components
+        _apply_hydration_logic(app, fresh_all_components)
+
+        # 6. Final render
         for store_name, store_instance in Store._registry.items():
             if store_name not in all_stores:
                 all_stores[store_name] = store_instance
-
-    # 5. Apply Hydration — re-collect after server_load so loop-generated nodes are included
-    fresh_child_bindings = list(app.get_child_bindings(recursive=True))
-    fresh_child_components = [cb.childinstance for cb in fresh_child_bindings]
-    fresh_all_components = [app] + fresh_child_components
-    _apply_hydration_logic(app, fresh_all_components)
-
-    # 6. Final render
-    for store_name, store_instance in Store._registry.items():
-        if store_name not in all_stores:
-            all_stores[store_name] = store_instance
-    initial_state_json = _serialize_initial_state(all_stores)
+        initial_state_json = _serialize_initial_state(all_stores, errors=error_collector)
+    finally:
+        set_error_sink(_prev_sink)
     return page_instance.render_full_page(request=request, initial_state_json=initial_state_json)

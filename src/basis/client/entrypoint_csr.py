@@ -5,7 +5,13 @@ import sys
 from pyscript import document
 
 from basis.client.component import Component
+from basis.client.errors import install_error_sink
 from basis.shared.hmr import start_hmr
+
+# Structured binding-error capture: guarantees DOM safety (no "[Error: ...]"
+# in rendered output), replays SSR errors, and creates the dev overlay.
+# Installed BEFORE any component module is imported or mounted.
+install_error_sink()
 
 # Print client side python version details
 print("[Basis] Running Python version:", sys.version)

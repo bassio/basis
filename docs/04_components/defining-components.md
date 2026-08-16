@@ -106,3 +106,6 @@ class TodoList(Component):
     padding: 24px;
 }
 ```
+
+> [!TIP]
+> Once you can define a component, learn how to customize and extend it — including the built-in `basis.ui` suite — in [Styling Components](styling-components.md) (look & feel) and [Extending & Customizing Components](extending-components.md) (structure & behavior).

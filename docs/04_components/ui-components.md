@@ -465,3 +465,6 @@ class SettingsPanel(Component):
     def save_settings(self):
         pass
 ```
+
+> [!TIP]
+> The `basis.ui` components are designed to be **customized and extended** — via attributes, CSS variable theming, plain CSS overrides, and Python subclassing. See [Styling Components](styling-components.md) for look & feel, and [Extending & Customizing Components](extending-components.md) for Python-level changes.

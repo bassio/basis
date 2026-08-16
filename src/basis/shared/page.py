@@ -4,6 +4,7 @@ from basis.shared.component import Component
 from basis.shared.element import Element, DocumentType
 from basis.shared.store import Store
 from basis.shared.hydration import apply_hydration_to_component
+from basis.shared.errors import ErrorCollector, get_error_sink, set_error_sink
 
 
 def _apply_hydration_logic(app, root_component_plus_child_components):
@@ -107,17 +108,18 @@ class Page(Component):
         if page_module_file and page_module_file != "basis.shared.page":
             entrypoint_imports[self.__class__.__name__] = page_module_file
 
-        # 2. Append the imports JSON configuration script in the <head>
-        if entrypoint_imports:
-            head_node = None
-            for node in self.__element__.descendants:
-                if hasattr(node, "tagName") and node.tagName.lower() == "head":
-                    head_node = node
-                    break
+        # 2. Locate <head> once; append client-configuration nodes.
+        head_node = None
+        for node in self.__element__.descendants:
+            if hasattr(node, "tagName") and node.tagName.lower() == "head":
+                head_node = node
+                break
 
-            if head_node:
-                from basis.shared.element import Element, ElementString
+        if head_node:
+            from basis.shared.element import Element, ElementString
 
+            # 2a. Append the imports JSON configuration script in the <head>
+            if entrypoint_imports:
                 json_str = json.dumps(entrypoint_imports)
                 imports_script = Element("script", {
                     "id": "basis-entrypoint-imports",
@@ -125,6 +127,14 @@ class Page(Component):
                 }, [ElementString(json_str)])
 
                 head_node.appendChild(imports_script)
+
+            # 2b. Dev-mode marker read by client tooling (e.g. the error
+            # overlay).  Mirrors the HMR dev affordance: `basis dev --hmr`
+            # sets BASIS_HMR=1 on the server.
+            if getattr(request.app, "_start_hmr_watcher", False):
+                head_node.appendChild(
+                    Element("meta", {"name": "basis-mode", "content": "dev"}, [])
+                )
 
         return self
 
@@ -182,6 +192,11 @@ class Page(Component):
             if db_session is not None:
                 session_token = db_session_var.set(db_session)
 
+        # Phase 5 #4 — collect binding-eval errors during this SSR render so they
+        # can be surfaced in the client overlay (__basis_errors__ in initial state).
+        error_collector = ErrorCollector()
+        _prev_sink = get_error_sink()
+        set_error_sink(error_collector)
         try:
             # Collect components for server_load (pre-data collection)
             all_components = []
@@ -215,6 +230,9 @@ class Page(Component):
             for store_name, store_instance in Store._registry.items():
                 initial_state[store_name] = store_instance.serialize()
 
+            if not error_collector.is_empty:
+                initial_state["__basis_errors__"] = error_collector.to_dict()
+
             if initial_state:
                 initial_state_json = json.dumps(initial_state)
             else:
@@ -226,6 +244,7 @@ class Page(Component):
             return self.doctype.__html__() + "\n" + self.__element__.outerHTML
 
         finally:
+            set_error_sink(_prev_sink)
             if session_token is not None:
                 from basis.shared.context import db_session_var
                 db_session_var.reset(session_token)

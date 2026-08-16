@@ -52,6 +52,7 @@ def initialize_pyscript_registry(app: FastAPI):
         "plugin.py",
         "actions.py",
         "plugins.py",
+        "errors.py",
     ]
     for f_name in client_py_files:
         stem = Path(f_name).stem
@@ -73,6 +74,7 @@ def initialize_pyscript_registry(app: FastAPI):
         "context.py",
         "hmr.py",
         "hydration.py",
+        "errors.py",
         "actions.py",
         "plugin.py",
         "router.py",

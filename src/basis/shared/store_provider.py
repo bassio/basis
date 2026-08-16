@@ -1,6 +1,7 @@
 import asyncio
 from string import Formatter
 from basis.shared.bindings import safe_eval, safe_format_with_stores, ALLOWED_BUILTINS, extract_dependencies
+from basis.shared.errors import is_error_string
 from basis.shared.store import Store, ModelStore, ReactiveCollection
 from basis.shared.component import Component, client, IS_CLIENT
 
@@ -29,22 +30,31 @@ def resolve_value(val):
         fname = parsed[0][1]
         ast_tree = ast_trees.get(fname)
         if ast_tree:
-            res = safe_eval(fname, None, ALLOWED_BUILTINS, tree=ast_tree)
-            if isinstance(res, str) and res.startswith("[Error: "):
+            # record=False: this is a *probe* (can the kwarg be resolved yet?).
+            # Failure is the normal "provider not ready" state and must be silent —
+            # the caller skips the fetch.  Phase 5 #4 made eval helpers return ""
+            # on failure when a sink is registered; treat both the legacy
+            # "[Error: ...]" sentinel and "" as "cannot resolve yet".
+            res = safe_eval(fname, None, ALLOWED_BUILTINS, tree=ast_tree, record=False)
+            if res is None or res == "" or is_error_string(res):
                 return None
             return res
         return None
 
     # Fallback to string formatting
     try:
-        return safe_format_with_stores(
+        res = safe_format_with_stores(
             val,
             None,
             ALLOWED_BUILTINS,
             Store._registry,
             {},
-            ast_trees=ast_trees
+            ast_trees=ast_trees,
+            record=False,
         )
+        if res == "" or is_error_string(res):
+            return None
+        return res
     except Exception:
         return val
 

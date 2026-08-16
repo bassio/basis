@@ -15,6 +15,8 @@ Learn Basis by building. This track walks you from an empty directory to a react
 ## 2. Components
 
 - **[Defining Components](04_components/defining-components.md)** — Single-file and multi-file component layouts, reactive state, and file naming conventions.
+- **[Extending & Customizing Components](04_components/extending-components.md)** — The web-component mental model, and the code-side ways to extend a component: attributes (props), Python subclassing, and building your own.
+- **[Styling Components](04_components/styling-components.md)** — Theme and restyle any component's look: CSS design tokens, plain CSS overrides, and inline host styling — no Python required.
 - **[Parent & Child Composition](04_components/child-components.md)** — Custom element tags, passing attributes down the tree, and content projection with `<slot>`.
 - **[Component Directories](04_components/components-directory.md)** — Mounting component directories and registering them with the PyScript module manifest.
 - **[The Page Component](04_components/page-component.md)** — Customizing the HTML shell and initial store-state injection.

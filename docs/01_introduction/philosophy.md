@@ -14,6 +14,23 @@ Basis doesn't compile Python into JavaScript, and it doesn't invent its own HTML
 
 This means your existing HTML/CSS knowledge carries over, and the output is always inspectable, debuggable standard markup.
 
+### A Basis component is a web component
+
+Basis builds directly on the browser's native **Custom Elements** standard rather than inventing a parallel component model. The result is that the component abstractions you already know from React, Svelte, or Vue map one-to-one:
+
+| If you know this… | …it works like this in Basis |
+| :--- | :--- |
+| React function / Svelte component | `class Counter(Component)` |
+| JSX / `.svelte` template | A template docstring or `template()` method |
+| Props / attributes | Class attributes + HTML attributes on the tag |
+| State (`useState`, `let`) | Reactive class attributes; `self.count += 1` |
+| Derived state (`useMemo`, `$:`) | `@computed` properties |
+| Using a component in markup | Its hyphenated custom-element tag (`<my-counter>`) |
+| Children / slots | Standard `<slot>` projection |
+| Event handlers | `onclick="{method}"` attributes + `@py_event` |
+
+A `class Counter(Component)` compiles to the custom element `<counter>`, renders in **light DOM** with plain, overridable CSS (no shadow-DOM wall), and runs the same Python on the server and in the browser. The hands-on guides are [Extending & Customizing Components](../04_components/extending-components.md) and [Styling Components](../04_components/styling-components.md).
+
 ---
 
 ## 2. Python-First
