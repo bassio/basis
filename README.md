@@ -52,6 +52,7 @@ Mimic the React/Svelte component model (components, props, state, slots), but in
 - **Python everywhere.** Backend logic, business rules, component markup, and client-side reactivity are all Python. One language, one mental model, one type-checked codebase — no context-switching.
 - **Buildless.** No Node.js, no npm, no compilation step, no `package.json`. PyScript loads your `.py` files, templates, and stylesheets directly in the browser.
 - **Web standards.** Components are native Custom Elements; templates are plain HTML; styles are plain CSS that participates in the normal cascade; state binds to the native DOM.
+- **No new DSL to learn** Component syntax is just html and css. Python is used to define reactive code, only as a substitute for writing javascript.
 - **Isomorphic.** The same component class server-renders complete HTML (fast, SEO-friendly, no blank screen) and then hydrates in-place in the browser — no flash of unstyled content, no layout shift.
 - **Fine-grained reactivity, no virtual DOM.** A dependency graph (DAG) tracks exactly which DOM nodes depend on which state and updates *only* those nodes.
 - **FastAPI under the hood.** `Basis` *is* a FastAPI application, so routes, middleware, and your existing FastAPI knowledge all carry over.
