@@ -62,23 +62,26 @@ Your reactive components mount inside `<div id="basis-ssr-root">` during both se
 
 ## Customizing the page shell
 
-To add custom fonts, meta tags, or stylesheets, subclass `Page` and register it with `include_page()` (or the `@app.include_page` decorator):
+To add custom fonts, meta tags, or stylesheets, subclass `Page` and register it. The `@app.include_page(path)` decorator is the cleanest way — it co-locates the URL with the Page class:
 
 ```python
 from basis.shared.page import Page
 from basis.shared.component import Basis, Component
 
+app = Basis()
+
 class Dashboard(Component):
     """<div>Dashboard</div>"""
 
+@app.include_page("/dashboard")
 class MyPage(Page):
     title = "My App"
     root_component = Dashboard
-
-app = Basis()
-
-app.include_page("/dashboard", page_cls=MyPage)
 ```
+
+This is equivalent to the explicit form `app.include_page("/dashboard", page_cls=MyPage)` — both register a GET route that server-renders the page.
+
+Unlike `@app.page` (which synthesizes a shell from a root `Component` and cannot carry page-level `stores`), a `Page` subclass like `MyPage` is a complete recipe: it can declare `root_component`, `stores`, `title`, and its own `entry_module` / PyScript config, all of which are read from the class at render time.
 
 If you need to inject additional `<head>` elements, subclass `Page` and add them by appending to the document tree inside an overridden method. The `head()` method exists on `Page` as a placeholder but is not currently consumed by the renderer — direct DOM manipulation on the page instance is the reliable approach for now.
 
