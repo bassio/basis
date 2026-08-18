@@ -71,7 +71,7 @@ The simplest way to expose a root component as a page. Decorating your root comp
 
 - Calls `app.bootstrap()` to initialize framework infrastructure (including conventional `components/`, `stores/`, `plugins/` auto-discovery).
 - Registers a GET route at `path` (default `/`) that server-renders the decorated component.
-- Serves the component's code **isomorphically**: if the component already lives inside a discovered `components/` package, it is served from that package-derived mount (no legacy `/` mount, so the VFS name equals the filesystem name); only a bare single-file app falls back to mounting its directory at `/`. See [Importing Components & the Isomorphism Principle](../04_components/importing-components.md).
+- Serves the component's code **isomorphically**: if the component already lives inside a discovered `components/` package, it is served from that package-derived mount (no automatic `/` mount, so the VFS name equals the filesystem name); only a bare single-file app falls back to mounting its directory at `/`. See [Importing Components & the Isomorphism Principle](../04_components/importing-components.md).
 
 `@app.page` decorates a **root component** (a `Component` subclass) — never a `Page`. It is the "quick and dirty" path: **page-level `stores` are not supported here** (the client boots from the component file, so it cannot hydrate page stores). To declare page stores, write a `Page` subclass and register it with `@app.include_page(path)` or `app.include_page(path, page_cls=MyPage)`.
 

@@ -153,14 +153,15 @@ When you decorate a root component with `@app.page`, Basis checks whether the
 component's file already lives inside a discovered directory:
 
 - **Yes** (e.g. it's in `components/`) → the component is served from the
-  discovered, isomorphic mount (`/pkg/components/my_page.py`) and **no** legacy
-  `/` mount is added. The import name stays `pkg.components.my_page`.
+  discovered, isomorphic mount (`/pkg/components/my_page.py`) and **no**
+  automatic `/` mount is added. The import name stays `pkg.components.my_page`.
 - **No** (a bare single-file app, e.g. `app.py` at the project root) → Basis
   falls back to mounting the app directory at `/`, which *is* isomorphic for a
   component at the app root (`app` on disk ↔ `app` in the VFS).
 
-This removes the old behavior where `@app.page` always mounted `/`, which created
-a second, non-isomorphic namespace the moment a component lived in a subpackage.
+`@app.page` therefore never creates a second, non-isomorphic namespace: a
+component that lives in a subpackage is served from its package-derived mount,
+not from `/`.
 
 ---
 

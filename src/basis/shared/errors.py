@@ -8,7 +8,7 @@ This module plays the same role for error reporting that
 ``basis/shared/hydration.py`` plays for hydration diagnostics: it is the single
 source of truth, duck-typed so the exact same functions run in both worlds:
 
-* server:  Python-side SSR rendering.  ``safe_eval`` / ``safe_format_with_stores``
+* server:  Python-side SSR rendering.  ``safe_eval`` / ``safe_format``
   record into an :class:`ErrorCollector` installed around each render, and the
   collected errors are serialized into ``#basis-initial-state`` under the
   ``__basis_errors__`` key.
@@ -16,12 +16,11 @@ source of truth, duck-typed so the exact same functions run in both worlds:
   installed by ``basis.client.errors``, which publishes ``window.__basisErrors``
   and a ``basis-error`` ``CustomEvent`` and drives the dev-only overlay panel.
 
-Contract change (Phase 5 #4): on failure the evaluation helpers RECORD a
-structured :class:`BindingError` and return ``""`` (an empty, neutral value) so
-the literal ``[Error: ...]`` string can never reach the rendered DOM.  A
-``[Error: ...]`` string is only produced as a last resort when no sink is
-registered (the transition path), so legacy string-prefix checks keep working
-until they are updated to the structured API.
+On failure the evaluation helpers RECORD a structured :class:`BindingError`
+and return ``""`` (an empty, neutral value) so the literal ``[Error: ...]``
+string can never reach the rendered DOM.  A ``[Error: ...]`` string is only
+produced as a last resort when no sink is registered, so string-prefix checks
+keep working alongside the structured API.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ import sys
 ERROR_EVENT = "basis-error"
 ERRORS_GLOBAL = "__basisErrors"
 
-# Legacy sentinel produced only when no error sink is registered.
+# Sentinel produced only when no error sink is registered.
 ERROR_PREFIX = "[Error: "
 
 
@@ -66,8 +65,47 @@ class _BindingEvalError:
 EVAL_ERROR = _BindingEvalError()
 
 
+class _SilentEvalError:
+    """Sentinel returned by the eval helpers when a binding expression fails
+    with ``record=False`` (a silent *probe* — no sink is notified).
+
+    Like :class:`_BindingEvalError` it is an empty/neutral value (falsy,
+    ``str() == ""``), but it is also intentionally *equal to* ``""`` so probe
+    callers that test ``result == ""`` (e.g. ``store_provider.resolve_value``)
+    treat it as "cannot resolve yet".  The format helpers abort the whole
+    template to ``""`` when a field yields it, so a silent probe never renders
+    a partial string.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return "<silent eval error>"
+
+    def __bool__(self):
+        return False
+
+    def __str__(self):
+        return ""
+
+    def __eq__(self, other):
+        if isinstance(other, _SilentEvalError):
+            return True
+        if isinstance(other, str):
+            return other == ""
+        return False
+
+    __hash__ = object.__hash__
+
+
+# Returned (instead of EVAL_ERROR) when ``record=False`` and the expression
+# failed: no sink is notified, but the caller can still detect the failure and
+# abort a template to "".
+SILENT_ERROR = _SilentEvalError()
+
+
 def is_error_string(value) -> bool:
-    """True for the legacy ``[Error: ...]`` sentinel string."""
+    """True for the ``[Error: ...]`` sentinel string."""
     return isinstance(value, str) and value.startswith(ERROR_PREFIX)
 
 
@@ -139,9 +177,17 @@ def find_template_line(template: str | None, expr: str) -> int | None:
     if not template or not expr:
         return None
     lines = template.splitlines()
+    # Docstring-style component templates begin with a blank line; number lines
+    # relative to the first non-blank line so the reported line matches what
+    # the author sees in their template.
+    offset = 0
+    for i, line in enumerate(lines):
+        if line.strip():
+            offset = i
+            break
     for i, line in enumerate(lines):
         if expr in line or ("{" + expr + "}") in line:
-            return i + 1
+            return (i - offset) + 1
     return None
 
 
@@ -172,7 +218,7 @@ def record_error(**kwargs) -> bool:
     """Build a :class:`BindingError` and hand it to the registered sink.
 
     Returns True when a sink consumed it (callers then return the empty value),
-    False when no sink is registered (callers keep the legacy behaviour).
+    False when no sink is registered (callers keep the sentinel behaviour).
     A failing sink never raises — error capture must not crash the renderer.
     """
     sink = _error_sink
@@ -182,7 +228,10 @@ def record_error(**kwargs) -> bool:
     try:
         return bool(sink(err))
     except Exception:
-        return False
+        # A broken sink must not crash the renderer — and must not let a raw
+        # ``[Error: ...]`` string through.  A registered sink (even one that
+        # raised) counts as "handled": the caller returns the empty value.
+        return True
 
 
 class ErrorCollector:
@@ -234,4 +283,5 @@ __all__ = [
     "is_error_string",
     "record_error",
     "set_error_sink",
+    "SILENT_ERROR",
 ]

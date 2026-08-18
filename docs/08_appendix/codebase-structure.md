@@ -31,7 +31,10 @@ src/basis/
 │   └── pyscript/         # Offline PyScript bundle mounted at /pyscript
 └── shared/               # Isomorphic code (server + PyScript client)
     ├── reactive.py       # DependencyGraph (DAG), State/Computed/EffectNode, @computed, refrain()
-    ├── bindings.py       # Binding classes + safe AST evaluation engine
+    ├── bindings.py       # Binding classes (the DOM sync layer)
+    ├── expr.py           # Safe expression language (desugar, safe_eval, safe_format)
+    ├── loop.py           # Loop engine (Reconciler, LoopBodyBuilder, LoopItem, LIS)
+    ├── hydration.py      # Canonical hydration paths + SSR re-pointing
     ├── base_component.py # Component lifecycle, blueprint analysis, slots, subscriptions
     ├── store.py          # Store, ModelStore, WebSocketStore, ReactiveCollection
     ├── store_provider.py # StoreProvider / ModelStoreProvider (SSR hydration guards)
@@ -57,7 +60,10 @@ src/basis/
 - **`src/basis/client/`**: Browser-side PyScript mount logic, SSR/CSR entrypoints, action invocation, and DOM hydration.
 - **`src/basis/server/`**: FastAPI application class (`Basis`), server-side rendering pipeline, element tree builder, `.pyc` bytecode compiler, and `@server_action` RPC endpoints.
 - **`src/basis/shared/reactive.py`**: The central `DependencyGraph` (DAG), `StateNode`, `ComputedNode`, `EffectNode`, `@computed`, and `ReactiveObject` implementation.
-- **`src/basis/shared/bindings.py`**: DOM bindings connecting template nodes to DAG effect updates, plus the sandboxed AST evaluation engine (`safe_eval`, `safe_format`, `extract_dependencies`).
+- **`src/basis/shared/bindings.py`**: The binding classes — the DOM sync layer mapping template nodes to DAG-driven `update()` calls (value, event, structural, form, and loop bindings).
+- **`src/basis/shared/expr.py`**: The sandboxed expression engine (`desugar_expression`, `safe_eval`, `safe_format`, `extract_dependencies`, `LoopScope`).
+- **`src/basis/shared/loop.py`**: The loop engine — `Reconciler` (pure keyed diff), `LoopBodyBuilder`, `LoopItem`, and the LIS helper.
+- **`src/basis/shared/hydration.py`**: The canonical hydration-path algorithm shared by SSR and client, plus loop re-pointing (`repoint_loop_to_ssr`).
 - **`src/basis/shared/base_component.py`**: Component initialization, AST template analysis, blueprint compilation, slot filling, and state node creation.
 - **`src/basis/shared/store.py`**: `Store`, `ModelStore` (reactive CRUD), `WebSocketStore`, and `ReactiveCollection`.
 - **`src/basis/static/pyscript/`**: The offline PyScript/Pyodide bundle served from `/pyscript`.

@@ -3,19 +3,22 @@ Deterministic hydration — canonical world tests.
 
 These prove the canonical hydration world (preserved-text tree +
 ``basis/shared/hydration.py``) produces deterministic element paths and text
-ordinals, keeps text/whitespace/comments intact, and that the client walker
-semantics match the canonical path set.  Canonical is the only hydration mode
-(the legacy mode has been removed).
+ordinals, keeps text/whitespace/comments intact, and that the client stamps
+the SAME canonical paths (there is no second client walker — one address
+scheme, ``data-hydration-id``).  Canonical is the only hydration mode (the
+legacy mode has been removed).
 """
 import pytest
 
 from basis.server.tree_builder import html_to_element
 from basis.shared.element import Element, ElementString, Comment
 from basis.shared.hydration import (
+    HYDRATION_ID_ATTR,
     HYDRATION_MISMATCH_EVENT,
     HYDRATION_REPORT_GLOBAL,
     HydrationReport,
     apply_hydration_markers,
+    build_hydration_map,
     hydration_fallback_enabled,
     is_element,
     is_text,
@@ -210,59 +213,6 @@ def test_fallback_rerender_restores_shadow_bindings():
     assert binding.node is shadow_node
 
 
-# ---------------------------------------------------------------------------
-# Helper — client walker semantics (canonical path parity)
-# ---------------------------------------------------------------------------
-
-def simulate_client_walker(root):
-    """Port of client/component.py ``_set_nodes_with_client_ids`` run over the
-    server Element model (a stand-in for the browser DOM).
-
-    TreeWalker = SHOW_ELEMENT | SHOW_TEXT: comments are never visited and
-    whitespace-only text is explicitly skipped; elements and non-whitespace
-    text are numbered in pre-order.
-    """
-    id_to_node = {}
-    root_id = "r:0"
-    root.setAttribute("data-client-id", root_id)
-    id_to_node[root_id] = root
-    stack = [[root, root_id, 0]]
-
-    def countable_children(node):
-        out = []
-        for c in node.children:
-            if isinstance(c, Comment):
-                continue
-            if isinstance(c, ElementString) and not c.value.strip():
-                continue
-            out.append(c)
-        return out
-
-    def preorder(node):
-        for c in countable_children(node):
-            yield c
-            if hasattr(c, "children"):
-                yield from preorder(c)
-
-    for current_node in preorder(root):
-        parent = current_node.parentNode
-        while stack and stack[-1][0] != parent:
-            stack.pop()
-        parent_path = stack[-1][1]
-        current_index = stack[-1][2]
-        stack[-1][2] += 1
-        current_id = f"{parent_path}:{current_index}"
-        # Mirror the real client: only elements can carry the attribute, but
-        # text nodes are still recorded so the path set is complete.
-        if hasattr(current_node, "setAttribute"):
-            current_node.setAttribute("data-client-id", current_id)
-        id_to_node[current_id] = current_node
-        if hasattr(current_node, "children"):
-            stack.append([current_node, current_id, 0])
-
-    return id_to_node
-
-
 def describe(node):
     """Human-readable identity of a node for golden assertions."""
     if is_element(node):
@@ -378,20 +328,37 @@ def test_golden_paths_in_new_world(name):
 
 
 # ---------------------------------------------------------------------------
-# Parity — client walker matches canonical paths
+# Item 7 — client stamping IS the canonical algorithm (no second walker)
 # ---------------------------------------------------------------------------
 
-def test_parity_client_walker_matches_canonical():
-    """The client walker semantics (whitespace-skipping, comment-excluding)
-    must produce exactly the canonical path set over the same tree."""
+def test_client_stamping_uses_canonical_paths():
+    """The client template node at canonical path P hydrates the SSR node at
+    canonical path P.  Stamping the client tree with iter_tree_paths (what
+    client/component.py._stamp_hydration_ids does) must put the SAME
+    data-hydration-id on every element as the server would, and every
+    SSR-marked (binding/component) target must be addressable at that path."""
     for name in TEMPLATES:
         root = html_to_element(TEMPLATES[name])
-        client_ids = set(simulate_client_walker(root).keys())
-        canonical = {path for _, path in iter_tree_paths(root)}
-        assert client_ids == canonical, name
+        # Mirror _stamp_hydration_ids: stamp every countable element.
+        for node, path in iter_tree_paths(root):
+            if is_element(node):
+                node.setAttribute(HYDRATION_ID_ATTR, path)
+        stamped = {
+            path for node, path in iter_tree_paths(root)
+            if is_element(node)
+            and node.getAttribute(HYDRATION_ID_ATTR) == path
+        }
+        # Every countable element carries exactly its canonical path.
+        assert stamped == element_paths(root), name
+        # Every SSR hydration marker (binding/component target) is a subset of
+        # the client-stamped element paths — one address space.
+        markers = apply_hydration_markers(
+            root, binding_nodes=[root], component_nodes=[root]
+        )
+        assert set(markers) <= element_paths(root), name
 
 
-def test_parity_whitespace_only_text_cannot_shift_ids():
+def test_canonical_paths_are_whitespace_stable():
     """Adding/removing surrounding whitespace must not move sibling IDs."""
     base = html_to_element("<div><span>{a}</span><span>{b}</span></div>")
     padded = html_to_element(
@@ -477,6 +444,29 @@ def test_apply_hydration_markers_stamps_bindings_and_components():
     }
 
 
+def test_build_hydration_map_keys_by_stamped_path():
+    """The SSR path->node map indexes the same canonical paths the server
+    stamped — the client matches bindings against this single map instead of
+    scanning with querySelector per binding."""
+    root = html_to_element(TEMPLATES["indented"])
+    spans = [c for c in root.children if isinstance(c, Element)]
+    apply_hydration_markers(
+        root, binding_nodes=[root, *spans], component_nodes=[root]
+    )
+
+    ssr_map = build_hydration_map(root)
+    assert set(ssr_map.keys()) == {"r:0", "r:0:0", "r:0:1"}
+    assert ssr_map["r:0"] is root
+    assert ssr_map["r:0:0"] is spans[0]
+    assert ssr_map["r:0:1"] is spans[1]
+
+
+def test_build_hydration_map_ignores_unmarked_nodes():
+    """Nodes without data-hydration-id are not in the map."""
+    root = html_to_element("<div><span>a</span><span>b</span></div>")
+    assert build_hydration_map(root) == {}
+
+
 # ---------------------------------------------------------------------------
 # Phase C/D — wiring: canonical SSR markers, client ordinal matching
 # ---------------------------------------------------------------------------
@@ -492,12 +482,20 @@ def test_ssr_emits_markers_and_text_ordinals():
     app.bootstrap()
 
     class Root(Component):
+        # A defined field: the text binding succeeds, so the canonical tree's
+        # authored whitespace around the binding is preserved in the SSR output.
+        # (With `message` undefined the error sink renders the field as an
+        # empty value and the whole text run aborts to "" — an error condition
+        # where whitespace legitimately disappears.)  Note: the docstring MUST
+        # be the first class statement for Python to bind it as __doc__.
         """
         <div>
             <span>Ready</span>
             {message}
         </div>
         """
+
+        message = "Hello"
 
     app.include_ssr_page("/", Root, entry_module="/test_root.py")
     client = TestClient(app)
@@ -510,10 +508,88 @@ def test_ssr_emits_markers_and_text_ordinals():
     # Deterministic text ordinal: {message} is normalized-child #1 of the div
     # (the <span> is #0), so the parent carries data-basis-text="1".
     assert 'data-basis-text="1"' in resp.text
-    # Canonical tree preserves the authored whitespace between the elements.
-    # (The text node itself gets formatted by its initial update — here to the
-    # pre-existing "[Error: message]" since `message` is undefined.)
+    # Canonical tree preserves the authored whitespace between the elements
+    # (the successful binding renders "Hello" inside that preserved run).
     assert "<span>Ready</span>\n    " in resp.text
+    assert "Hello" in resp.text
+
+
+def test_ssr_stamps_loop_body_nodes_and_text_ordinals():
+    """A plain loop's body nodes carry data-hydration-id AND data-basis-text in
+    the SSR output, so the client's hydration pass (via ``all_body_bindings()``)
+    can match and re-point them — making plain loop bodies reactive on /ssr."""
+    from fastapi.testclient import TestClient
+    from basis.server.app import Basis
+    from basis.shared.component import Component
+
+    app = Basis()
+    app.bootstrap()
+
+    class Root(Component):
+        """
+        <div>
+            <div for="it" in="{items}" key="k">{it['name']}</div>
+        </div>
+        """
+
+        items = [{"k": 1, "name": "Alpha"}, {"k": 2, "name": "Beta"}]
+
+    app.include_ssr_page("/", Root, entry_module="/test_loop_root.py")
+    client = TestClient(app)
+    resp = client.get("/")
+    assert resp.status_code == 200
+
+    # Loop item wrappers are stamped with canonical hydration ids.
+    assert 'data-hydration-id="r:0:0"' in resp.text
+    assert 'data-hydration-id="r:0:1"' in resp.text
+    # Each item body parent carries the text ordinal for its {it['name']} node.
+    assert 'data-basis-text="0"' in resp.text
+    assert "Alpha" in resp.text and "Beta" in resp.text
+
+
+def test_ssr_stamps_nested_loop_body_nodes_and_text_ordinals():
+    """Phase 5-extension (server side): a NESTED loop's INNER item wrappers and
+    body nodes carry data-hydration-id AND data-basis-text in the SSR output
+    (the recursion in ``marked_for_hydration`` / ``text_binding_nodes``), so
+    the client's structural matcher can re-point inner loop bodies on /ssr."""
+    from fastapi.testclient import TestClient
+    from basis.server.app import Basis
+    from basis.shared.component import Component
+
+    app = Basis()
+    app.bootstrap()
+
+    class Root(Component):
+        """
+        <div>
+            <div for="grp" in="{groups}" key="g">
+                <span>{grp['g']}:</span>
+                <div for="it" in="{grp['items']}" key="name">{it['name']}</div>
+            </div>
+        </div>
+        """
+
+        groups = [{"g": "A", "items": [{"name": "a1"}, {"name": "a2"}]},
+                  {"g": "B", "items": [{"name": "b1"}]}]
+
+    app.include_ssr_page("/", Root, entry_module="/test_nested_loop_root.py")
+    client = TestClient(app)
+    resp = client.get("/")
+    assert resp.status_code == 200
+
+    # Outer item wrappers.
+    assert 'data-hydration-id="r:0:0"' in resp.text   # outer A
+    assert 'data-hydration-id="r:0:1"' in resp.text   # outer B
+    # Inner item wrappers (children of outer A: span at :0, items a1/a2 at :1/:2;
+    # outer B's single inner item at r:0:1:1).
+    assert 'data-hydration-id="r:0:0:1"' in resp.text  # inner a1
+    assert 'data-hydration-id="r:0:0:2"' in resp.text  # inner a2
+    assert 'data-hydration-id="r:0:1:1"' in resp.text  # inner b1
+    # Inner bodies + span labels carry text ordinals for their reactive text.
+    assert resp.text.count('data-basis-text="0"') >= 5
+    # Everything renders.
+    for needle in ("A:", "B:", "a1", "a2", "b1"):
+        assert needle in resp.text
 
 
 # --- Browser-DOM stand-in: verifies hydration.py duck-typing as the client

@@ -1,7 +1,7 @@
 """
 basis/client/errors.py
 ----------------------
-Client-side structured error reporting + dev-only overlay.
+Client-side structured error reporting.
 
 Installed once by the entrypoints (``entrypoint_csr.py`` / ``entrypoint_ssr.py``)
 via :func:`install_error_sink`.  The sink guarantees DOM safety (evaluation
@@ -10,12 +10,13 @@ surfaces every failure as structured data — ``window.__basisErrors`` plus a
 ``basis-error`` ``CustomEvent`` — with parity to the hydration report
 (``window.__basisHydrationReport`` / ``basis-hydration-mismatch``).
 
-The overlay panel (:class:`ErrorOverlay`) is a dev-only affordance: it is
-created when the page carries the dev marker (``<meta name="basis-mode"
-content="dev">``, stamped by the server when running with HMR / ``basis dev``)
-or when forced via :func:`set_overlay_enabled`.  Each entry shows component,
-binding type, expression, template line, and traceback, click-to-expand, with a
-dismiss-all control.
+The visual surface is a proper reactive component — ``<basis-error-overlay>``
+(``basis/client/errors_component.py``) — mounted automatically when the page
+carries the dev marker (``<meta name="basis-mode" content="dev">``, stamped by
+the server when running with HMR / ``basis dev``) or when forced via
+:func:`set_overlay_enabled`.  This module is the plumbing only: sink, dedup,
+global/event dispatch, SSR replay, and overlay mounting.  The component renders
+reactively from the records pushed to it (no imperative DOM building here).
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from basis.shared.errors import (
     ERRORS_GLOBAL,
     set_error_sink,
 )
+from basis.client.errors_component import ErrorOverlay, mount_error_overlay
 
 _installed = False
 _overlay_override = None
@@ -124,6 +126,15 @@ def _record(err) -> bool:
         return True
     _seen.add(signature)
 
+    # Drive the reactive overlay component (when mounted) so it re-renders its
+    # list live; dedup above keeps a recurring failure from flooding it.
+    overlay = _overlay
+    if overlay is not None:
+        try:
+            overlay.add(err_dict)
+        except Exception:
+            pass
+
     _append_to_global(err_dict)
     _dispatch_event(err_dict)
     try:
@@ -167,246 +178,28 @@ def _replay_server_errors() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Overlay
+# Overlay (reactive component — see errors_component.py)
 # ---------------------------------------------------------------------------
 
-def _escape_html(text) -> str:
-    if not text:
-        return ""
-    return (
-        str(text)
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
-
-
-def _format_detail(err_dict: dict) -> str:
-    lines = []
-    phase = err_dict.get("phase")
-    if phase:
-        lines.append(f"phase: {phase}")
-    line = err_dict.get("template_line")
-    if line:
-        lines.append(f"template line: {line}")
-    error = err_dict.get("error")
-    if error:
-        lines.append(f"error: {error}")
-    hint = err_dict.get("hint")
-    if hint:
-        lines.append(f"hint: {hint}")
-    tb = err_dict.get("traceback")
-    if tb:
-        lines.append(str(tb))
-    return "\n".join(lines)
-
-
-class ErrorOverlay:
-    """Dev-only, fixed-position, collapsible panel listing every binding error.
-
-    Subscribes to the ``basis-error`` CustomEvent and renders each entry with
-    component, binding type, expression, template line, and traceback.
-    """
-
-    def __init__(self, document=document, window=window):
-        self._document = document
-        self._window = window
-        self._count = 0
-        self._collapsed = False
-        self._panel = None
-        self._list = None
-        self._count_el = None
-        self._handler = None
-        self._create()
-        self._subscribe()
-
-    # -- construction -----------------------------------------------------
-    def _create(self):
-        if self._document is None:
-            return
-        panel = self._document.createElement("div")
-        panel.id = "basis-error-overlay"
-        try:
-            panel.style = (
-                "position:fixed;top:12px;right:12px;z-index:2147483646;"
-                "width:340px;max-height:60vh;overflow:auto;"
-                "background:rgba(20,20,20,0.94);color:#f8f8f2;"
-                "border:1px solid #f43f5e;border-radius:8px;"
-                "font:11px/1.5 system-ui,sans-serif;box-shadow:0 4px 20px rgba(0,0,0,.4)"
-            )
-        except Exception:
-            pass
-
-        header = self._document.createElement("div")
-        try:
-            header.id = "basis-error-overlay-header"
-            header.style = (
-                "display:flex;align-items:center;gap:8px;padding:6px 10px;"
-                "border-bottom:1px solid rgba(255,255,255,.12);cursor:pointer"
-            )
-            header.innerHTML = (
-                '<span style="font-weight:600;color:#fda4af">⚠ Basis errors</span>'
-                '<span id="basis-error-count" style="margin-left:auto;'
-                'color:#fda4af;font-weight:600">0</span>'
-                '<span style="color:#6b7280;cursor:pointer" title="dismiss all">✕</span>'
-            )
-        except Exception:
-            pass
-
-        list_el = self._document.createElement("div")
-        try:
-            list_el.id = "basis-error-list"
-        except Exception:
-            pass
-
-        panel.appendChild(header)
-        panel.appendChild(list_el)
-        self._document.body.appendChild(panel)
-
-        self._panel = panel
-        self._list = list_el
-        self._count_el = header
-        self._bind_header()
-
-    def _bind_header(self):
-        if self._document is None:
-            return
-        try:
-            header = self._document.getElementById("basis-error-overlay-header")
-            if header is None or not hasattr(header, "addEventListener"):
-                return
-            if ffi is not None and hasattr(ffi, "create_proxy"):
-                header.addEventListener("click", ffi.create_proxy(self._on_header_click))
-        except Exception:
-            pass
-
-    def _subscribe(self):
-        if self._document is None or not hasattr(self._document, "addEventListener"):
-            return
-        try:
-            handler = self._on_event
-            if ffi is not None and hasattr(ffi, "create_proxy"):
-                handler = ffi.create_proxy(self._on_event)
-            self._document.addEventListener(ERROR_EVENT, handler)
-        except Exception:
-            pass
-
-    # -- events -----------------------------------------------------------
-    def _on_header_click(self, event=None):
-        target = getattr(event, "target", None)
-        text = ""
-        try:
-            text = getattr(target, "textContent", "") or ""
-        except Exception:
-            pass
-        if text.strip() == "✕":
-            self.clear_all()
-        else:
-            self._toggle()
-
-    def _on_event(self, event):
-        detail = getattr(event, "detail", None)
-        if hasattr(detail, "to_py"):
-            detail = detail.to_py()
-        if isinstance(detail, dict):
-            self.add(detail)
-
-    # -- mutations --------------------------------------------------------
-    def _toggle(self):
-        self._collapsed = not self._collapsed
-        if self._list is not None:
-            try:
-                self._list.hidden = self._collapsed
-            except Exception:
-                pass
-
-    def add(self, err_dict: dict) -> None:
-        """Append one error entry to the panel and update the count."""
-        if self._document is None or self._list is None:
-            return
-        self._count += 1
-
-        entry = self._document.createElement("div")
-        try:
-            entry.style = "border-bottom:1px solid rgba(255,255,255,.08);padding:6px 10px"
-        except Exception:
-            pass
-
-        head = self._document.createElement("div")
-        try:
-            head.style = "cursor:pointer;display:flex;gap:6px;align-items:baseline"
-            head.innerHTML = (
-                '<span style="color:#c4b5fd;font-weight:600">%s</span>'
-                '<span style="color:#93c5fd">%s</span>'
-                '<span style="color:#fbbf24;font-family:monospace">%s</span>'
-                '<span style="margin-left:auto;color:#6b7280">×</span>'
-            ) % (
-                _escape_html(err_dict.get("binding_type") or "binding"),
-                _escape_html(err_dict.get("component") or "?"),
-                _escape_html(err_dict.get("expr") or ""),
-            )
-        except Exception:
-            pass
-
-        detail = self._document.createElement("div")
-        try:
-            detail.hidden = True
-            detail.style = "margin-top:4px;color:#d1d5db;white-space:pre-wrap"
-            detail.textContent = _format_detail(err_dict)
-        except Exception:
-            pass
-
-        try:
-            if hasattr(head, "addEventListener") and ffi is not None and hasattr(ffi, "create_proxy"):
-                head.addEventListener("click", ffi.create_proxy(lambda e: self._toggle_entry(detail)))
-        except Exception:
-            pass
-
-        entry.appendChild(head)
-        entry.appendChild(detail)
-        self._list.appendChild(entry)
-        self._update_count()
-
-    @staticmethod
-    def _toggle_entry(detail_el):
-        try:
-            detail_el.hidden = not detail_el.hidden
-        except Exception:
-            pass
-
-    def clear(self) -> None:
-        """Dismiss the visible entries (keeps the dedup set)."""
-        if self._list is not None:
-            try:
-                self._list.replaceChildren()
-            except Exception:
-                pass
-        self._count = 0
-        self._update_count()
-
-    def clear_all(self) -> None:
-        """Dismiss the visible entries and reset dedup so a recurring error can
-        be re-shown after being dismissed."""
-        global _seen
-        _seen = set()
-        self.clear()
-
-    def _update_count(self) -> None:
-        if self._document is None:
-            return
-        try:
-            el = self._document.getElementById("basis-error-count")
-            if el is not None:
-                el.textContent = str(self._count)
-        except Exception:
-            pass
+def clear_seen() -> None:
+    """Reset the dedup set (called by the overlay's dismiss-all control)."""
+    global _seen
+    _seen = set()
 
 
 def ensure_overlay():
-    """Create (once) the dev error overlay.  Returns the overlay or None."""
+    """Create (once) the dev error overlay component and mount it into
+    ``document.body``.  Returns the mounted :class:`ErrorOverlay` instance, or
+    ``None`` when there is no DOM to mount into."""
     global _overlay
-    if _overlay is None and document is not None:
+    if _overlay is not None:
+        return _overlay
+    if document is None:
+        return None
+    _overlay = mount_error_overlay()
+    if _overlay is None:
+        # Non-PyScript (pytest): keep an instance so callers/tests can drive it;
+        # it is simply never mounted into a real DOM.
         _overlay = ErrorOverlay()
     return _overlay
 

@@ -1,5 +1,5 @@
 from bs4.builder import TreeBuilder
-from basis.shared.element import Element, ElementString, Comment, element_fn
+from basis.shared.element import Element, ElementString, Comment, element_fn, voids
 
 # ---------------------------------------------------------------------------
 # Text handling (canonical — deterministic hydration)
@@ -116,48 +116,62 @@ class ElementTreeBuilder(TreeBuilder):
         self.path_stack.append(this_level_id_fragment)
         # Push a fresh counter for this element's children
         self.index_stack.append(0)
-        
+
+        # Void elements (e.g. <input>, <img>) have no end tag: finalize them
+        # immediately so their parent's end tag can close correctly.  Previously
+        # a void element stayed as ``current_element`` and the parent's end tag
+        # never matched — the whole tree came back ``None`` (breaking SSR of any
+        # component whose template contains a void element, e.g. ui/input).
+        if name.lower() in voids:
+            self._finalize_current_element()
+
+    def _finalize_current_element(self):
+        """Build the Element component for ``current_element``, attach it to its
+        parent, and pop back up the stack.
+
+        Shared by ``handle_endtag`` and the void-element path in
+        ``handle_starttag`` (void elements have no end tag).
+        """
+        element = self.current_element
+        attrs = element['attrs']
+        children = element['children']
+        tag = element['tag']
+
+        # Finished processing children, so go back up
+        self.index_stack.pop()
+        self.path_stack.pop()
+        # Increment the index of the PARENT so the next sibling gets +1
+        self.index_stack[-1] += 1
+
+        # Create the component with children and attributes
+        if children:
+            component = element_fn(tag, *children, **attrs)
+        else:
+            component = element_fn(tag, **attrs)
+
+        # set parent for ElementString children
+        for string_child in [child for child in children if isinstance(child, ElementString)]:
+            string_child.parent = component
+
+        element['component'] = component
+
+        # Pop back to parent
+        if self.element_stack:
+            parent = self.element_stack.pop()
+            component.parent = parent
+            parent['children'].append(component)
+            self.current_element = parent
+        else:
+            # This is the root element
+            component.parent = None
+            self.current_element = None
+
     def handle_endtag(self, name):
         """Handle closing tags."""
         # Closing a tag ends any open text run in the (now-current) parent.
         self._text_run_open = False
         if self.current_element and self.current_element['tag'] == name:
-            # Build the Element component now that we have all children
-            attrs = self.current_element['attrs']
-            children = self.current_element['children']
-            tag_func = self.current_element['func']
-            
-            # Finished processing children, so go back up
-            self.index_stack.pop()
-            self.path_stack.pop()
-            # Increment the index of the PARENT so the next sibling gets +1
-            self.index_stack[-1] += 1
-
-            # Create the component with children and attributes
-            if children:
-                component = element_fn(self.current_element['tag'], *children, **attrs)
-            else:
-                component = element_fn(self.current_element['tag'], **attrs)
-
-            # set parent for ElementString children
-            for string_child in [child for child in children if isinstance(child, ElementString)]:
-                string_child.parent = component
-
-            #component._hydration_id = attrs['data-hydration-id']
-
-            self.current_element['component'] = component
-
-            # Pop back to parent
-            if self.element_stack:
-                parent = self.element_stack.pop()
-                component.parent = parent
-                parent['children'].append(component)
-                self.current_element = parent
-            else:
-                # This is the root element
-                component.parent = None
-                self.current_element['component'] = component
-                self.current_element = None
+            self._finalize_current_element()
     
     def handle_data(self, data):
         """Handle text content.

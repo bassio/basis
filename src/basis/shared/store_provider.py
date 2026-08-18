@@ -1,6 +1,6 @@
 import asyncio
 from string import Formatter
-from basis.shared.bindings import safe_eval, safe_format_with_stores, ALLOWED_BUILTINS, extract_dependencies
+from basis.shared.bindings import safe_eval, safe_format, ALLOWED_BUILTINS, extract_dependencies
 from basis.shared.errors import is_error_string
 from basis.shared.store import Store, ModelStore, ReactiveCollection
 from basis.shared.component import Component, client, IS_CLIENT
@@ -12,6 +12,10 @@ except ImportError:
 
 
 def resolve_value(val):
+    # A "[Error: ...]" sentinel means a previous evaluation failed —
+    # treat it as "cannot resolve yet" rather than passing the raw string.
+    if is_error_string(val):
+        return None
     if not isinstance(val, str) or "{" not in val:
         return val
 
@@ -32,9 +36,9 @@ def resolve_value(val):
         if ast_tree:
             # record=False: this is a *probe* (can the kwarg be resolved yet?).
             # Failure is the normal "provider not ready" state and must be silent —
-            # the caller skips the fetch.  Phase 5 #4 made eval helpers return ""
-            # on failure when a sink is registered; treat both the legacy
-            # "[Error: ...]" sentinel and "" as "cannot resolve yet".
+            # caller skips the fetch.  Eval helpers return "" on failure when a
+            # sink is registered; treat both the "[Error: ...]" sentinel and ""
+            # as "cannot resolve yet".
             res = safe_eval(fname, None, ALLOWED_BUILTINS, tree=ast_tree, record=False)
             if res is None or res == "" or is_error_string(res):
                 return None
@@ -43,12 +47,10 @@ def resolve_value(val):
 
     # Fallback to string formatting
     try:
-        res = safe_format_with_stores(
+        res = safe_format(
             val,
             None,
             ALLOWED_BUILTINS,
-            Store._registry,
-            {},
             ast_trees=ast_trees,
             record=False,
         )

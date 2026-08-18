@@ -26,13 +26,13 @@ Basis splits the page lifecycle into two phases: a server render that produces c
 
 ## One canonical world
 
-Basis has a single hydration model — **canonical** — used for both rendering and hydration. There is no alternate "legacy" mode anymore:
+Basis has a single hydration model — **canonical** — used for both rendering and hydration:
 
 - The server tree **preserves text/comments exactly** like the browser DOM (no whitespace stripping).
 - IDs are derived by **one single-source algorithm** shared between server and client.
 - Text bindings are matched by deterministic **text ordinals** (`data-basis-text`).
 
-The former `BASIS_HYDRATION` switch (and the legacy stripped-text tree with positional matching) has been removed from the codebase. The client needs no configuration: canonical pages carry a `data-basis-text` marker and match by ordinal.
+The client needs no configuration: canonical pages carry a `data-basis-text` marker and match by ordinal.
 
 ---
 
@@ -105,7 +105,7 @@ Each countable node is identified by a path string `r:` + one segment per depth,
 </div>
 ```
 
-Both sides compute this identically from the shared policy, so a client-side `data-client-id` and a server-side `data-hydration-id` are the same value for the same logical node.
+There is exactly **one** address scheme. The client runs the *same* `iter_tree_paths` algorithm over its own template tree and stamps `data-hydration-id` on it too — so a client node at canonical path `P` hydrates the SSR node at canonical path `P`.
 
 ---
 
@@ -113,12 +113,12 @@ Both sides compute this identically from the shared policy, so a client-side `da
 
 1. **Read initial state** — `Store` constructors read `<script id="basis-initial-state">` and pre-populate from the server's serialized state.
 
-2. **Stage a client mount** — `mount_app_ssr()` mounts the whole app into a *detached* shadow root, then `_set_nodes_with_client_ids()` walks it with the same canonical policy and stamps `data-client-id` on every countable node. This staging tree is used only to discover bindings and paths; it is discarded once hydration completes.
+2. **Stage a client mount** — `mount_app_ssr()` mounts the whole app into a *detached* shadow root, then `_stamp_hydration_ids()` stamps `data-hydration-id` on every countable node using the *same* `iter_tree_paths` algorithm the server uses. This staging tree is used only to discover bindings and paths; it is discarded once hydration completes.
 
-3. **Match components** — For each component instance, the client finds the corresponding SSR subtree by matching the component root's `data-client-id` against the SSR `data-hydration-id`s.
+3. **Match components** — For each component instance, the client finds the corresponding SSR subtree by matching the component root's `data-hydration-id` against the SSR tree's `data-hydration-id`s.
 
-4. **Match bindings** (`initialize_ssr`) — Each binding is repointed from its staging node to the matching SSR node:
-   - **Element bindings** (events, attributes, `if`, child components, loops) are found by path: `ssr_root.querySelector('[data-hydration-id="<path>"]')`.
+4. **Match bindings** (`initialize_ssr`) — Before matching, the client builds **one** SSR lookup map, `{path: node}`, from every `data-hydration-id` in the tree (`build_hydration_map`). Each binding is then repointed from its staging node to the matching SSR node with two O(1) lookups:
+   - **Element bindings** (events, attributes, `if`, child components, loops) are found by reading the staging node's `data-hydration-id` — which *is* the canonical path — and looking it up in the SSR map. The path is read from the stamped DOM attribute (not from proxy identity, so it is safe across Pyodide's `JsProxy` wrappers), and it is the same value on both sides by construction. Loops are the one structural special case: item wrappers and loop-body bindings are re-pointed by `data-item-key` + *relative* canonical paths (`shared/hydration.repoint_loop_to_ssr`), which also handles nested loops and custom-element loop children.
    - **Text bindings** are matched by **ordinal**: the client computes the text node's ordinal among its parent's normalized children, reads the SSR parent's `data-basis-text`, and adopts the SSR text node at that ordinal. Whitespace and comments around the binding cannot shift it.
    - Bindings that cannot be matched are recorded in the hydration report (below) rather than silently left stale.
 
@@ -158,7 +158,7 @@ The page stays fully reactive even though that load sacrificed SSR. Because the 
 
 ## Compatibility
 
-- Hydration is always **canonical** (preserved-text tree, text ordinals, `data-basis-text`). There is no legacy mode or rollback switch.
+- Hydration is always **canonical** (preserved-text tree, text ordinals, `data-basis-text`).
 - The client needs no configuration — every SSR page carries the canonical markers.
 - The fallback re-render remains available and default-on; disable with `BASIS_HYDRATION_FALLBACK=0` (or `set_hydration_fallback(False)` in code).
 

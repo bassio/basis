@@ -4,10 +4,9 @@ import weakref
 
 from basis.shared.bindings import BindingBlueprint, Binding, SelfBinding, TextBinding, \
     AttributeBinding, SelfAttributeBinding, TextContentAttributeBinding, ModelBinding, EventBinding, IfBinding, \
-    ChildBinding, LoopBinding, SlotBinding, ComponentSubscription, \
-    FormModelBinding, desugar_expression, safe_eval, safe_format, safe_format_with_stores, \
-    ALLOWED_BUILTINS, \
-    _process_self_attr_bindings
+    ChildBinding, LoopBinding, SlotBinding, \
+    FormModelBinding, desugar_expression, safe_eval, safe_format, \
+    ALLOWED_BUILTINS
 from basis.shared.bindings import extract_dependencies
 from basis.shared.store import Store
 from basis.shared.reactive import ReactiveObject, DependencyGraph, StateNode, ComputedNode, EffectNode, computed, Refrain
@@ -213,7 +212,6 @@ class BaseComponent(ReactiveObject):
         super().__init__()
         self.__dict__['__bindings__'] = []
         self.__dict__['_selfattr_bindings'] = {}
-        self.__dict__['_deps'] = {}
         self.__dict__['__fields__'] = []
         self.__dict__['_subscriptions'] = []
         self.__class__._live_instances.add(self)
@@ -252,8 +250,6 @@ class BaseComponent(ReactiveObject):
 
         #print("attrs_dict", attrs_dict, self.__class__)
 
-        #attr_bindings, fields = _process_self_attr_bindings(self, attrs_dict)
-        
         self_attr_binding_blueprints = [bp for bp in self.__class__.__binding_blueprints__
                                         if bp.binding_class == SelfAttributeBinding]
 
@@ -317,23 +313,28 @@ class BaseComponent(ReactiveObject):
         if isinstance(binding, SelfBinding):
             self.__dict__['_element'] = binding.node
 
-        if hasattr(binding, 'fields'):
-            # Existing flat dependency tracking (keeping for compatibility for now, but will eventually remove)
+        # Lifecycle: one-time DOM setup (attach listeners, mount children).
+        binding.activate()
+
+        # A binding is reactive iff it has an update() — it reads owner state
+        # and syncs it to the DOM.  Only reactive bindings contribute their
+        # fields to __fields__ (so __init_fields__ registers the right
+        # StateNodes) and register a DAG effect.  Pure DOM listeners (e.g.
+        # EventBinding) have no update() and stay out of the state graph: a
+        # handler name is not a state field, and leaking one into __fields__
+        # created dead StateNodes plus stale bound-method snapshots on HMR.
+        if hasattr(binding, 'update') and hasattr(binding, 'fields'):
             for field in binding.fields:
-                if field not in self._deps:
-                    self._deps[field] = []
-                    if field not in self.__fields__:
-                        self.__fields__.append(field)
-                if binding not in self._deps[field]:
-                    self._deps[field].append(binding)
-            
+                if field not in self.__fields__:
+                    self.__fields__.append(field)
+
             # DAG integration: Register as an EffectNode
-            if hasattr(binding, 'update'):
-                # Generate a unique name for the effect node
-                effect_name = f"effect_{id(binding)}"
-                self._dag.add_effect(effect_name, binding.update, binding.fields)
+            effect_name = f"effect_{id(binding)}"
+            self._dag.add_effect(effect_name, binding.update, binding.fields)
 
     def remove_binding(self, binding):
+        # Lifecycle: teardown (detach listeners, unmount children).
+        binding.destroy()
         try:
             self.__dict__['__bindings__'].remove(binding)
         except ValueError:
@@ -341,17 +342,16 @@ class BaseComponent(ReactiveObject):
         if hasattr(binding, 'update'):
             effect_name = f"effect_{id(binding)}"
             self._dag.remove_effect(effect_name)
-        if hasattr(binding, 'fields'):
-            for field in binding.fields:
-                if field in self._deps and binding in self._deps[field]:
-                    self._deps[field].remove(binding)
-    
 
     @classmethod
     def _get_nodes(cls, element, skip_loop_descendants=False):
         raise NotImplementedError()
 
     def _create_function_proxy(self, f):
+        # No owner re-binding needed: every handler is already the
+        # template-owner's method natively (loop bodies are owner-bound), and
+        # custom-element loop children keep their own ``self``.  The client
+        # overrides this to wrap the callable in a JS proxy.
         return f
 
     #@server
@@ -409,6 +409,31 @@ class BaseComponent(ReactiveObject):
         cls.__binding_blueprints__.extend(blueprints)
 
     @classmethod
+    def _loop_body_nodes(cls, body):
+        """Node list for a loop body: body root first, then descendants (nested
+        loops kept as units). Normalises the server/client walker divergence
+        (the server walk includes the root, the client walk does not) so both
+        sides index identically."""
+        rest = cls._get_nodes(body, skip_loop_descendants=True)
+        return [body] + [n for n in rest if n is not body]
+
+    @classmethod
+    def _analyze_loop_body(cls, element):
+        """Precompile a loop body into binding blueprints with node indices
+        RELATIVE to a clone of the loop element (the per-item body).  Nested
+        loops are kept as units (skip_loop_descendants) and recurse via
+        _analyze_node, so nesting is precompiled recursively here."""
+        body = element.cloneNode(True)
+        for a in ("for", "in", "key"):
+            body.removeAttribute(a)
+        body_blueprints = []
+        for node_index, node in enumerate(cls._loop_body_nodes(body)):
+            blueprints = cls._analyze_node(node, node_index)
+            if blueprints:
+                body_blueprints.extend(blueprints)
+        return body_blueprints
+
+    @classmethod
     def _analyze_node(cls, node, node_index):
 
         blueprints = []
@@ -454,6 +479,10 @@ class BaseComponent(ReactiveObject):
                 kwargs = {'item': for_attr_value, 'collection': inlist_attr_value}
                 if 'key' in non_standard_attrs:
                     kwargs['key'] = element.getAttribute('key')
+                # Precompile the loop body once, on the owner, so LoopBinding can
+                # instantiate owner-bound, per-item bindings (item overlay via
+                # LoopScope).
+                kwargs['body_blueprints'] = cls._analyze_loop_body(element)
                 
                 blueprints.append(BindingBlueprint(
                     binding_class=binding_class,
@@ -480,25 +509,14 @@ class BaseComponent(ReactiveObject):
                         ))
                     else:
                         field = fieldnames[0]
+                        # ModelBinding owns its two-way listener (attach) —
+                        # no paired EventBinding with a magic 'bind_handler'
+                        # name is needed anymore.
                         blueprints.append(BindingBlueprint(
                             binding_class=ModelBinding,
                             node_index=node_index,
                             kwargs={'field': field},
                             ast_trees=trees_dict
-                        ))
-                        # Also need the event binding for the input
-                        input_type = element.getAttribute('type') if element.hasAttribute('type') else 'text'
-                        if tag_name == 'input' and input_type in ['checkbox', 'radio']:
-                            bound_event = 'change'
-                        elif tag_name == 'select':
-                            bound_event = 'change'
-                        else:
-                            bound_event = 'input'
-                        
-                        blueprints.append(BindingBlueprint(
-                            binding_class=EventBinding,
-                            node_index=node_index,
-                            kwargs={'event': f"on{bound_event}", 'target_fn': 'bind_handler'}
                         ))
 
             # Process text-content binding
@@ -704,15 +722,13 @@ class BaseComponent(ReactiveObject):
                             self._dag.get_or_create_state(field)
 
                         else:
-                            
-                            new_subscription = ComponentSubscription(component_instance=self,
-                                                                     attr=attr_name)
-
+                            # Target not registered yet — hold a pending tuple;
+                            # __init_bindings__ fulfils it once the target mounts.
                             if component_name not in self.__class__._pending_subscriptions:
                                 self.__class__._pending_subscriptions[component_name] = []
-                            
-                            self.__class__._pending_subscriptions[component_name].append(new_subscription)
-                                
+
+                            self.__class__._pending_subscriptions[component_name].append((self, attr_name))
+
                             # Register in DAG (even if pending, we want the node)
                             self._dag.get_or_create_state(field)
                 
@@ -961,9 +977,16 @@ class BaseComponent(ReactiveObject):
         for field in self.__fields__:
             if not field.startswith(("$", "#")):
                 try:
-                    state[field] = getattr(self, field)
+                    value = getattr(self, field)
                 except AttributeError:
-                    pass
+                    continue
+                # Fields are state values, never callables.  Skipping methods
+                # keeps a stray handler name out of the snapshot (it would
+                # otherwise be setattr back onto the instance on hot-swap,
+                # shadowing the class method with a stale bound method).
+                if callable(value):
+                    continue
+                state[field] = value
         return state
 
     def _rerender_after_swap(self, state):
@@ -974,7 +997,6 @@ class BaseComponent(ReactiveObject):
 
         self.__dict__['__bindings__'] = []
         self.__dict__['_selfattr_bindings'] = {}
-        self.__dict__['_deps'] = {}
         self.__dict__['_dag'] = DependencyGraph()
         self.__dict__['_dag_nodes'] = self._dag.nodes
 
@@ -1112,26 +1134,45 @@ class BaseComponent(ReactiveObject):
 
     # refrain() is inherited from ReactiveObject
 
-    def add_subscription(self, component_instance, attr_name:str):
-        if (component_instance, attr_name) not in self._subscriptions:
-            new_subscription = ComponentSubscription(component_instance=component_instance,
-                                                     attr=attr_name,
-                                                     target_instance=self)
+    def add_subscription(self, component_instance, attr_name: str):
+        """Register a reactive edge from this component's ``attr`` to a
+        subscriber — a first-class DAG edge, mirroring
+        ``Store.add_subscription``.
 
-            self.__dict__['_subscriptions'].append(new_subscription)
+        When ``attr`` changes on this component, the subscriber's DAG is
+        re-triggered via ``subscriber.react(['#<id>.<attr>'])``.
+        """
+        if (component_instance, attr_name) in self._subscriptions:
+            return
+        self.__dict__['_subscriptions'].append((component_instance, attr_name))
 
-            self.add_binding(new_subscription)
+        element = getattr(self, "__element__", None)
+        target_id = element.getAttribute("id") if element is not None else None
+        if not target_id:
+            # The subscriber references us as #<id>.attr, so we need an id to
+            # forward to; without one there is nothing to react on.
+            return
 
-    def add_pending_subscription(self, target_id, attr_name):
-        if target_id not in self.__class__._pending_subscriptions:
-            self.__class__._pending_subscriptions[target_id] = []
+        effect_name = f"sub_{id(component_instance)}_{attr_name}"
 
-        self.__class__._pending_subscriptions[target_id].append((self, attr_name))
+        def make_callback(subscriber, tid, aname):
+            def callback():
+                subscriber.react([f"#{tid}.{aname}"])
+            return callback
 
-    def remove_subscription(self, component_instance, attr_name:str):
+        self._dag.add_effect(
+            effect_name,
+            make_callback(component_instance, target_id, attr_name),
+            [attr_name],
+        )
+
+    def remove_subscription(self, component_instance, attr_name: str):
         self.__dict__['_subscriptions'] = [
             sub for sub in self._subscriptions if sub != (component_instance, attr_name)
         ]
+        # Remove the DAG edge.
+        effect_name = f"sub_{id(component_instance)}_{attr_name}"
+        self._dag.remove_effect(effect_name)
 
     # react() is inherited from ReactiveObject
         

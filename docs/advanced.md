@@ -10,6 +10,10 @@ Deep dives into how Basis works under the hood, and how to get the most out of t
 - **[SSR & Client Hydration](05_reactivity/ssr-hydration.md)** — The single canonical hydration model, the canonical tree, hydration markers and text ordinals, the matching pipeline, diagnostics, and the fallback re-render.
 - **[Importing Components & the Isomorphism Principle](04_components/importing-components.md)** — Why every import name is identical on the server, in the client VFS, and in your IDE, and how conventional directories are auto-discovered without breaking that invariant.
 
+## Templates & Scoping
+
+- **[Scoping in Loops](04_components/loop-scope.md)** — Who owns the loop body? The parent-scope-plus-loop-variable mental model, the verified behaviour for plain-element vs custom-element loop children, event ownership, and the silent-staleness footgun.
+
 ## Developer Experience
 
 - **[Hot Module Replacement (HMR)](03_server/hmr.md)** — Live hot-swap of `.py` / `.html` / `.css` component files during development, the `/ws/hmr` WebSocket, module re-import, and instance hot-swap internals.

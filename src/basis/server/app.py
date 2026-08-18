@@ -103,6 +103,7 @@ def initialize_pyscript_registry(app: FastAPI):
         "actions.py",
         "plugins.py",
         "errors.py",
+        "errors_component.py",
     ]
     for f_name in client_py_files:
         stem = Path(f_name).stem
@@ -113,6 +114,8 @@ def initialize_pyscript_registry(app: FastAPI):
 
     # add shared
     shared_py_files = [
+        "expr.py",
+        "loop.py",
         "reactive.py",
         "bindings.py",
         "base_component.py",
@@ -914,7 +917,7 @@ class Basis(FastAPI, DBAppMixin):
 
         base = page_cls or Page
 
-        # Normalize the legacy `stores` dict ({name: Store}) into the class form (list).
+        # Normalize the `stores` dict ({name: Store}) into the class form (list).
         store_list = list(stores.values()) if stores else None
 
         page_cls = _synthesize_page(
@@ -1359,7 +1362,7 @@ class Basis(FastAPI, DBAppMixin):
 
         # Isomorphism: if the component's file is already served by a discovered
         # component dir (e.g. components/), its VFS import name equals the
-        # filesystem name and we must NOT add the legacy "/" mount — that would
+        # filesystem name and we must NOT add an automatic "/" mount — that would
         # create a second, non-isomorphic namespace. Only a bare single-file app
         # (the component file is inside no registered component dir) falls back
         # to the "/" mount.

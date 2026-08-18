@@ -18,7 +18,7 @@ class Page(Component):
     def load(cls, ssr=False, request=None):
         if ssr:
             # Instantiate fresh versions of the page stores for this request if not already present.
-            # `stores` may be a list of store *instances* (legacy) or a list of store *names* (strings).
+            # `stores` may be a list of store *instances* (kept for backwards compatibility) or a list of store *names* (strings).
             # An empty list means "all auto-discovered stores" (the persistent blueprint registry).
             store_refs = getattr(cls, "stores", None) or Store.all_names()
             for store in store_refs:

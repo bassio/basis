@@ -92,7 +92,8 @@ def test_form_model_binding_interaction():
         target_expression="new_visit",
         validate_on="input"
     )
-    
+    binding.activate()  # lifecycle: attach listeners (from_blueprint is pure)
+
     # Verify listeners are attached
     assert "input" in form_node._listeners
     assert "blur" in form_node._listeners

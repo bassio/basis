@@ -37,7 +37,7 @@ A curated set of Python built-ins is available inside braces:
 ```
 
 > [!NOTE]
-> The list above is the exact set defined in `ALLOWED_BUILTINS` in `basis/shared/bindings.py`. Notably, `bool`, `dict`, and `abs` are **not** included — use their equivalents (`bool(x)` can usually be written as a plain truthiness check; `abs` as `max(x, -x)`), or expose them as computed properties / component attributes.
+> The list above is the exact set defined in `ALLOWED_BUILTINS` in `basis/shared/expr.py`. Notably, `bool`, `dict`, and `abs` are **not** included — use their equivalents (`bool(x)` can usually be written as a plain truthiness check; `abs` as `max(x, -x)`), or expose them as computed properties / component attributes.
 
 ### Restrictions at parse time
 

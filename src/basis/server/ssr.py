@@ -182,9 +182,9 @@ async def render_page_ssr(
         if db_session is not None:
             session_token = db_session_var.set(db_session)
 
-    # Phase 5 #4 — collect every binding-evaluation error raised during this
-    # SSR render so it can be surfaced in the client overlay.  With the sink
-    # installed, safe_eval returns an empty value instead of "[Error: ...]".
+    # Collect every binding-evaluation error raised during this SSR render so
+    # it can be surfaced in the client overlay.  With the sink installed,
+    # safe_eval returns an empty value instead of "[Error: ...]".
     error_collector = ErrorCollector()
     _prev_sink = get_error_sink()
     set_error_sink(error_collector)

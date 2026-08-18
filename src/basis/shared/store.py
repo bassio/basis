@@ -27,7 +27,6 @@ else:
     document = None
     pyfetch = None
 
-from basis.shared.bindings import ComponentSubscription
 from basis.shared.context import ContextVarProxyDict
 from basis.shared.db import _make_serializable
 from basis.shared.reactive import ReactiveObject
@@ -251,38 +250,38 @@ class Store(ReactiveObject):
         return self.__dict__['_name']
 
     def add_subscription(self, component_instance, attr_name:str):
-        if (component_instance, attr_name) not in self._subscriptions:
-            new_subscription = ComponentSubscription(component_instance=component_instance,
-                                                     attr=attr_name)
-            self.__dict__['_subscriptions'].append(new_subscription)
+        if (component_instance, attr_name) in self._subscriptions:
+            return
+        # Dedup bookkeeping only — the reactive edge is the DAG effect below.
+        self.__dict__['_subscriptions'].append((component_instance, attr_name))
 
-            # Register as EffectNode in the DAG
-            store_name = self.get_store_name()
-            effect_name = f"sub_{id(component_instance)}_{attr_name}"
+        # Register as EffectNode in the DAG
+        store_name = self.get_store_name()
+        effect_name = f"sub_{id(component_instance)}_{attr_name}"
 
-            if attr_name:
-                # Attribute-specific subscription
-                def make_effect_callback(comp, sname, aname):
-                    def callback():
-                        comp.react([f"${sname}.{aname}"])
-                    return callback
+        if attr_name:
+            # Attribute-specific subscription
+            def make_effect_callback(comp, sname, aname):
+                def callback():
+                    comp.react([f"${sname}.{aname}"])
+                return callback
 
-                self._dag.add_effect(
-                    effect_name,
-                    make_effect_callback(component_instance, store_name, attr_name),
-                    [attr_name]
-                )
-            else:
-                # Whole-store subscription (wildcard)
-                def make_wildcard_callback(comp, sname):
-                    def callback():
-                        comp.react([f"${sname}"])
-                    return callback
+            self._dag.add_effect(
+                effect_name,
+                make_effect_callback(component_instance, store_name, attr_name),
+                [attr_name]
+            )
+        else:
+            # Whole-store subscription (wildcard)
+            def make_wildcard_callback(comp, sname):
+                def callback():
+                    comp.react([f"${sname}"])
+                return callback
 
-                self._dag.add_wildcard_effect(
-                    effect_name,
-                    make_wildcard_callback(component_instance, store_name)
-                )
+            self._dag.add_wildcard_effect(
+                effect_name,
+                make_wildcard_callback(component_instance, store_name)
+            )
 
     def remove_subscription(self, component_instance, attr_name:str):
         self.__dict__['_subscriptions'] = [
@@ -576,7 +575,7 @@ class ModelStore(Store):
         if not resolved_url:
             return None
 
-        if IS_SERVER:
+        if _is_server():
             # Server: use db_session_var if available
             from basis.shared.context import db_session_var
             session = db_session_var.get()
@@ -607,7 +606,8 @@ class ModelStore(Store):
         self.loading = True
 
         try:
-            response = await pyfetch(resolved_url)
+            pf = _get_pyfetch()
+            response = await pf(resolved_url)
             if response.ok:
                 data = await response.json()
                 item = self.model.model_validate(data) if hasattr(self.model, "model_validate") else data
@@ -663,13 +663,14 @@ class ModelStore(Store):
         
         self.items = self.items + [temp_item]
 
-        if IS_SERVER:
+        if _is_server():
             return temp_item
 
         self.__dict__["loading"] = True
 
         try:
-            response = await pyfetch(
+            pf = _get_pyfetch()
+            response = await pf(
                 url,
                 method="POST",
                 headers={"Content-Type": "application/json"},

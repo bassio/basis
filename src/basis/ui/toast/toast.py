@@ -61,6 +61,10 @@ class Toast(Component):
     variant = "info" 
     title = ""
     duration = 5000
+    # Optional reference to the ToastStore that owns this toast.  When unset,
+    # :meth:`close_handler` resolves the module-level ``toast`` singleton — this
+    # lets a custom store instance be wired in (e.g. a scoped/per-plugin store).
+    store = None
 
     def style(self):
         """
@@ -182,18 +186,20 @@ class Toast(Component):
         el = self.__element__
         if el:
             el.classList.add("toast-out")
+
+        store = self.store or toast
         
         if IS_CLIENT:
             from pyscript import window, ffi
             
             def _delayed_remove():
-                toast.remove(self.id)
+                store.remove(self.id)
             
             proxy = ffi.create_proxy(_delayed_remove)
             self._proxies.append(proxy)
             window.setTimeout(proxy, 350)
         else:
-            toast.remove(self.id)
+            store.remove(self.id)
 
     def __init__(self):
         super().__init__()

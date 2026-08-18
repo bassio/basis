@@ -1,12 +1,12 @@
 """
-Structured error reporting — Phase 5 #4 tests.
+Structured error reporting tests.
 
-Covers the four phases:
+Covers:
 
 * Phase A — capture & DOM safety (``shared/errors.py`` + reworked eval helpers
   in ``shared/bindings.py``): failures record a structured ``BindingError`` and
-  return an empty value, never the raw ``[Error: ...]`` string; the legacy
-  sentinel survives only when no sink is registered.
+  return an empty value, never the raw ``[Error: ...]`` string; the sentinel
+  survives only when no sink is registered.
 * Phase B — client overlay + structural surfacing (``client/errors.py``):
   ``window.__basisErrors`` + ``basis-error`` CustomEvent + the dev-only panel,
   verified against a fake DOM stand-in.
@@ -21,7 +21,6 @@ from basis.shared.bindings import (
     ALLOWED_BUILTINS,
     safe_eval,
     safe_format,
-    safe_format_with_stores,
 )
 from basis.shared.errors import (
     ERROR_EVENT,
@@ -94,7 +93,7 @@ def test_error_string_never_returned_when_sink_registered():
     set_error_sink(sink)
     assert safe_eval("nope", None, ALLOWED_BUILTINS) is EVAL_ERROR
     assert safe_format("a{nope}b", None, ALLOWED_BUILTINS) == ""
-    assert safe_format_with_stores("x {nope} y", None, ALLOWED_BUILTINS, {}, {}) == ""
+    assert safe_format("x {nope} y", None, ALLOWED_BUILTINS) == ""
     assert not any(is_error_string(v) for v in (EVAL_ERROR, "", "x ", "a"))
 
 
@@ -107,7 +106,7 @@ def test_format_aborts_whole_template_not_partial():
 
     set_error_sink(sink)
     # The middle field fails — the whole template becomes "" (not "x ").
-    assert safe_format_with_stores("x {nope} y", None, ALLOWED_BUILTINS, {}, {}) == ""
+    assert safe_format("x {nope} y", None, ALLOWED_BUILTINS) == ""
     assert safe_format("p {nope} q", None, ALLOWED_BUILTINS) == ""
 
 
@@ -120,14 +119,14 @@ def test_record_false_is_silent_and_returns_empty():
 
     set_error_sink(sink)
     assert safe_eval("nope_again", None, ALLOWED_BUILTINS, record=False) == ""
-    assert safe_format_with_stores("a{nope_again}b", None, ALLOWED_BUILTINS, {}, {}, record=False) == ""
+    assert safe_format("a{nope_again}b", None, ALLOWED_BUILTINS, record=False) == ""
     assert seen == []
 
 
 def test_successful_evaluation_unaffected():
     set_error_sink(lambda err: True)
     assert safe_eval("len([1, 2, 3])", None, ALLOWED_BUILTINS) == 3
-    assert safe_format_with_stores("a{b}c", {"b": "B"}, ALLOWED_BUILTINS, {}, {}) == "aBc"
+    assert safe_format("a{b}c", {"b": "B"}, ALLOWED_BUILTINS) == "aBc"
 
 
 def test_binding_error_shape_and_to_dict():
@@ -255,14 +254,16 @@ def test_import_hint_in_recorded_error():
     class _Ctx:
         pass
 
-    # Simulate a client-side eval that hits an ImportError.
+    # Simulate a client-side eval that hits an ImportError.  phase is explicit
+    # because pytest runs server-side (IS_CLIENT is False), but the hint logic
+    # only applies to the client.
     try:
         raise ModuleNotFoundError("No module named 'magic'", name="magic")
     except ModuleNotFoundError as exc:
         from basis.shared.bindings import _report_binding_error
 
         _report_binding_error("magic()", _Ctx(), exc, binding_type="TextBinding",
-                              stage="eval")
+                              stage="eval", phase="client")
     assert seen[0].hint is not None
     assert "server-only" in seen[0].hint
 
@@ -484,47 +485,110 @@ def test_sink_deduplicates_recurring_failures(client_env):
     assert len(win.warns) == 1
 
 
-def test_overlay_adds_entries_and_updates_count(client_env):
+def test_overlay_add_builds_display_entries(client_env):
     mod, win, doc, ffi = client_env
-    overlay = mod.ErrorOverlay(document=doc, window=win)
+    overlay = mod.ErrorOverlay()
+    assert overlay.items == []
 
-    assert overlay._count == 0
     overlay.add({"binding_type": "TextBinding", "component": "Root",
                  "expr": "message", "error": "boom", "phase": "client",
                  "template_line": 3, "traceback": "Traceback ..."})
-    assert overlay._count == 1
-    assert len(overlay._list.childNodes) == 1
-    assert doc.getElementById("basis-error-count")._text == "1"
-    # Every entry carries the expression and the formatted detail.
-    entry = overlay._list.childNodes[0]
-    assert "message" in entry.childNodes[0].innerHTML
-    assert "boom" in entry.childNodes[1].textContent
+    assert len(overlay.items) == 1
+    entry = overlay.items[0]
+    assert entry["expr"] == "message"
+    assert entry["binding_type"] == "TextBinding"
+    assert entry["component"] == "Root"
+    # The detail bundles phase, template line, error, hint and traceback.
+    assert "phase: client" in entry["detail"]
+    assert "template line: 3" in entry["detail"]
+    assert "boom" in entry["detail"]
+    assert "Traceback" in entry["detail"]
+
+    # A second, different record appends (dedup is owned by the sink).
+    overlay.add({"binding_type": "IfBinding", "component": "Root",
+                 "expr": "cond", "error": "nope"})
+    assert len(overlay.items) == 2
 
 
-def test_overlay_on_event_decodes_detail(client_env):
+def test_overlay_toggle_panel(client_env):
     mod, win, doc, ffi = client_env
-    overlay = mod.ErrorOverlay(document=doc, window=win)
-    event = _FakeEvent(ERROR_EVENT, {
-        "binding_type": "IfBinding", "component": "Root", "expr": "cond",
-        "error": "boom", "phase": "client",
-    })
-    overlay._on_event(event)
-    assert overlay._count == 1
+    overlay = mod.ErrorOverlay()
+    assert overlay.collapsed == ""
+    overlay.toggle_panel()
+    assert overlay.collapsed == "true"
+    overlay.toggle_panel()
+    assert overlay.collapsed == ""
+
+
+def test_overlay_toggle_entry_expands_and_collapses(client_env):
+    mod, win, doc, ffi = client_env
+    overlay = mod.ErrorOverlay()
+    overlay.add({"binding_type": "TextBinding", "component": "Root",
+                 "expr": "message", "error": "boom"})
+    overlay.add({"binding_type": "IfBinding", "component": "Root",
+                 "expr": "cond", "error": "nope"})
+    assert len(overlay.items) == 2
+    # Entries start expanded so detail is visible by default.
+    assert all(e["expanded"] for e in overlay.items)
+
+    # Fake event whose target carries the first entry's data-error-key.
+    class _Tgt:
+        def getAttribute(self, name):
+            return overlay.items[0]["key"] if name == "data-error-key" else None
+    overlay.toggle_entry(type("Ev", (), {"target": _Tgt()})())
+
+    # First entry collapsed, second untouched, list re-assigned (re-render).
+    assert overlay.items[0]["expanded"] == ""
+    assert overlay.items[1]["expanded"] == "true"
+
+    # Toggling again re-expands it.
+    overlay.toggle_entry(type("Ev", (), {"target": _Tgt()})())
+    assert overlay.items[0]["expanded"] == "true"
+
+
+def test_overlay_toggle_entry_missing_target_is_safe(client_env):
+    mod, win, doc, ffi = client_env
+    overlay = mod.ErrorOverlay()
+    overlay.add({"expr": "a", "error": "x"})
+    before = list(overlay.items)
+
+    # No event, no target, or a target without a matching key -> no-op.
+    overlay.toggle_entry()
+    overlay.toggle_entry(type("Ev", (), {"target": None})())
+    no_key = type("Ev", (), {"target": type("T", (), {"getAttribute": lambda self, n: None})()})()
+    overlay.toggle_entry(no_key)
+    assert overlay.items == before
 
 
 def test_overlay_clear_and_clear_all(client_env):
     mod, win, doc, ffi = client_env
-    overlay = mod.ErrorOverlay(document=doc, window=win)
+    overlay = mod.ErrorOverlay()
     overlay.add({"expr": "a", "error": "x"})
     overlay.add({"expr": "b", "error": "y"})
+    assert len(overlay.items) == 2
+
     overlay.clear()
-    assert overlay._count == 0
-    assert len(overlay._list.childNodes) == 0
+    assert overlay.items == []
 
     overlay.add({"expr": "a", "error": "x"})
     overlay.clear_all()
-    assert overlay._count == 0
+    assert overlay.items == []
+    # clear_all resets the sink's dedup set so the same error can re-appear.
     assert mod._seen == set()
+
+
+def test_record_routes_into_mounted_overlay(client_env):
+    mod, win, doc, ffi = client_env
+    mod.set_overlay_enabled(False)          # keep ensure_overlay out of it
+    mod._overlay = mod.ErrorOverlay()       # simulate an already-mounted overlay
+    sink = mod.install_error_sink()
+
+    err = BindingError(component="Root", binding_type="TextBinding",
+                       expr="message", error="boom", phase="client")
+    assert sink(err) is True
+    assert len(mod._overlay.items) == 1
+    assert mod._overlay.items[0]["expr"] == "message"
+    assert mod._overlay.items[0]["component"] == "Root"
 
 
 def test_replay_server_errors(client_env):
@@ -559,8 +623,11 @@ def test_install_sink_creates_overlay_in_dev_mode(client_env):
     doc._meta = meta
 
     mod.install_error_sink()
-    assert mod.ensure_overlay() is not None
-    assert doc.getElementById("basis-error-overlay") is not None
+    overlay = mod.ensure_overlay()
+    assert overlay is not None
+    assert isinstance(overlay, mod.ErrorOverlay)
+    # Idempotent — repeated calls return the same mounted instance.
+    assert mod.ensure_overlay() is overlay
 
 
 # ---------------------------------------------------------------------------

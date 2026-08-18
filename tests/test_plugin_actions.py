@@ -151,7 +151,7 @@ def test_dynamic_plugins_client_generation():
 
 
 def test_keyed_loop_binding_reordering_with_custom_elements():
-    from basis.shared.bindings import LoopBinding, ChildBinding
+    from basis.shared.bindings import LoopBinding, ChildBinding, LoopItem, LoopScope
     import unittest.mock as mock
 
     class MockDOMNode:
@@ -269,17 +269,22 @@ def test_keyed_loop_binding_reordering_with_custom_elements():
     )
 
     # Initial populating/updates
-    # Create ChildBindings representing hydrated state
+    # ChildBindings represent hydrated state: instances hold LoopItems wrapping
+    # the mounted component.
     inst1 = MockChildComponent.mount(MockDOMNode("hero-card", parent=parent))
     cb1 = ChildBinding(component_instance=comp_inst, node=inst1.__element__.parentNode, childclass=MockChildComponent, childinstance=inst1, loop_binding=loop_binding)
     comp_inst.add_binding(cb1)
-    loop_binding.instances[1] = inst1
+    loop_binding.instances[1] = LoopItem(
+        node=inst1.__element__.parentNode, bindings=[], key=1,
+        scope=LoopScope({"hero": {"id": 1}}), instance=inst1, child_binding=cb1)
     parent.appendChild(inst1.__element__.parentNode)
 
     inst2 = MockChildComponent.mount(MockDOMNode("hero-card", parent=parent))
     cb2 = ChildBinding(component_instance=comp_inst, node=inst2.__element__.parentNode, childclass=MockChildComponent, childinstance=inst2, loop_binding=loop_binding)
     comp_inst.add_binding(cb2)
-    loop_binding.instances[2] = inst2
+    loop_binding.instances[2] = LoopItem(
+        node=inst2.__element__.parentNode, bindings=[], key=2,
+        scope=LoopScope({"hero": {"id": 2}}), instance=inst2, child_binding=cb2)
     parent.appendChild(inst2.__element__.parentNode)
 
     # Ensure children are in the parent
@@ -429,7 +434,8 @@ def test_unkeyed_loop_binding_with_custom_element():
     # Verify instance was preserved (index 1 key reused)
     assert 0 in loop_binding.instances
     assert 1 in loop_binding.instances
-    assert getattr(loop_binding.instances[1], 'team', None) == {"name": "Beta Updated"}
+    # instances[1] is a LoopItem; the mounted component holds the props.
+    assert loop_binding.instances[1].instance.team == {"name": "Beta Updated"}
 
 
 

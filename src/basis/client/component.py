@@ -10,14 +10,26 @@ except ImportError:
 
     PYSCRIPT = False
 
-from basis.shared.bindings import SelfBinding, ChildBinding, EventBinding, IfBinding, TextBinding, LoopBinding
+from basis.shared.bindings import (
+    ChildBinding,
+    EventBinding,
+    IfBinding,
+    LoopBinding,
+    SelfBinding,
+    TextBinding,
+)
 
 from basis.shared.base_component import BaseComponent
 from basis.shared.hydration import (
+    HYDRATION_ID_ATTR,
     HYDRATION_MISMATCH_EVENT,
     HYDRATION_REPORT_GLOBAL,
+    TEXT_ORDINALS_ATTR,
     HydrationReport,
+    build_hydration_map,
     hydration_fallback_enabled,
+    is_element,
+    iter_tree_paths,
     text_ordinal,
 )
 
@@ -44,7 +56,7 @@ def _shadow_contains(shadow_root, element):
 
 def _emit_hydration_report(report):
     """Surface a hydration report: global for tooling, a DOM event, and a loud
-    dev warning when anything failed to match (Phase E / Phase 5 #3)."""
+    dev warning when anything failed to match."""
     try:
         data = ffi.to_js(report.to_dict())
         setattr(window, HYDRATION_REPORT_GLOBAL, data)
@@ -283,110 +295,105 @@ class Component(BaseComponent):
         handler = super()._create_update_handler(f, input_type)
         return self._create_function_proxy(handler)
 
-    def initialize_ssr(self, ssr_root, report=None, **kwargs):
-        
+    def initialize_ssr(self, ssr_root, report=None, *, ssr_map=None, **kwargs):
+        """Hydrate this component instance against the live SSR tree.
+
+        The client stamps ``data-hydration-id`` on its own template tree with
+        the SAME canonical-path algorithm the server uses
+        (``shared/hydration.iter_tree_paths``), so hydration is one sentence:
+        *client template node at canonical path P hydrates the SSR node at
+        canonical path P.*
+
+        Every owner binding is re-pointed in a single pass
+        (``_repoint_binding``); bindings that own a DOM listener are
+        re-attached in a second pass (``attach`` — shared code cannot create
+        JS proxies).  Loop bodies and nested loops are re-pointed structurally
+        by ``LoopBinding.repoint_to_ssr`` (data-item-key + relative canonical
+        paths), which also handles custom-element loop children (component
+        roots hydrated by their own ``initialize_ssr`` via ChildBinding).
+        """
         self.set_selfbinding(ssr_root)
 
-        all_bindings = [b for b in self.__bindings__]
-        event_bindings = [eb for eb in all_bindings if isinstance(eb, EventBinding)]
-        if_bindings = [ib for ib in all_bindings if isinstance(ib, IfBinding)]
-        text_bindings = [tb for tb in all_bindings if isinstance(tb, TextBinding)]
-        loop_bindings = [lb for lb in all_bindings if isinstance(lb, LoopBinding)]
-        child_bindings = [eb for eb in all_bindings if isinstance(eb, ChildBinding)]
-        other_bindings = [ob for ob in all_bindings if ob not in event_bindings + if_bindings + text_bindings + loop_bindings + child_bindings]
+        # SSR path -> node lookup, built once.  mount_app_ssr passes a whole-tree
+        # map; fall back to the component's own subtree otherwise.
+        if ssr_map is None:
+            ssr_map = build_hydration_map(ssr_root)
 
+        report = report if report is not None else HydrationReport()
+        repointed_attachments = []
 
-        # print(f"DEBUG HYDRATION: initialize_ssr for {self.__class__.__name__}, bindings count: {len(all_bindings)}")
-        for eb in event_bindings:
-            
-            eb_node_cid = eb.node.getAttribute("data-client-id")
-            matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{eb_node_cid}']")
-            if matched_ssr_node:
-                eb_node_new = matched_ssr_node
-                # print(f"DEBUG HYDRATION: MATCHED event binding's {eb.event} ({eb.target_fn}) node: {eb_node_new.outerHTML}")
-            elif ssr_root.getAttribute("data-hydration-id") == eb_node_cid:
-                eb_node_new = ssr_root
-                # print(f"DEBUG HYDRATION: MATCHED event binding root node's {eb.event} ({eb.target_fn})")
+        for binding in list(self.__bindings__):
+            if isinstance(binding, SelfBinding):
+                # SelfBinding's node is the component root — already pointed at
+                # the SSR root by set_selfbinding(); nothing to re-point.
+                continue
+            self._repoint_binding(binding, ssr_map, report, repointed_attachments)
+
+        # Re-attach listener-owning bindings (EventBinding, ModelBinding,
+        # FormModelBinding, ...) to their live SSR nodes.
+        for rb in repointed_attachments:
+            attach = getattr(rb, "attach", None)
+            if attach is not None:
+                attach(rb.node)
+                try:
+                    rb.node.setAttribute("data-hydrated", "true")
+                except Exception:
+                    pass
+
+        with self.refrain() as refrained:
+            for k, v in kwargs.items():
+                setattr(refrained, k, v)
+
+    def _repoint_binding(self, binding, ssr_map, report, repointed_attachments):
+        """Re-point one owner binding to its live SSR node.
+
+        The binding's addressable nodes (``node`` / ``parent`` / ``anchor``)
+        carry the client-stamped ``data-hydration-id``; the SSR lookup map is
+        keyed by the SAME canonical paths, so a matched path IS the live node.
+        Bindings that own a DOM listener are appended to
+        ``repointed_attachments`` for the trailing re-attach pass.
+        """
+        name = self.__class__.__name__
+
+        if isinstance(binding, IfBinding):
+            # The if-node may be legitimately absent from BOTH trees when hidden
+            # by its condition — that is not a mismatch.
+            path = binding.node.getAttribute(HYDRATION_ID_ATTR)
+            matched = ssr_map.get(path) if path else None
+            if matched:
+                binding.node = matched
+                binding.is_visible = True
             else:
-                eb_node_new = eb.node #just keep the old node then !
-                # Null client-id -> node is inside a hidden if-node: legitimately
-                # absent from the SSR tree, not a mismatch.
-                if report is not None and eb_node_cid:
+                binding.is_visible = False
+                if report is not None and path:
                     report.add_unmatched_binding(
-                        self.__class__.__name__, "EventBinding",
-                        client_id=eb_node_cid, expected_ssr_id=eb_node_cid,
-                        reason="no matching data-hydration-id in SSR tree",
-                    )
-
-            eb.node = eb_node_new
-
-            if isinstance(eb.target_fn, str):
-                event_method = getattr(self, eb.target_fn)
-                event_method_final = self._create_function_proxy(event_method)
-                eb.node.removeAttribute(eb.event)
-                if hasattr(eb.node, "addEventListener"):
-                    eb.node.addEventListener(eb.event.removeprefix("on"), event_method_final)
-                else:
-                    setattr(eb.node, eb.event, event_method_final)
-            else:
-                self_event_method = eb.target_fn
-                eb.node.removeAttribute(eb.event)
-                if hasattr(eb.node, "addEventListener"):
-                    eb.node.addEventListener(eb.event.removeprefix("on"), self_event_method)
-                else:
-                    setattr(eb.node, eb.event, self_event_method)
-            
-            eb.node.setAttribute("data-hydrated", "true")
-            
-        for ib in if_bindings:
-            ib_node_cid = ib.node.getAttribute("data-client-id")
-            matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{ib_node_cid}']")
-            if matched_ssr_node:
-                ib.node = matched_ssr_node
-                ib.is_visible = True
-            elif ib_node_cid and (ssr_root.getAttribute("data-hydration-id") == ib_node_cid):
-                ib.node = ssr_root
-                ib.is_visible = True
-            else:
-                ib.is_visible = False
-                # A null/absent client-id means the if-node was removed from the
-                # shadow (hidden by its condition) — legitimately absent, not a
-                # mismatch.  (Truthiness excludes both Python None and JsNull.)
-                if report is not None and ib_node_cid:
-                    report.add_unmatched_binding(
-                        self.__class__.__name__, "IfBinding",
-                        client_id=ib_node_cid, expected_ssr_id=ib_node_cid,
+                        name, "IfBinding",
+                        client_id=path, expected_ssr_id=path,
                         reason="if-node not found in SSR tree (hidden on server?)",
                     )
+            anchor_path = binding.anchor.getAttribute(HYDRATION_ID_ATTR)
+            matched_anchor = ssr_map.get(anchor_path) if anchor_path else None
+            if matched_anchor:
+                binding.anchor = matched_anchor
+            return
 
-            anchor_cid = ib.anchor.getAttribute("data-client-id")
-            matched_ssr_anchor = ssr_root.querySelector(f"[data-hydration-id='{anchor_cid}']")
-            if matched_ssr_anchor:
-                ib.anchor = matched_ssr_anchor
-            elif anchor_cid and (ssr_root.getAttribute("data-hydration-id") == anchor_cid):
-                ib.anchor = ssr_root
-            
-
-        for tb in text_bindings:
-            tb_node_parent_cid = tb.node.parentNode.getAttribute("data-client-id")
-            matched_ssr_node_parent = ssr_root.querySelector(f"[data-hydration-id='{tb_node_parent_cid}']")
-            if not matched_ssr_node_parent \
-            and tb_node_parent_cid and (ssr_root.getAttribute("data-hydration-id") == tb_node_parent_cid):
-                matched_ssr_node_parent = ssr_root
+        if isinstance(binding, TextBinding):
+            parent_path = binding.node.parentNode.getAttribute(HYDRATION_ID_ATTR)
+            matched_parent = ssr_map.get(parent_path) if parent_path else None
 
             matched_text = False
             own = None
             ssr_ordinals = None
-            if matched_ssr_node_parent:
+            if matched_parent:
                 # The SSR parent carries a deterministic text-ordinal marker
                 # (data-basis-text) computed over *normalized* children, so
                 # whitespace/comment nodes can never shift it.
-                ssr_ordinals = matched_ssr_node_parent.getAttribute("data-basis-text")
+                ssr_ordinals = matched_parent.getAttribute(TEXT_ORDINALS_ATTR)
                 # In Pyodide, getAttribute returns a JsNull proxy (not Python
                 # None) when the attribute is absent — check capability, not
                 # ``is not None``.
                 if getattr(ssr_ordinals, "split", None) is not None:
-                    own = text_ordinal(tb.node.parentNode, tb.node)
+                    own = text_ordinal(binding.node.parentNode, binding.node)
                     if own is not None:
                         # Count children the same way the server stamped the
                         # ordinals: elements + non-ws text + reactive text nodes
@@ -395,7 +402,7 @@ class Component(BaseComponent):
                             int(x) for x in ssr_ordinals.split(",") if x.strip()
                         }
                         counter = 0
-                        for child in matched_ssr_node_parent.childNodes:
+                        for child in matched_parent.childNodes:
                             if child.nodeType == 1:  # element
                                 counter += 1
                             elif child.nodeType == 3:  # text
@@ -403,125 +410,94 @@ class Component(BaseComponent):
                                 is_ws = not (child.textContent or "").strip()
                                 if is_binding or not is_ws:
                                     if counter == own:
-                                        tb.node = child
+                                        binding.node = child
                                         matched_text = True
                                         break
                                     counter += 1
 
-            # A null/absent parent client-id means the text node sits inside an
+            # A null/absent parent path means the text node sits inside an
             # if-node hidden by its condition (removed from the shadow) — it is
             # legitimately absent from the SSR tree, not a mismatch.
-            if report is not None and tb_node_parent_cid and not matched_text:
+            if report is not None and parent_path and not matched_text:
                 report.add_unmatched_binding(
-                    self.__class__.__name__, "TextBinding",
-                    client_id=tb_node_parent_cid, expected_ssr_id=tb_node_parent_cid,
+                    name, "TextBinding",
+                    client_id=parent_path, expected_ssr_id=parent_path,
                     reason=(
-                        f"text node not matched (parent_found={matched_ssr_node_parent is not None}, "
+                        f"text node not matched (parent_found={matched_parent is not None}, "
                         f"basis_text={ssr_ordinals!r}, own={own!r})"
                     ),
                 )
-                        
-        # print(f"DEBUG HYDRATION: loop_bindings count: {len(loop_bindings)}")
-        for lb in loop_bindings:
-            lb.parent
-            lb_child_bindings = [cb for cb in child_bindings if cb.loop_binding is lb]
-            # print(f"DEBUG HYDRATION: loop_binding {lb.collection}, child_bindings count: {len(lb_child_bindings)}")
-            for cb in lb_child_bindings:
-                klb_child_node_cid = cb.node.getAttribute("data-client-id")
-                matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{klb_child_node_cid}']")
-                # print(f"DEBUG HYDRATION:   child component {cb.childinstance.__class__.__name__}, client_id: {klb_child_node_cid}, matched_ssr_node: {matched_ssr_node is not None}")
-                if matched_ssr_node:
-                    cb.node = matched_ssr_node
-                    # CRITICAL: Attach the component instance for loop items
-                    setattr(matched_ssr_node, '__basis_instance__', cb.childinstance)
-                    lb.parent = matched_ssr_node.parentNode
-                elif report is not None and klb_child_node_cid:
+            return
+
+        if isinstance(binding, LoopBinding):
+            parent_path = None
+            try:
+                parent_path = binding.parent.getAttribute(HYDRATION_ID_ATTR)
+            except Exception:
+                parent_path = None
+            ssr_parent = ssr_map.get(parent_path) if parent_path else None
+            if ssr_parent is None:
+                if report is not None and binding.instances:
                     report.add_unmatched_binding(
-                        self.__class__.__name__, "ChildBinding(loop)",
-                        client_id=klb_child_node_cid, expected_ssr_id=klb_child_node_cid,
-                        reason="loop child not found in SSR tree",
+                        name, "LoopBinding",
+                        client_id=parent_path or "?",
+                        expected_ssr_id=parent_path or "?",
+                        reason="loop parent not found in SSR tree",
                     )
+                return
+            # Structural re-point: item wrappers by data-item-key, body bindings
+            # by relative canonical path, recursing into nested loops.
+            # Custom-element children keep their ChildBinding/instance on the
+            # live wrapper here (their own initialize_ssr hydrates the subtree).
+            repointed_attachments.extend(binding.repoint_to_ssr(ssr_parent, report))
+            return
 
-        for cb in child_bindings:
-            if cb.loop_binding:
-                continue
-
-            cb_node_cid = cb.node.getAttribute("data-client-id")
-            matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{cb_node_cid}']")
-            if matched_ssr_node:
-                cb.node = matched_ssr_node
-                # CRITICAL: Attach the component instance so parent AttributeBindings can sync props
-                setattr(matched_ssr_node, '__basis_instance__', cb.childinstance)
-            elif cb_node_cid and (ssr_root.getAttribute("data-hydration-id") == cb_node_cid):
-                cb.node = ssr_root
-                setattr(ssr_root, '__basis_instance__', cb.childinstance)
-            elif report is not None and cb_node_cid:
+        if isinstance(binding, ChildBinding):
+            if binding.loop_binding:
+                # Custom-element loop children are re-pointed by the owning
+                # LoopBinding.repoint_to_ssr — nothing to do here.
+                return
+            path = binding.node.getAttribute(HYDRATION_ID_ATTR)
+            matched = ssr_map.get(path) if path else None
+            if matched:
+                binding.node = matched
+                # Attach the component instance so parent AttributeBindings can
+                # sync props to the live node.
+                setattr(matched, '__basis_instance__', binding.childinstance)
+            elif report is not None and path:
                 report.add_unmatched_binding(
-                    self.__class__.__name__, "ChildBinding",
-                    client_id=cb_node_cid, expected_ssr_id=cb_node_cid,
+                    name, "ChildBinding",
+                    client_id=path, expected_ssr_id=path,
                     reason="child component root not found in SSR tree",
                 )
+            return
 
-        for ob in other_bindings:
-            # Bindings already repointed to an SSR node (e.g. SelfBinding via
-            # set_selfbinding) carry data-hydration-id, not data-client-id —
-            # they are already hydrated, so skip them.
-            if hasattr(ob.node, "hasAttribute") and ob.node.hasAttribute("data-hydration-id"):
-                continue
-            ob_node_cid = ob.node.getAttribute("data-client-id")
-            matched_ssr_node = ssr_root.querySelector(f"[data-hydration-id='{ob_node_cid}']")
-            if matched_ssr_node:
-                ob.node = matched_ssr_node
-            elif ob_node_cid and (ssr_root.getAttribute("data-hydration-id") == ob_node_cid):
-                ob.node = ssr_root
-            elif report is not None and ob_node_cid:
-                # A ComponentSubscription points at the SUBSCRIBER's root
-                # element (``subscriber.__element__``), which can live OUTSIDE
-                # this component's SSR subtree.  That node is hydrated by the
-                # subscriber's own initialize_ssr, so a match anywhere in the
-                # SSR tree means it is handled — not a mismatch.  (Its ``node``
-                # is also a read-only property, so repointing here is neither
-                # possible nor necessary.)
-                if type(ob).__name__ == "ComponentSubscription":
-                    try:
-                        elsewhere = document.querySelector(
-                            f"[data-hydration-id='{ob_node_cid}']"
-                        )
-                    except Exception:
-                        elsewhere = None
-                    if elsewhere:
-                        continue
-                report.add_unmatched_binding(
-                    self.__class__.__name__, type(ob).__name__,
-                    client_id=ob_node_cid, expected_ssr_id=ob_node_cid,
-                    reason="binding node not found in SSR tree",
-                )
-
-        with self.refrain() as refrained:
-            for k, v in kwargs.items():
-                setattr(refrained, k, v)
+        # Generic: any other binding with a directly addressable node
+        # (EventBinding, AttributeBinding, ModelBinding, ...).  SelfBinding is
+        # excluded by the caller.
+        path = binding.node.getAttribute(HYDRATION_ID_ATTR)
+        matched = ssr_map.get(path) if path else None
+        if matched:
+            binding.node = matched
+            if hasattr(binding, "attach"):
+                repointed_attachments.append(binding)
+        elif report is not None and path:
+            report.add_unmatched_binding(
+                name, type(binding).__name__,
+                client_id=path, expected_ssr_id=path,
+                reason="binding node not found in SSR tree",
+            )
 
     @property
-    def client_id(self):
+    def hydration_id(self):
+        """The canonical hydration path of this component's root element
+        (``data-hydration-id``, stamped on both the client template tree and
+        the SSR tree with the same algorithm)."""
         try:
-            cid = self.__element__.getAttribute('data-client-id')
-            if cid:
-                return cid
-            else:
-                return None
-
-        except:
+            hid = self.__element__.getAttribute(HYDRATION_ID_ATTR)
+            return hid if hid else None
+        except Exception:
             return None
-        
-    def get_descendant_client_ids(self):
-        
-        client_id_node_mapping = {}
-
-        for node in self.__element__.querySelectorAll("[data-client-id]"):
-            cid = node.getAttribute("data-client-id")
-            client_id_node_mapping[cid] = node
-        
-        return client_id_node_mapping
 
     @classmethod
     def mount_app_ssr(cls, ssr_root=None, replace=False):
@@ -530,24 +506,15 @@ class Component(BaseComponent):
         shadow = shadow_element_div.attachShadow({ 'mode': 'open' })
 
         mounted_app_component = cls.mount_app(shadow, replace)
-        client_id_to_node_map = mounted_app_component._set_nodes_with_client_ids(element=mounted_app_component.__element__)
-        
-        #print("client_id_to_node_map", client_id_to_node_map)
-        
-        child_bindings_recursive = [cb for cb  in mounted_app_component.get_child_bindings(recursive=True)]
-        child_component_instances = [cb.childinstance for cb  in child_bindings_recursive]
+        # Stamp the client's own template tree with canonical hydration ids —
+        # ONE address scheme, shared with the SSR tree (same iter_tree_paths).
+        mounted_app_component._stamp_hydration_ids(
+            element=mounted_app_component.__element__)
+
+        child_bindings_recursive = [cb for cb in mounted_app_component.get_child_bindings(recursive=True)]
+        child_component_instances = [cb.childinstance for cb in child_bindings_recursive]
 
         root_plus_child_component_instances = [mounted_app_component, *child_component_instances]
-
-        client_ids_dict = {}
-
-
-        for child_instance in root_plus_child_component_instances:
-            child_client_id = child_instance.__element__.getAttribute("data-client-id")
-            client_ids_dict[child_client_id] = child_instance
-            
-        #print("client_ids_dict keys:", [k for k in client_ids_dict.keys()])
-
         if not ssr_root:
             ssr_root = document.body
 
@@ -558,9 +525,7 @@ class Component(BaseComponent):
             if hid:
                 marked_for_hydration_dict[hid] = x
         
-        marked_for_hydration_ids = [k for k in marked_for_hydration_dict.keys()]
-
-        # ---- Diagnostics (Phase E) ----
+        # ---- Diagnostics ----
         report = HydrationReport(mode="canonical")
         fallback_needed = False
 
@@ -584,26 +549,27 @@ class Component(BaseComponent):
                 fallback_snapshot.append((child_instance, None, []))
 
         for child_instance in root_plus_child_component_instances:
-            cid = child_instance.client_id
-            if cid \
-            and (cid in marked_for_hydration_dict):
-                corresponding_ssr_root_node = marked_for_hydration_dict[cid]
+            hid = child_instance.hydration_id
+            if hid \
+            and (hid in marked_for_hydration_dict):
+                corresponding_ssr_root_node = marked_for_hydration_dict[hid]
                 try:
-                    child_instance.initialize_ssr(corresponding_ssr_root_node, report=report)
+                    child_instance.initialize_ssr(corresponding_ssr_root_node, report=report,
+                                                  ssr_map=marked_for_hydration_dict)
                 except Exception as exc:
                     # One broken component must not abort the whole report.
                     report.add_unhydrated_component(
-                        child_instance.__class__.__name__, client_id=cid,
+                        child_instance.__class__.__name__, client_id=hid,
                         reason=f"initialize_ssr raised: {exc}",
                     )
             else:
                 # Component root not present in the SSR tree.  Normal when it is
                 # hidden by an if-binding on the server (its shadow node is then
                 # detached); otherwise it is a genuine mismatch.
-                if cid is not None:
+                if hid is not None:
                     hidden = not _shadow_contains(shadow, child_instance.__element__)
                     report.add_unhydrated_component(
-                        child_instance.__class__.__name__, client_id=cid,
+                        child_instance.__class__.__name__, client_id=hid,
                         reason="hidden by if-binding" if hidden
                         else "component not present in SSR tree",
                     )
@@ -616,117 +582,17 @@ class Component(BaseComponent):
         _emit_hydration_report(report)
     
     @client
-    def _find_elements_marked_for_hydration(self, element=None):
+    def _stamp_hydration_ids(self, element=None):
+        """Stamp ``data-hydration-id`` on every countable element of the client
+        template tree.
 
-        if not element:
-            element_to_walk = self.__template__
-        else:
-            element_to_walk = element
-
-        walker = document.createTreeWalker(element_to_walk, window.NodeFilter.SHOW_ELEMENT)
-
-        nodes = []
-        current_node = walker.nextNode()
-        while current_node:
-            if current_node.hasAttribute("data-hydration-id"):
-                nodes.append(current_node)
-
-            current_node = walker.nextNode()
-
-        return nodes
-
-    
-    @client
-    def _get_nodes_with_client_ids(self, element=None):
-
-        if not element:
-            element_to_walk = self.__template__
-        else:
-            element_to_walk = element
-
-        walker = document.createTreeWalker(element_to_walk, window.NodeFilter.SHOW_ELEMENT)
-
-        nodes_dict = {}
-        current_node = walker.nextNode()
-        while current_node:
-            if current_node.hasAttribute("data-client-id"):
-                client_id = current_node.getAttribute("data-client-id")
-                nodes_dict[client_id] = current_node
-
-            current_node = walker.nextNode()
-
-        return nodes_dict
-
-    @client
-    def _set_nodes_with_client_ids(self, element=None):
-            
-        if not element:
+        Uses the SAME canonical-path algorithm as the server
+        (``shared/hydration.iter_tree_paths``, duck-typed for the browser DOM),
+        so there is exactly ONE address scheme: the client template node at
+        canonical path P hydrates the SSR node at canonical path P.
+        """
+        if element is None:
             element = self.__template__
-
-        element_to_walk = element
-        
-        id_to_node_map = {}
-
-        # Initial Root Setup
-        root_id = "r:0"
-        if hasattr(element_to_walk, "setAttribute"):
-            element_to_walk.setAttribute("data-client-id", root_id)
-        id_to_node_map[root_id] = element_to_walk
-
-        walker = document.createTreeWalker(
-            element_to_walk, 
-            window.NodeFilter.SHOW_ELEMENT | window.NodeFilter.SHOW_TEXT
-        )
-
-        # Stack stores: [ [node, path_prefix, next_child_index] ]
-        # We start with the root on the stack. 
-        # Server root is r:0, so its children should be r:0:0, r:0:1 etc.
-        stack = [[element_to_walk, root_id, 0]]
-
-        current_node = walker.nextNode()
-        while current_node:
-            parent = current_node.parentNode
-
-            # 1. Ascend: Pop until the top of the stack is the actual parent
-            while stack and stack[-1][0] != parent:
-                stack.pop()
-
-            if not stack:
-                # Fallback for unexpected tree breaks
-                current_node = walker.nextNode()
-                continue
-
-            # 2. Skip nodes that the server-side tree builder ignores (whitespace-only text)
-            # Server-side tree_builder.py handle_data calls data.strip() and ignores if empty.
-            if current_node.nodeType == 3: # TEXT_NODE
-                if not current_node.textContent.strip():
-                    current_node = walker.nextNode()
-                    continue
-            
-            # 3. Get info from the parent (top of stack)
-            parent_info = stack[-1]
-            parent_path = parent_info[1]
-            current_index = parent_info[2]
-
-            # 4. Create ID: prefix : index
-            current_id = f"{parent_path}:{current_index}"
-            
-            # 5. Increment the index for the NEXT sibling
-            parent_info[2] += 1
-
-            # 6. Apply ID and map
-            try:
-                if hasattr(current_node, "setAttribute"):
-                    current_node.setAttribute("data-client-id", current_id)
-                id_to_node_map[current_id] = current_node
-            except:
-                pass
-
-            # 7. Descend: If this node can have children, push it onto the stack
-            # 1 is Node.ELEMENT_NODE. Text/Comments (3/8) can't have children.
-            if current_node.nodeType == 1:
-                stack.append([current_node, current_id, 0])
-
-            current_node = walker.nextNode()
-
-        return id_to_node_map
+        for node, path in iter_tree_paths(element):
+            if is_element(node):
+                node.setAttribute(HYDRATION_ID_ATTR, path)
