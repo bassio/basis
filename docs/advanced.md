@@ -13,6 +13,7 @@ Deep dives into how Basis works under the hood, and how to get the most out of t
 ## Templates & Scoping
 
 - **[Scoping in Loops](04_components/loop-scope.md)** — Who owns the loop body? The parent-scope-plus-loop-variable mental model, the verified behaviour for plain-element vs custom-element loop children, event ownership, and the silent-staleness footgun.
+- **[Loop Bindings](05_reactivity/loop-bindings.md)** — How `for`/`in` loops reconcile lists in place: keyed vs unkeyed keys, the resolve → reconcile → apply pipeline, nested loops, and SSR re-pointing.
 
 ## Developer Experience
 

@@ -89,6 +89,8 @@ If you don't provide a `key`, Basis updates DOM nodes based on their index in th
 
 If you *do* provide a `key`, Basis tracks the identity of the underlying data item. If you reverse a keyed list, Basis actually moves the existing DOM nodes to their new positions. This preserves input focus, CSS transition state, and scroll position within the moved elements.
 
+See **[Loop Bindings](loop-bindings.md)** for the full reconciliation pipeline — key derivation, per-item scope, nested and custom-element loops, and SSR re-pointing.
+
 ### `SlotBinding`
 
 Reserves a zone in a child component's template for content projected from the parent. See [Parent & Child Components](../04_components/child-components.md) for usage.

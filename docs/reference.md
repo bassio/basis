@@ -12,6 +12,7 @@ Lookup-oriented documentation for the framework's core APIs and catalogues. For 
 ## Reactivity Engine
 
 - **[The Binding Engine](05_reactivity/bindings.md)** — The specialized binding classes and the binding lifecycle from SSR to hydration.
+- **[Loop Bindings](05_reactivity/loop-bindings.md)** — The loop reconciliation pipeline: keyed vs unkeyed keys, thin `LoopItem`s, per-item scope, and nested / custom-element loops.
 - **[DAG Reactivity Engine](05_reactivity/dag.md)** — The unified `ReactiveObject` graph, StateNodes, ComputedNodes, EffectNodes, and batching with `refrain()`.
 
 ## UI Component Catalogue
