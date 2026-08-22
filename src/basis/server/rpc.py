@@ -133,7 +133,8 @@ def make_action_handler(app):
         path = payload.get("path")
         if not path:
             raise HTTPException(status_code=400, detail="'path' is required")
-        vfs_map = getattr(app.state, "vfs_to_server_module", {})
+        vfs = getattr(app, "vfs", None)
+        vfs_map = getattr(vfs, "vfs_to_server_module", {}) if vfs is not None else {}
         func = _registry_action(path, vfs_map)
         store = _resolve_rpc_store(payload.get("store_name"))
         attach_app_to_store(store, app)

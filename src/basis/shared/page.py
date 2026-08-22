@@ -138,7 +138,10 @@ class Page(Component):
         # — the client boots from the component file and cannot import a class
         # that was created at runtime, so don't emit it here.
         if not getattr(self.__class__, "__synthesized__", False):
-            page_module_file = request.app.get_component_pyscript_vfs_path(self.__class__)
+            # Server-side SSR path only: resolve the page class to its client VFS
+            # import module via the app's live VFS registry (this branch never
+            # runs under PyScript, so reaching into request.app is safe).
+            page_module_file = request.app.vfs.component_module_name(self.__class__)
 
             if page_module_file and page_module_file != "basis.shared.page":
                 entrypoint_imports[self.__class__.__name__] = page_module_file
@@ -201,3 +204,51 @@ class Page(Component):
         """
         self._prepare_full_page(request, initial_state_json)
         return self.doctype.__html__() + "\n" + self.__element__.outerHTML
+
+
+def _synthesize_page(
+    component_cls,
+    *,
+    page_cls=None,
+    title=None,
+    stores=None,
+    entry_module=None,
+    pyscript_src=None,
+):
+    """Build a synthesized Page subclass that carries ``component_cls`` as its root.
+
+    Used by ``@app.page`` to turn a root
+    Component into a page without the developer writing a ``Page`` subclass. The
+    synthesized class is server-side shell config only; it is marked
+    ``__synthesized__`` so the client (which boots from the component file) never
+    tries to import it via ``#basis-entrypoint-imports``.
+
+    Because of that client boot path, page-level ``stores`` cannot reach the
+    browser here — a shell that declares its own ``root_component`` or ``stores``
+    is a complete page and belongs in ``app.include_page`` instead.
+    """
+    base = page_cls or Page
+
+    if getattr(base, "root_component", None) is not None or getattr(base, "stores", None):
+        raise ValueError(
+            f"{base.__name__} already declares root_component/stores — it's a complete "
+            f"page. Register it with app.include_page(path, page_cls={base.__name__}) "
+            f"instead of decorating a component with it."
+        )
+
+    derived = type(
+        f"{component_cls.__name__}Page",
+        (base,),
+        {
+            "__module__": component_cls.__module__,
+            "root_component": component_cls,
+            "title": title if title is not None else getattr(base, "title", "Basis App"),
+            "stores": list(stores) if stores is not None else list(getattr(base, "stores", [])),
+            "__synthesized__": True,
+        },
+    )
+    if entry_module is not None:
+        derived.entry_module = entry_module
+    if pyscript_src is not None:
+        derived.pyscript_src = pyscript_src
+    return derived

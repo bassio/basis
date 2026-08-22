@@ -60,7 +60,8 @@ class HMRMixin:
         Build ``{absolute_path: meta}`` for every watched component file.
 
         Every entry carries the authoritative client **import module name** of the
-        component that owns it (same derivation as ``initialize_pyscript_registry``):
+        component that owns it (same derivation as the VFS manifest —
+        ``basis.server.vfs.VFSRegistry``):
 
         * ``.py`` files map to their own module (``jotter.components.statusbar``).
         * ``.css`` / ``.html`` companion files map to the module that loads them

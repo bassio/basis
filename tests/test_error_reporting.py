@@ -641,7 +641,8 @@ def test_ssr_collects_errors_and_never_renders_sentinel(monkeypatch):
     import re
 
     from fastapi.testclient import TestClient
-    from basis.server.app import Basis, _synthesize_page
+    from basis.server.app import Basis
+    from basis.shared.page import _synthesize_page
     from basis.shared.component import Component
     from basis.shared.errors import get_error_sink
 
@@ -685,7 +686,8 @@ def test_ssr_collects_errors_and_never_renders_sentinel(monkeypatch):
 
 def test_ssr_no_errors_means_no_basis_errors_key(monkeypatch):
     from fastapi.testclient import TestClient
-    from basis.server.app import Basis, _synthesize_page
+    from basis.server.app import Basis
+    from basis.shared.page import _synthesize_page
     from basis.shared.component import Component
 
     app = Basis()

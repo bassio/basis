@@ -22,12 +22,9 @@ Covers:
 import pytest
 from fastapi.testclient import TestClient
 
-from basis.server.app import (
-    Basis,
-    initialize_pyscript_registry,
-    _resolve_canonical_package,
-    _discover_conventional_dirs,
-)
+from basis.server.app import Basis
+from basis.server.plugins import _resolve_canonical_package
+from basis.server.bootstrap import _discover_conventional_dirs
 from basis.shared.store import Store
 from basis.shared.component import Component
 from basis.shared.page import Page
@@ -259,7 +256,7 @@ def test_page_decorator_covered_component_no_root_mount(tmp_path, monkeypatch):
     app._auto_discover_dirs()
 
     # The component is inside the discovered components/ dir → covered.
-    assert app.get_component_pyscript_vfs_path(hello_mod.Hello) == "covapp.components.hello"
+    assert app.vfs.component_module_name(hello_mod.Hello) == "covapp.components.hello"
 
     app.page(hello_mod.Hello)
 
@@ -309,6 +306,6 @@ def test_isomorphism_guard_warns_on_non_isomorphic_mount(tmp_path, monkeypatch, 
     app.include_components_dir("/wrong/", str(pkg / "components"), name="wrong")
 
     with caplog.at_level("WARNING", logger="uvicorn.error"):
-        initialize_pyscript_registry(app)
+        app.vfs.log_warnings()
 
     assert any("Isomorphism violation" in r.getMessage() for r in caplog.records)

@@ -13,7 +13,8 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from basis.server.app import Basis, _synthesize_page
+from basis.server.app import Basis
+from basis.shared.page import _synthesize_page
 from basis.server.ssr import _get_all_stores, _serialize_initial_state
 from basis.shared.store import Store
 from basis.shared.component import Component

@@ -210,8 +210,8 @@ def test_store_action_with_vfs_path_rewrite():
     CounterStore("counter")
     app.bootstrap()
 
-    # Simulate the registry populated by initialize_pyscript_registry at startup
-    app.state.vfs_to_server_module = {"myapp": echo.__module__}
+    # Simulate the live VFS registry populated at startup
+    app.vfs.vfs_to_server_module = {"myapp": echo.__module__}
 
     client = TestClient(app)
     resp = _post_action(

@@ -13,7 +13,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from basis.server.app import Basis, _synthesize_page
+from basis.server.app import Basis
+from basis.shared.page import _synthesize_page
 from basis.server.plugin import BasisPlugin
 from basis.shared.component import Component
 from basis.shared.store import Store

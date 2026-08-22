@@ -117,7 +117,7 @@ async def hmr_websocket_endpoint(websocket: WebSocket):
 
 ### Resolving the owning module
 
-Every broadcast carries the **authoritative import module name** of the component the file belongs to. `_build_hmr_file_map()` computes it with the same convention the VFS manifest uses (`initialize_pyscript_registry`):
+Every broadcast carries the **authoritative import module name** of the component the file belongs to. `_build_hmr_file_map()` computes it with the same convention the VFS manifest uses (`VFSRegistry`):
 
 ```text
 mount_parts + subdir + module_stem      (a trailing "__init__" is dropped)

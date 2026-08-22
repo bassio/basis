@@ -10,7 +10,7 @@ from pathlib import Path
 from starlette.requests import Request
 from starlette.datastructures import Headers
 
-from basis.server.app import Basis, initialize_pyscript_registry
+from basis.server.app import Basis
 from basis.server.static import BasisStaticFiles, BasisStaticFilesPyc, compile_to_pyc_bytes
 
 
@@ -77,15 +77,14 @@ async def test_basis_static_files_pyc_serving_and_stripping():
         assert res is None
 
 
-def test_initialize_pyscript_registry_pyc_mode(monkeypatch):
+def test_vfs_registry_pyc_mode(monkeypatch):
     monkeypatch.setattr("sys.version_info", (3, 12, 0, "final", 0))
     app = Basis(pyc_mode=True)
     
     with tempfile.TemporaryDirectory() as tmpdir:
         app.include_components_dir("/components", tmpdir, "components")
-        initialize_pyscript_registry(app)
 
-        vfs_files = app.state.vfs_files
+        vfs_files = app.vfs.files
         
         # Verify client and shared framework files have .pyc extensions
         assert "{DOMAIN}/basis/client/component.pyc" in vfs_files

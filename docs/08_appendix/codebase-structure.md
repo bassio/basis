@@ -19,14 +19,17 @@ src/basis/
 │   ├── plugin.py         # Client-side BasisPlugin shim
 │   └── plugins.py        # Client-side plugin helpers
 ├── server/               # FastAPI-side runtime
-│   ├── app.py            # Basis (FastAPI subclass): bootstrap, page/include_page, RPC registration
+│   ├── app.py            # Basis (FastAPI subclass): composition root, init, include_components_dir, page/include_page
+│   ├── bootstrap.py      # BootstrapMixin: boot orchestration + boot mounts (offline PyScript, /pyscript.json, framework, ui) + conventional-dir/store auto-discovery
 │   ├── rpc.py            # RPC pipeline: canonical-path dispatch, store binding, response/error handling
 │   ├── ssr.py            # SSR pipeline (render_page_ssr, hydration IDs)
 │   ├── tree_builder.py   # HTML → Element tree builder (r:0:1 path IDs)
 │   ├── ast_utils.py      # @server_action AST body stripper
 │   ├── static.py         # BasisStaticFiles / BasisStaticFilesPyc
 │   ├── plugin.py         # Server-side BasisPlugin
+│   ├── plugins.py        # Plugin subsystem: discovery, topo-sort, PluginMixin lifecycle
 │   ├── db.py             # DBAppMixin, ModelRegistryMixin, REST expose generation
+│   ├── vfs.py            # Mount→VFS helpers + VFSRegistry (pyscript.json manifest builder)
 │   └── hmr.py            # HMRMixin + HMRManager: file-watcher, /ws/hmr WebSocket, uvicorn runners
 ├── static/
 │   └── pyscript/         # Offline PyScript bundle mounted at /pyscript

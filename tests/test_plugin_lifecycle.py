@@ -12,7 +12,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from basis.server.app import Basis, initialize_pyscript_registry, _topo_sort_plugins
+from basis.server.app import Basis, _topo_sort_plugins
 from basis.server.plugin import BasisPlugin
 from basis.shared.store import Store
 
@@ -231,18 +231,18 @@ def test_remove_plugin_unmounts_static_dir_and_prunes_vfs(tmp_path):
     assert all(getattr(r, "path", None) != "/gadget" for r in app._component_routes)
     assert all(getattr(r, "path", None) != "/gadget" for r in app.routes)
     # The PyScript VFS manifest no longer advertises the plugin's files.
-    vfs = app.state.vfs_files
+    vfs = app.vfs.files
     assert not any("gadget" in str(v) for v in vfs.values())
 
 
 def test_disable_enable_cycle_restores_vfs_manifest(tmp_path):
     """A disable→enable cycle must restore the plugin's VFS entries.
 
-    ``remove_plugin`` (the disable path) prunes the plugin's files from the
-    PyScript VFS manifest; ``enable_plugin`` must rebuild it (mirroring the
-    prune). Without that, the client can no longer import the plugin's modules
-    on the next page load — the SSR app renders but never hydrates (broken
-    events), because mounting is gated on importing the page component.
+    ``remove_plugin`` (the disable path) surgically prunes the plugin's files
+    from the PyScript VFS manifest; ``enable_plugin`` re-mounts the static dir,
+    restoring them. Without that, the client can no longer import the plugin's
+    modules on the next page load — the SSR app renders but never hydrates
+    (broken events), because mounting is gated on importing the page component.
     """
     app = Basis()
     app.bootstrap()
@@ -254,18 +254,17 @@ def test_disable_enable_cycle_restores_vfs_manifest(tmp_path):
         static_dir=comp_dir, static_mount="/gadget",
     )
     app.include_plugin(plugin)
-    # Build the VFS manifest the way the lifespan does at startup.
-    initialize_pyscript_registry(app)
-    assert any("gadget" in str(v) for v in app.state.vfs_files.values())
+    # The app's live VFS registry already includes the plugin's files.
+    assert any("gadget" in str(v) for v in app.vfs.files.values())
 
     asyncio.run(app.disable_plugin("gadget"))
-    # remove_plugin pruned the plugin's files from the manifest.
-    assert not any("gadget" in str(v) for v in app.state.vfs_files.values())
+    # remove_plugin surgically pruned the plugin's files from the manifest.
+    assert not any("gadget" in str(v) for v in app.vfs.files.values())
 
     asyncio.run(app.enable_plugin("gadget"))
-    # enable_plugin re-includes the static mount AND rebuilds the manifest.
+    # enable_plugin re-mounts the static dir, restoring its manifest entries.
     assert any(getattr(r, "path", None) == "/gadget" for r in app._component_routes)
-    assert any("gadget" in str(v) for v in app.state.vfs_files.values())
+    assert any("gadget" in str(v) for v in app.vfs.files.values())
 
 
 def test_remove_plugin_refuses_when_imported_by_consumer(tmp_path):
