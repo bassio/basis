@@ -26,7 +26,8 @@ src/basis/
 │   ├── ast_utils.py      # @server_action AST body stripper
 │   ├── static.py         # BasisStaticFiles / BasisStaticFilesPyc
 │   ├── plugin.py         # Server-side BasisPlugin
-│   └── db.py             # DBAppMixin, ModelRegistryMixin, REST expose generation
+│   ├── db.py             # DBAppMixin, ModelRegistryMixin, REST expose generation
+│   └── hmr.py            # HMRMixin + HMRManager: file-watcher, /ws/hmr WebSocket, uvicorn runners
 ├── static/
 │   └── pyscript/         # Offline PyScript bundle mounted at /pyscript
 └── shared/               # Isomorphic code (server + PyScript client)

@@ -7,7 +7,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Set
+from typing import Any
 from contextlib import asynccontextmanager
 import sys
 from starlette.routing import Mount
@@ -19,11 +19,12 @@ from basis.server.vfs import (
     normalize_mount,
     vfs_relative_url,
 )
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request
 from basis.server.plugin import BasisPlugin
 from fastapi.responses import JSONResponse, HTMLResponse
 
 from basis.server.db import DBAppMixin
+from basis.server.hmr import HMRManager, HMRMixin
 
 
 ONLINE_PYSCRIPT = "https://pyscript.net/releases/2026.3.1"
@@ -519,32 +520,11 @@ def discover_installed_plugins(
     return plugins
 
 
-class HMRManager:
-    def __init__(self):
-        self.active_connections: Set[WebSocket] = set()
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.add(websocket)
-
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-
-    async def broadcast(self, message: dict):
-        for connection in list(self.active_connections):
-            try:
-                await connection.send_json(message)
-            except Exception:
-                self.active_connections.remove(connection)
-
-
-class Basis(FastAPI, DBAppMixin):
+class Basis(FastAPI, DBAppMixin, HMRMixin):
     
     _component_dirs = []
     _component_routes = []
     _global_stores = []
-    hmr_manager = HMRManager()
 
     def __init__(self, *args, plugins_dir: str = "plugins",
                  components_dir: str = "components",
@@ -655,16 +635,7 @@ class Basis(FastAPI, DBAppMixin):
 
         # HMR WebSocket endpoint — registered exactly once (regardless of how many
         # component directories are mounted) so the client always has a stable /ws/hmr.
-        @self.websocket("/ws/hmr")
-        async def hmr_websocket_endpoint(websocket: WebSocket):
-            await self.hmr_manager.connect(websocket)
-            try:
-                while True:
-                    await websocket.receive_text()  # Just keep connection alive
-            except WebSocketDisconnect:
-                self.hmr_manager.disconnect(websocket)
-            except Exception:
-                self.hmr_manager.disconnect(websocket)
+        self.websocket("/ws/hmr")(self.hmr_websocket_endpoint)
 
     def get_component_pyscript_vfs_path(self, component:"Component"):
         try:
@@ -777,118 +748,6 @@ class Basis(FastAPI, DBAppMixin):
         self._component_routes.append(m)
         self._invalidate_plugin_importers()
         return m
-
-    def _build_hmr_file_map(self):
-        """
-        Build ``{absolute_path: meta}`` for every watched component file.
-
-        Every entry carries the authoritative client **import module name** of the
-        component that owns it (same derivation as ``initialize_pyscript_registry``):
-
-        * ``.py`` files map to their own module (``jotter.components.statusbar``).
-        * ``.css`` / ``.html`` companion files map to the module that loads them
-          (package ``titlebar/__init__.py`` -> ``titlebar/titlebar.css``, or a
-          flat ``my_comp.py`` -> ``my_comp.css``).
-
-        The client uses this to find the component class by ``__module__`` instead
-        of guessing a class name from the filename (which breaks for names like
-        ``titlebar.css`` -> class ``TitleBar``).
-        """
-        file_map = {}
-        for m in self._component_routes:
-            watch_dir = Path(m.app.directory).absolute()
-            if not watch_dir.exists():
-                continue
-
-            # Map each .py module file to its import name, and its companion
-            # css/html assets to the same module (mirrors initialize_pyscript_registry).
-            asset_owners = {}
-            for f in watch_dir.rglob("*.py"):
-                if "__pycache__" in f.parts:
-                    continue
-                module_name = mount_to_module_name(m.path, f.relative_to(watch_dir))
-                if module_name is None:
-                    continue
-                for asset in companion_assets(f):
-                    if asset.exists():
-                        asset_owners[str(asset.absolute())] = module_name
-
-            for f in itertools.chain(watch_dir.rglob("*.py"), watch_dir.rglob("*.html"), watch_dir.rglob("*.css")):
-                # Never watch compiled bytecode or stray caches
-                if "__pycache__" in f.parts or f.suffix == ".pyc":
-                    continue
-                rel = f.relative_to(watch_dir)
-                meta = {"file": str(rel), "ext": f.suffix.lstrip(".")}
-                if f.suffix == ".py":
-                    module_name = mount_to_module_name(m.path, rel)
-                    if module_name is not None:
-                        meta["module"] = module_name
-                else:
-                    meta["module"] = asset_owners.get(str(f.absolute()))
-                file_map[str(f.absolute())] = meta
-        return file_map
-
-    async def _start_file_watcher(self):
-        """Simple poller to watch for file changes and broadcast HMR events.
-
-        Watch dirs are re-derived from the current component mounts each cycle,
-        and the file map is rebuilt when ``_hmr_map_dirty`` is set (a plugin was
-        added or removed), so live plugin enable/disable stays in sync with HMR.
-        """
-        mtimes = {}
-        file_map = self._build_hmr_file_map()
-        self._hmr_map_dirty = False
-
-        while True:
-            try:
-                if self._hmr_map_dirty:
-                    file_map = self._build_hmr_file_map()
-                    self._hmr_map_dirty = False
-                watch_dirs = [Path(m.app.directory).absolute() for m in self._component_routes]
-                for watch_dir in watch_dirs:
-                    if not watch_dir.exists():
-                        continue
-                    for f in watch_dir.rglob("*"):
-                        if f.suffix not in (".py", ".html", ".css"):
-                            continue
-                        if "__pycache__" in f.parts:
-                            continue
-                        try:
-                            mtime = f.stat().st_mtime
-                        except OSError:
-                            continue
-                        if f in mtimes and mtimes[f] < mtime:
-                            logger.info("HMR: File changed: %s", f.name)
-                            rel_path = f.relative_to(watch_dir)
-                            meta = file_map.get(str(f.absolute()), {})
-                            try:
-                                content = f.read_text(encoding="utf-8")
-                            except OSError:
-                                content = ""
-                            await self.hmr_manager.broadcast({
-                                "type": "hmr",
-                                "file": str(rel_path),
-                                "ext": meta.get("ext") or f.suffix.lstrip("."),
-                                "module": meta.get("module"),
-                                "content": content,
-                            })
-                        mtimes[f] = mtime
-            except Exception as e:  # never let the watcher die
-                logger.warning("HMR: watcher error: %s", e)
-            await asyncio.sleep(0.5)
-
-    def start_file_watcher(self):
-        asyncio.create_task(self._start_file_watcher())
-
-    def run_with_hmr(self, host="127.0.0.1", port=8000):
-        import uvicorn
-        self._start_hmr_watcher = True
-        uvicorn.run(self, host=host, port=port)
-
-    def run_without_hmr(self, host="127.0.0.1", port=8000):
-        import uvicorn
-            
-        uvicorn.run(self, host=host, port=port)
 
     def include_framework(self):
         static_cls = self._get_static_files_cls()
@@ -1024,14 +883,14 @@ class Basis(FastAPI, DBAppMixin):
         """
         from basis.server.rpc import make_action_handler
 
-        for r in getattr(self, "routes", []):
-            if getattr(r, "path", None) == mount_path:
-                return self.add_route(
-                    mount_path,
-                    make_action_handler(self),
-                    methods=["POST"],
-                    name="basis_action",
-                )
+        if self._has_route(path=mount_path):
+            return
+        self.add_route(
+            mount_path,
+            make_action_handler(self),
+            methods=["POST"],
+            name="basis_action",
+        )
 
 
     def include_plugins_projection(self, mount_path: str = "/basis/api/plugins"):
