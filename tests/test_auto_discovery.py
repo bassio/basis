@@ -218,7 +218,13 @@ def test_page_load_defaults_to_all_stores():
     assert "dummy_all" in Store._registry
 
 
-def test_page_load_still_supports_instance_list():
+def test_page_load_rejects_instance_list():
+    """Page.stores is a name-list — store *instances* are a loud error.
+
+    The convention is module-scope instantiation (e.g. in a stores/ module)
+    referenced by name, so a stray instance is a clear migration signal rather
+    than a silent behaviour branch.
+    """
     class InstStore(Store):
         def __init__(self, name, label="x"):
             super().__init__(name)
@@ -229,8 +235,8 @@ def test_page_load_still_supports_instance_list():
     class P(Page):
         stores = [InstStore("inst_list", label="kept")]
 
-    P.load(ssr=True, request=None)
-    assert isinstance(Store._registry.get("inst_list"), InstStore)
+    with pytest.raises(TypeError, match="must be store names"):
+        P.load(ssr=True, request=None)
 
 
 # ---------------------------------------------------------------------------

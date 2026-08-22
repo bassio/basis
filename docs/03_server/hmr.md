@@ -139,7 +139,7 @@ The browser uses this value to find the registered component class by `__module_
 
 ### Connecting
 
-`start_hmr()` is called once from the client entrypoints (`entrypoint_csr.py`, `entrypoint_ssr.py`) and is idempotent — a module-level singleton, so there is exactly one WebSocket per page.
+`start_hmr()` is called once from the client entrypoint (`entrypoint.py`) and is idempotent — a module-level singleton, so there is exactly one WebSocket per page.
 
 The client opens the socket with `window.WebSocket.new(url)` and keeps `ffi.create_proxy` callbacks alive for the connection's lifetime:
 

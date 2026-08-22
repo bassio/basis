@@ -53,3 +53,30 @@ def strip_server_actions(source: str) -> str:
     except Exception as e:
         logger.error(f"AST: Failed to strip server actions: {e}")
         return source # Fallback to original source on error
+
+
+def collect_imported_modules(source: str) -> list[str]:
+    """
+    Return the dotted module paths *source* imports (``import X`` /
+    ``from X import ...``; absolute imports only).
+
+    Used to build the plugin dependency list: which client modules import a
+    plugin-owned package, so a plugin can be marked *essential* (refusing
+    disable/remove). A plain list of direct imports — no transitive closure is
+    needed: a plugin is pinned iff any enabled consumer imports it directly,
+    and the importer names give the reason surfaced when unloading is refused.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    imported = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            # Absolute imports only — relative imports stay within the package
+            # and can never be a cross-plugin dependency.
+            if node.module and node.level == 0:
+                imported.append(node.module)
+    return imported

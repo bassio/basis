@@ -10,7 +10,7 @@ A `BasisPlugin` is a modular extension for a Basis application. It encapsulates:
 
 - **FastAPI APIRouter**: Scoped backend GET, POST, PUT, DELETE endpoints with an optional URL prefix.
 - **Component & Asset Directories**: Mounted UI components and static assets served to both server SSR and client PyScript runtimes.
-- **Plugin Server Actions**: Scoped RPC endpoints registered under `/basis/api/plugin-action`.
+- **Plugin Server Actions**: RPC actions dispatched by canonical path through the single `/basis/api/action` endpoint.
 - **Lifecycle Hooks**: `on_register`, `on_startup`, and `on_shutdown` callbacks.
 
 ---
@@ -105,11 +105,37 @@ Plugins can register scoped RPC actions using `@plugin.action`:
 ```python
 @plugin.action
 async def send_message(sender: str, content: str):
-    # Runs on backend server via /basis/api/plugin-action
+    # Runs on backend server via /basis/api/action (dispatched by canonical path)
     return {"status": "sent", "sender": sender, "content": content}
 ```
 
 These actions are accessible from client PyScript components and execute on the server with full access to plugin state and database sessions.
+
+#### Calling a plugin action from a component
+
+Import the plugin module and call its action — the client shim wraps each
+`@plugin.action` into an RPC stub, so there is no proxy object or store lookup:
+
+```python
+from my_pkg.plugins.chat import plugin
+
+# inside a component event handler
+result = await plugin.send_message("you", "hello")
+```
+
+For a store-bound action, pass the store as the first argument — its
+`store_name` is sent so the returned `new_state` is applied back to that store:
+
+```python
+from jotter.plugins.heroes import plugin
+result = await plugin.generate_random_hero()
+```
+
+> [!NOTE]
+> Call plugin actions from a component **method** (referenced as
+> `onclick="{my_handler}"`), never from a template expression like
+> `{$plugins.heroes.generate_random_hero}` — templates bind state; RPC calls
+> live in handlers so the result can be handled and errors surfaced.
 
 ---
 

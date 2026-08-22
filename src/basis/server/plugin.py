@@ -1,8 +1,47 @@
+import keyword
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter
 from basis.server.db import ModelRegistryMixin
+
+
+def _is_valid_plugin_name(name: str) -> bool:
+    """A plugin name must be a valid Python identifier (the $plugins.<name> DSL key
+    and the client proxy attribute), so no spaces, hyphens, leading digits, or
+    Python keywords."""
+    return name.isidentifier() and not keyword.iskeyword(name)
+
+
+def _sanitize_plugin_name(value: str) -> str:
+    """Derive a valid Python identifier from a prefix-derived default name."""
+    out = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in value)
+    if not out:
+        out = "plugin"
+    if out[0].isdigit():
+        out = "_" + out
+    if keyword.iskeyword(out):
+        out += "_"
+    return out
+
+
+def _resolve_plugin_name(name: str | None, prefix: str) -> str:
+    """Validate an explicit plugin name or sanitize the prefix-derived default.
+
+    An explicit invalid ``name=`` is a loud error (author intent); a derived
+    default is sanitized so it cannot silently break ``$plugins.<name>``.
+    """
+    if name is not None:
+        if not _is_valid_plugin_name(name):
+            raise ValueError(
+                f"Plugin name {name!r} must be a valid Python identifier "
+                f"(no spaces, hyphens, or leading digits, and not a Python "
+                f"keyword) — it is used as $plugins.<name> and the client "
+                f"proxy attribute. Pass an explicit name= or use a prefix "
+                f"that is a valid identifier."
+            )
+        return name
+    return _sanitize_plugin_name(prefix.strip("/").replace("/", "_") or "plugin")
 
 
 class BasisPlugin(ModelRegistryMixin):
@@ -116,11 +155,18 @@ class BasisPlugin(ModelRegistryMixin):
         self.prefix = prefix.rstrip("/")
         self.static_dir = Path(static_dir) if static_dir else None
         self.static_mount = static_mount or self.prefix
-        self.name = name or self.prefix.strip("/").replace("/", "_") or "plugin"
+        self.name = _resolve_plugin_name(name, self.prefix)
         self.requires = requires or []
         self.models = set()
         self.actions = {}
+        # canonical path (module.qualname) -> action wrapper, for unwinding the
+        # global action registry on remove/disable (revertible registration).
+        self._action_registry_entries = {}
         self._settings = {}
+        # Region contributions declared via add_to_region / @plugin.region. Flushed
+        # into the app registry by include_plugin (ROADMAP-SPATIAL.md A1).
+        self._region_items = []
+        self._app = None
         # Public router — use @plugin.router.get(...) for full FastAPI control,
         # or the convenience shorthands below.
         self.router = APIRouter(prefix=self.prefix, tags=tags or [])
@@ -156,10 +202,63 @@ class BasisPlugin(ModelRegistryMixin):
                     return func(*args, **kwargs)
 
             self.actions[action_name] = wrapper
+            # Expose the action as an attribute so the documented direct-import
+            # form (`await plugin.<action>(...)`) works on the plugin object too.
+            setattr(self, action_name, wrapper)
+
+            # Register under the canonical path (module.qualname — the same rule
+            # as @server_action) so the single RPC endpoint dispatches plugin
+            # actions by path alone. Tracked on the plugin so include/remove can
+            # unwind the global registry entry.
+            from basis.shared.actions import _action_registry
+            canonical_path = f"{func.__module__}.{func.__qualname__}"
+            self._action_registry_entries[canonical_path] = wrapper
+            _action_registry[canonical_path] = wrapper
             return wrapper
 
         if callable(func_or_name):
             return decorator(func_or_name)
+        return decorator
+
+    def add_to_region(self, region, component_cls, *, props=None, order=None, position="end"):
+        """Register *component_cls* into *region* (ROADMAP-SPATIAL.md A1).
+
+        Returns a ``RegionHandle`` disposer. Class-as-identity: re-adding the
+        same class to the same region replaces the existing entry (HMR-safe).
+        Contributions declared at module scope / ``on_register`` are flushed
+        into the app registry by ``include_plugin`` (and recorded on the
+        ``PluginRegistration`` so disable/remove unwind them); if the plugin is
+        already registered they register immediately.
+        """
+        from basis.shared.region import (
+            MIN_ORDER,
+            RegionContribution,
+            RegionHandle,
+            _register_contribution,
+        )
+        if position == "start" and order is None:
+            order = MIN_ORDER
+        contrib = RegionContribution(
+            region=region,
+            component_cls=component_cls,
+            props=props or {},
+            order=order,
+            owner=self.name,
+        )
+        if not hasattr(self, "_region_items"):
+            self._region_items = []
+        self._region_items.append(contrib)
+        app = getattr(self, "_app", None)
+        if app is not None:
+            _register_contribution(app, contrib)
+        return RegionHandle(contrib, app=app, owner=self)
+
+    def region(self, name, **kwargs):
+        """Decorator form of :meth:`add_to_region` — declare a class as a region
+        item (the plugin's voice, like ``@plugin.action`` / ``@plugin.get``)."""
+        def decorator(cls):
+            self.add_to_region(name, cls, **kwargs)
+            return cls
         return decorator
 
     # ------------------------------------------------------------------

@@ -29,49 +29,58 @@ def test_plugin_actions_registration_and_execution():
 
     client = TestClient(app)
 
-    # 3. Test RPC call to send_message action via the plugin-action endpoint
+    # Canonical RPC paths (module.qualname) for the actions.
+    send_path = f"{plugin.actions['send_message'].__module__}.{plugin.actions['send_message'].__qualname__}"
+    add_user_path = f"{plugin.actions['register_user'].__module__}.{plugin.actions['register_user'].__qualname__}"
+
+    # 3. RPC call to send_message by its canonical path.
     payload = {
-        "plugin_name": "chat",
+        "path": send_path,
         "action_name": "send_message",
+        "plugin_name": "chat",
         "args": ["Hello, Basis!"],
         "kwargs": {}
     }
-    response = client.post("/basis/api/plugin-action", json=payload)
+    response = client.post("/basis/api/action", json=payload)
     assert response.status_code == 200
     assert response.json() == {"data": "Message: Hello, Basis!"}
 
-    # 4. Test RPC call to register_user action
+    # 4. RPC call to the custom-named action: the wire path is the function's
+    #    canonical qualname (add_user); action_name/plugin_name are metadata.
     payload = {
-        "plugin_name": "chat",
+        "path": add_user_path,
         "action_name": "register_user",
+        "plugin_name": "chat",
         "args": [],
         "kwargs": {"username": "alice"}
     }
-    response = client.post("/basis/api/plugin-action", json=payload)
+    response = client.post("/basis/api/action", json=payload)
     assert response.status_code == 200
     assert response.json() == {"data": "User alice registered"}
 
-    # 5. Test RPC call to non-existent plugin
+    # 5. Unknown action path → 404 (no plugin-name-based lookup anymore).
     payload = {
-        "plugin_name": "unknown_plugin",
+        "path": "test_plugin_actions.unknown_plugin.send_message",
         "action_name": "send_message",
+        "plugin_name": "unknown_plugin",
         "args": ["hello"],
         "kwargs": {}
     }
-    response = client.post("/basis/api/plugin-action", json=payload)
+    response = client.post("/basis/api/action", json=payload)
     assert response.status_code == 404
-    assert "Plugin 'unknown_plugin' not found" in response.text
+    assert "Action 'test_plugin_actions.unknown_plugin.send_message' not found" in response.text
 
-    # 6. Test RPC call to non-existent action in valid plugin
+    # 6. Non-existent action on a valid module → 404.
     payload = {
-        "plugin_name": "chat",
+        "path": f"{send_path.rsplit('.', 1)[0]}.non_existent_action",
         "action_name": "non_existent_action",
+        "plugin_name": "chat",
         "args": [],
         "kwargs": {}
     }
-    response = client.post("/basis/api/plugin-action", json=payload)
+    response = client.post("/basis/api/action", json=payload)
     assert response.status_code == 404
-    assert "Action 'non_existent_action' not found on plugin 'chat'" in response.text
+    assert "not found" in response.text
 
 
 def test_ast_action_stripper():
@@ -116,7 +125,8 @@ def regular_helper():
 
 def test_dynamic_plugins_client_generation():
     app = Basis()
-    plugin = BasisPlugin(prefix="/heroes", name="Heroes Plugin")
+    # Plugin names must be valid Python identifiers (the $plugins.<name> DSL key).
+    plugin = BasisPlugin(prefix="/heroes", name="heroes")
 
     @plugin.action
     def generate_random_hero():
@@ -130,24 +140,22 @@ def test_dynamic_plugins_client_generation():
     app.include_plugin(plugin)
 
     with TestClient(app) as client:
-        # 1. Fetch dynamic plugins registry JSON
-        response = client.get("/basis/api/plugins-registry")
+        # 1. Fetch the plugin listing (full projection incl. actions)
+        response = client.get("/basis/api/plugins")
         assert response.status_code == 200
         registry = response.json()
-        assert "Heroes Plugin" in registry
-        assert "generate_random_hero" in registry["Heroes Plugin"]
-        assert "assign_hero_to_team" in registry["Heroes Plugin"]
+        assert "heroes" in registry
+        assert "generate_random_hero" in registry["heroes"]["actions"]
+        assert "assign_hero_to_team" in registry["heroes"]["actions"]
 
-        # 2. Assert pyscript.json maps the static plugins.py file correctly
+        # 2. The client proxy module (basis/client/plugins.py) is gone — the
+        #    client invokes plugin actions by importing the plugin module, so it
+        #    is no longer served in the PyScript VFS.
         response = client.get("/pyscript.json")
         assert response.status_code == 200
         pyscript_config = response.json()
         files = pyscript_config.get("files", {})
-        
-        # We find the DOMAIN-placeholder key mapping to the static file
-        domain_key = [k for k in files.keys() if k.endswith("/basis/client/plugins.py")]
-        assert len(domain_key) == 1
-        assert files[domain_key[0]] == "./basis/client/plugins.py"
+        assert not any("/basis/client/plugins.py" in k for k in files.keys())
 
 
 def test_keyed_loop_binding_reordering_with_custom_elements():

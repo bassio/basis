@@ -8,9 +8,9 @@ middleware wiped ``Store._registry`` and nothing re-created the store.
 The fix:
   * ``Store._store_blueprints`` — a persistent (never per-request-cleared)
     blueprint registry; ``Store.reinstantiate(name)`` rebuilds a store from it.
-  * The ``/basis/api/action`` and ``/basis/api/plugin-action`` endpoints are
-    exempt from the middleware's registry reset.
-  * Both action handlers fall back to ``Store.reinstantiate`` when the live
+  * The ``/basis/api/action`` endpoint is exempt from the middleware's
+    registry reset.
+  * The action handler falls back to ``Store.reinstantiate`` when the live
     instance is missing from the current request's registry.
 """
 import asyncio
@@ -256,10 +256,11 @@ def test_plugin_action_bound_to_store():
     client = TestClient(app)
 
     resp = client.post(
-        "/basis/api/plugin-action",
+        "/basis/api/action",
         json={
-            "plugin_name": "p",
+            "path": _action_path(accumulate),
             "action_name": "accumulate",
+            "plugin_name": "p",
             "store_name": "plugin_target",
             "args": [],
             "kwargs": {"amount": 4},
@@ -286,13 +287,14 @@ def test_plugin_action_bound_to_store_after_registry_reset():
     app.include_plugin(plugin)
     client = TestClient(app)
 
-    client.get("/basis/api/plugins-registry")  # trigger registry reset
+    client.get("/basis/api/plugins")  # trigger registry reset
 
     resp = client.post(
-        "/basis/api/plugin-action",
+        "/basis/api/action",
         json={
-            "plugin_name": "p",
+            "path": _action_path(accumulate),
             "action_name": "accumulate",
+            "plugin_name": "p",
             "store_name": "plugin_target",
             "args": [],
             "kwargs": {"amount": 7},

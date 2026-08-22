@@ -322,10 +322,10 @@ class AudioRecorder(Component):
         ))
         
         try:
-            from basis.client.actions import call_server_action
+            from basis.client.actions import call_action
             path = "basis.ui.audio_recorder.audio_recorder.save_audio_chunk"
             
-            res = await call_server_action(path, None, session_id, index, base64_data, content_type)
+            res = await call_action(path, None, session_id, index, base64_data, content_type)
             if res and res.get("success"):
                 if self.recording:
                     self.status_text = "Recording..."
@@ -386,10 +386,10 @@ class AudioRecorder(Component):
 
             self.status_text = "Merging audio..."
             try:
-                from basis.client.actions import call_server_action
+                from basis.client.actions import call_action
                 path = "basis.ui.audio_recorder.audio_recorder.combine_audio_chunks"
 
-                res = await call_server_action(path, None, session_id)
+                res = await call_action(path, None, session_id)
                 if res and res.get("success"):
                     file_path = res.get("file_path")
                     self.status_text = "Saved!"

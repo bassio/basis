@@ -249,7 +249,7 @@ class FileUpload(Component):
         file_size = js_file.size
         total_chunks = math.ceil(file_size / chunk_size) if file_size > 0 else 1
 
-        from basis.client.actions import call_server_action
+        from basis.client.actions import call_action
 
         try:
             for chunk_idx in range(total_chunks):
@@ -276,7 +276,7 @@ class FileUpload(Component):
                 base64_data = data_url.split(",")[1] if "," in data_url else data_url
 
                 # Call backend action with verification parameters
-                res = await call_server_action(
+                res = await call_action(
                     "basis.ui.file_upload.file_upload.save_upload_chunk",
                     None,
                     file_id,

@@ -24,7 +24,7 @@ def server_action(func: T) -> T:
     @wraps(func)
     async def wrapper(*args, **kwargs):
         if IS_CLIENT:
-            from basis.client.actions import call_server_action
+            from basis.client.actions import call_action
             
             # If it's a method on a Store, we need to pass the store name
             store_name = None
@@ -34,7 +34,7 @@ def server_action(func: T) -> T:
                 # Remove 'self' from args for the network call
                 args = args[1:]
 
-            return await call_server_action(path, store_name, *args, **kwargs)
+            return await call_action(path, store_name, *args, **kwargs)
         else:
             # On the server, just execute normally
             # Note: This expects the function to be async or handles sync

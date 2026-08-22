@@ -1,28 +1,52 @@
 import json
 from basis.shared.component import Component
 from basis.shared.element import Element, DocumentType
-from basis.shared.store import Store
+from basis.shared.store import Store, attach_app_to_store, FRAMEWORK_STORE_NAMES
+
+
+def _page_store_names(stores) -> list[str]:
+    """Normalize ``Page.stores`` to a list of store names.
+
+    ``stores`` is a list of store *names* (strings); an empty list means "all
+    auto-discovered stores". Store *instances* are intentionally not supported:
+    declare a store at module scope (e.g. in a ``stores/`` module) and reference
+    it by name, so the same module-scope-instance convention works on the
+    server, the client, and for SSR/RPC blueprint reconstruction.
+    """
+    names = []
+    for ref in stores:
+        if isinstance(ref, str):
+            names.append(ref)
+            continue
+        raise TypeError(
+            f"Page.stores must be store names (strings), got a "
+            f"{type(ref).__name__} instance. Instantiate the store at module "
+            "scope (e.g. in a stores/ module) and reference it by name, "
+            'e.g. stores = ["app_state"].'
+        )
+    return names
 
 
 class Page(Component):
     doctype: DocumentType = DocumentType("html")
     title: str = "Basis App"
-    entry_module: str = "/main.py"
+    entry_module: str = "/basis/client/entrypoint.py"
     pyscript_src: str = "/pyscript"
     pyscript_json_url: str = "/pyscript.json"
     initial_state_json: str = "{}"
+    render_mode: str = "csr"
     root_component = None
     stores = []
-    
+
     @classmethod
     def load(cls, ssr=False, request=None):
         if ssr:
-            # Instantiate fresh versions of the page stores for this request if not already present.
-            # `stores` may be a list of store *instances* (kept for backwards compatibility) or a list of store *names* (strings).
-            # An empty list means "all auto-discovered stores" (the persistent blueprint registry).
+            # Instantiate fresh versions of the page stores for this request if
+            # not already present. ``stores`` is a list of store *names*; an
+            # empty list means "all auto-discovered stores" (the persistent
+            # blueprint registry).
             store_refs = getattr(cls, "stores", None) or Store.all_names()
-            for store in store_refs:
-                name = store.get_store_name() if not isinstance(store, str) else store
+            for name in _page_store_names(store_refs):
                 if name not in Store._registry:
                     store_instance = Store.resolve(name)
                     if name == "router" and request and hasattr(request, "url"):
@@ -34,7 +58,8 @@ class Page(Component):
                       "entry_module": cls.entry_module,
                       "pyscript_src": cls.pyscript_src,
                       "pyscript_json_url": cls.pyscript_json_url,
-                      "initial_state_json": cls.initial_state_json}
+                      "initial_state_json": cls.initial_state_json,
+                      "render_mode": cls.render_mode}
 
         page_instance = cls.mount(container, replace=False, **attributes)
         page_instance.__element__ = container.children[0]
@@ -55,6 +80,7 @@ class Page(Component):
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="basis-render-mode" content="{render_mode}" />
         <title>{title}</title>
 
         <!-- PyScript offline bundle -->
@@ -80,12 +106,25 @@ class Page(Component):
 
     def _prepare_full_page(self, request, initial_state_json=None):
 
+        # Page-level store names: the page's explicit store subset, or empty
+        # (default-all). Framework control-plane stores always hydrate.
+        declared_stores = getattr(self.__class__, "stores", None)
+        page_store_names = _page_store_names(declared_stores) if declared_stores else []
+
         if initial_state_json is None:
             initial_state = {}
-            store_refs = getattr(self.__class__, "stores", None) or Store.all_names()
-            for store in store_refs:
-                name = store.get_store_name() if not isinstance(store, str) else store
+            names = set(page_store_names) or set(Store.all_names())
+            # Framework control-plane stores ($plugins, $regions) must hydrate on
+            # every page regardless of the page's store subset.
+            names |= set(FRAMEWORK_STORE_NAMES)
+            for name in names:
                 instance = Store._registry.get(name) or Store.resolve(name)
+                # App-bound stores (``_requires_app``, e.g. ``$plugins``) hold a
+                # listing that requires the owning app. ``Store.resolve``
+                # rebuilds a fresh instance with no ``_app``, so attach it +
+                # recompute or the initial state serializes empty (the client
+                # then hydrates a stale/empty view).
+                attach_app_to_store(instance, request.app)
                 initial_state[name] = instance.serialize()
             if initial_state:
                 initial_state_json = json.dumps(initial_state)
@@ -95,9 +134,9 @@ class Page(Component):
         # 1. Collect modules to import on the client side
         entrypoint_imports = {}
 
-        # Synthesized pages (built by @app.page / include_ssr_page) are server-side
-        # shell config only — the client boots from the component file and cannot
-        # import a class that was created at runtime, so don't emit it here.
+        # Synthesized pages (built by @app.page) are server-side shell config only
+        # — the client boots from the component file and cannot import a class
+        # that was created at runtime, so don't emit it here.
         if not getattr(self.__class__, "__synthesized__", False):
             page_module_file = request.app.get_component_pyscript_vfs_path(self.__class__)
 
@@ -135,7 +174,18 @@ class Page(Component):
                 }, [ElementString(json.dumps(store_modules))])
                 head_node.appendChild(store_imports_script)
 
-            # 2b. Dev-mode marker read by client tooling (e.g. the error
+            # 2b. Page-level store names (the page's explicit store subset).
+            # The client resolves these by name BEFORE importing components, so
+            # every store exists before the view plane mounts. Default-all pages
+            # emit nothing — their stores all come from #basis-store-imports and
+            # the framework control-plane stores.
+            if page_store_names:
+                head_node.appendChild(Element("script", {
+                    "id": "basis-page-stores",
+                    "type": "application/json",
+                }, [ElementString(json.dumps(page_store_names))]))
+
+            # 2c. Dev-mode marker read by client tooling (e.g. the error
             # overlay).  Mirrors the HMR dev affordance: `basis dev --hmr`
             # sets BASIS_HMR=1 on the server.
             if getattr(request.app, "_start_hmr_watcher", False):

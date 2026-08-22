@@ -218,4 +218,10 @@ class Link(Component):
     def handle_click(self, event):
         event.preventDefault()
         self.router.navigate(self.href)
-        self.check_active()
+
+
+# The router is framework-provided: instantiate it at module scope (the
+# module-scope-instance convention) so ``$router`` resolves on every page
+# without the app declaring it. Apps that also declare a ``router`` store get
+# the benign same-name/same-config dedup (see ``Store.__new__``).
+router = RouterStore("router")

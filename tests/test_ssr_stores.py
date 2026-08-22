@@ -13,7 +13,7 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from basis.server.app import Basis
+from basis.server.app import Basis, _synthesize_page
 from basis.server.ssr import _get_all_stores, _serialize_initial_state
 from basis.shared.store import Store
 from basis.shared.component import Component
@@ -120,8 +120,10 @@ def test_serialize_initial_state_includes_subclass_constructor_state():
 def test_page_load_reconstructs_entrypoint_store_subclass():
     from basis.shared.page import Page
 
+    CounterStore("ssr_entry")
+
     class EntryPage(Page):
-        stores = [CounterStore("ssr_entry")]
+        stores = ["ssr_entry"]
 
     Store._registry.clear()
     EntryPage.load(ssr=True, request=None)
@@ -139,8 +141,10 @@ def test_page_load_reconstructs_entrypoint_store_with_constructor_args():
     """
     from basis.shared.page import Page
 
+    ArgStore("ssr_arg_entry", "Lbl", flag=False)
+
     class ArgPage(Page):
-        stores = [ArgStore("ssr_arg_entry", "Lbl", flag=False)]
+        stores = ["ssr_arg_entry"]
 
     Store._registry.clear()
     ArgPage.load(ssr=True, request=None)
@@ -166,7 +170,7 @@ def test_ssr_http_initial_state_contains_subclass_state():
         <div>{$ssr_http_counter.count}</div>
         """
 
-    app.include_ssr_page("/", Root, entry_module="/test_root.py")
+    app.include_page("/", page_cls=_synthesize_page(Root, entry_module="/test_root.py"))
     client = TestClient(app)
 
     resp = client.get("/")

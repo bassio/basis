@@ -5,15 +5,21 @@ import inspect
 import itertools
 import logging
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Set
-from urllib.parse import urljoin
+from typing import Any, Set
 from contextlib import asynccontextmanager
 import sys
-from starlette.routing import Route, Mount
+from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
 from basis.server.static import BasisStaticFiles, BasisStaticFilesPyc
-from fastapi import FastAPI, APIRouter, Request, WebSocket, WebSocketDisconnect
+from basis.server.vfs import (
+    companion_assets,
+    mount_to_module_name,
+    normalize_mount,
+    vfs_relative_url,
+)
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from basis.server.plugin import BasisPlugin
 from fastapi.responses import JSONResponse, HTMLResponse
 
@@ -37,7 +43,7 @@ def _synthesize_page(
 ):
     """Build a synthesized Page subclass that carries ``component_cls`` as its root.
 
-    Used by ``@app.page`` (and the deprecated ``include_ssr_page``) to turn a root
+    Used by ``@app.page`` to turn a root
     Component into a page without the developer writing a ``Page`` subclass. The
     synthesized class is server-side shell config only; it is marked
     ``__synthesized__`` so the client (which boots from the component file) never
@@ -76,6 +82,74 @@ def _synthesize_page(
     return derived
 
 
+@dataclass
+class PluginRegistration:
+    """App-side record of one plugin's registration.
+
+    ``include_plugin`` fills the inverse of every registration site so
+    ``remove_plugin`` / ``disable_plugin`` can unwind them. The plugin registry
+    *store* (``$plugins``) is a reactive projection of these records.
+    """
+    plugin: "BasisPlugin"
+    state: str = "enabled"
+    added_routes: list = field(default_factory=list)
+    component_mount: Any | None = None
+    page_route: Any | None = None
+    models: set = field(default_factory=set)
+    region_items: list = field(default_factory=list)
+    action_registry_entries: dict = field(default_factory=dict)
+    disposed: bool = False
+
+
+def _topo_sort_plugins(
+    plugins: list["BasisPlugin"],
+    registered_names: set[str] | None = None,
+) -> list["BasisPlugin"]:
+    """Return *plugins* in dependency order (dependencies first), by ``requires``.
+
+    Raises ``ValueError`` naming the missing dependency (a required plugin that is
+    neither in *plugins* nor already registered) or the plugins in a dependency
+    cycle. Auto-discovery uses this so a discovered plugin is always registered
+    after the plugins it requires.
+    """
+    by_name = {p.name: p for p in plugins}
+    known = set(by_name) | set(registered_names or ())
+    missing = sorted({r for p in plugins for r in p.requires if r not in known})
+    if missing:
+        detail = "; ".join(
+            f"'{p.name}' requires {', '.join(p.requires)}"
+            for p in plugins
+            if p.requires
+        )
+        raise ValueError(
+            f"Plugin dependency not satisfied: missing required plugin(s) {missing}. {detail}"
+        )
+
+    indeg = {p.name: 0 for p in plugins}
+    required_by: dict[str, list[str]] = {}
+    for p in plugins:
+        for r in p.requires:
+            if r in by_name:  # intra-set dependency (external deps are satisfied)
+                indeg[p.name] += 1
+                required_by.setdefault(r, []).append(p.name)
+
+    queue = [p.name for p in plugins if indeg[p.name] == 0]
+    order = []
+    while queue:
+        name = queue.pop()
+        order.append(name)
+        for dependent in required_by.get(name, []):
+            indeg[dependent] -= 1
+            if indeg[dependent] == 0:
+                queue.append(dependent)
+
+    if len(order) != len(plugins):
+        cyclic = sorted(p.name for p in plugins if p.name not in order)
+        raise ValueError(f"Plugin dependency cycle detected among: {cyclic}")
+
+    return [by_name[n] for n in order]
+
+
 def initialize_pyscript_registry(app: FastAPI):
     """
     Initializes the PyScript VFS and module registry on startup.
@@ -94,14 +168,12 @@ def initialize_pyscript_registry(app: FastAPI):
     # add client side code (currently under /client)
 
     #for entrypoint .py files : do not convert these to .pyc
-    files_dict["{DOMAIN}/basis/client/entrypoint_csr.py"] = "./basis/client/entrypoint_csr.py"
-    files_dict["{DOMAIN}/basis/client/entrypoint_ssr.py"] = "./basis/client/entrypoint_ssr.py"
+    files_dict["{DOMAIN}/basis/client/entrypoint.py"] = "./basis/client/entrypoint.py"
 
     client_py_files = [
         "component.py",
         "plugin.py",
         "actions.py",
-        "plugins.py",
         "errors.py",
         "errors_component.py",
     ]
@@ -134,6 +206,8 @@ def initialize_pyscript_registry(app: FastAPI):
         "db.py",
         "basis_await.py",
         "validation.py",
+        "plugin_registry.py",
+        "region.py",
     ]
     for f_name in shared_py_files:
         stem = Path(f_name).stem
@@ -144,62 +218,41 @@ def initialize_pyscript_registry(app: FastAPI):
         cdir_n_label = '{' + f'COMPONENTS_DIR_{i}' + '}'
         mount_path = m.path   # mount path
         c_dir = Path(m.app.directory).absolute()
-        
-        # Ensure clean mount path starting with '/' and without trailing '/' for URL logic
-        clean_mount = mount_path
-        if not clean_mount.startswith("/"):
-            clean_mount = "/" + clean_mount
-        clean_mount = clean_mount.rstrip("/")
-        
+
+        clean_mount = normalize_mount(mount_path)
+
         files_dict[cdir_n_label] = "{DOMAIN}" + clean_mount
 
         if not c_dir.exists():
             continue
 
         for f in itertools.chain(c_dir.glob("*.py"), c_dir.glob("**/*.py")):
-            subdir = f.parent
-            subdir_rel_to_cdir = subdir.relative_to(c_dir)
-            
-            vfs_file_name = f.stem + py_ext if pyc_mode else f.name
-            
+            rel_py = f.relative_to(c_dir)
+            # VFS file name carries the pyc extension in pyc mode
+            rel_vfs = rel_py.with_name(f.stem + py_ext if pyc_mode else f.name)
+
             # component_file uses '/' as path separator in PyScript VFS
-            component_file = cdir_n_label + "/" + (subdir_rel_to_cdir / vfs_file_name).as_posix()
+            component_file = cdir_n_label + "/" + rel_vfs.as_posix()
             component_file = component_file.replace("//", "/")
 
             # Server relative URL must always start with './' and use POSIX path separators
-            files_dict[component_file] = "." + clean_mount + "/" + (subdir_rel_to_cdir / vfs_file_name).as_posix()
-            files_dict[component_file] = files_dict[component_file].replace("//", "/")
+            files_dict[component_file] = vfs_relative_url(clean_mount, rel_vfs)
 
-            # Translate file path to Python import path
-            mount_parts = [p for p in clean_mount.split("/") if p]
-            parts = mount_parts + list(subdir_rel_to_cdir.parts) + [f.stem]
-            parts = [p for p in parts if p]
-            if parts and parts[-1] == "__init__":
-                parts.pop()
-            if not parts:
+            # Translate file path to Python import path (isomorphic: VFS == filesystem)
+            vfs_module_path = mount_to_module_name(clean_mount, rel_vfs)
+            if vfs_module_path is None:
                 continue
-            vfs_module_path = ".".join(parts)
-            
+
             if vfs_module_path not in client_modules:
                 client_modules.append(vfs_module_path)
 
-            if f.name == "__init__.py":
-                # get the name of the package (parent folder name)
-                css_file = (f.parent / f.parent.name).with_suffix(".css")
-                html_file = (f.parent / f.parent.name).with_suffix(".html")
-            else:
-                css_file = f.with_suffix(".css")
-                html_file = f.with_suffix(".html")
-
-            component_assets = [css_file, html_file]
-                    
-            for asset in component_assets:
+            for asset in companion_assets(f):
                 if asset.exists():
-                    asset_file = cdir_n_label + "/" + (subdir_rel_to_cdir / asset.name).as_posix()
+                    rel_asset = rel_py.parent / asset.name
+                    asset_file = cdir_n_label + "/" + rel_asset.as_posix()
                     asset_file = asset_file.replace("//", "/")
-                    
-                    files_dict[asset_file] = "." + clean_mount + "/" + (subdir_rel_to_cdir / asset.name).as_posix()
-                    files_dict[asset_file] = files_dict[asset_file].replace("//", "/")
+
+                    files_dict[asset_file] = vfs_relative_url(clean_mount, rel_asset)
 
             # Resolve server-side Python module path
             for sys_path in sorted(sys.path, key=len, reverse=True):
@@ -415,7 +468,7 @@ def _component_entry_url(app, component_file: Path) -> str | None:
     for m in app._component_routes:
         c_dir = Path(m.app.directory).absolute()
         if component_file.is_relative_to(c_dir):
-            clean_mount = m.path.rstrip("/")
+            clean_mount = normalize_mount(m.path)
             rel = component_file.relative_to(c_dir).as_posix()
             return f"{clean_mount}/{rel}"
     return None
@@ -485,6 +538,7 @@ class HMRManager:
             except Exception:
                 self.active_connections.remove(connection)
 
+
 class Basis(FastAPI, DBAppMixin):
     
     _component_dirs = []
@@ -513,6 +567,17 @@ class Basis(FastAPI, DBAppMixin):
         self.pyc_mode = pyc_mode or os.environ.get("BASIS_PYC_MODE", "").lower() in ("1", "true", "yes")
         if not hasattr(self, "_plugins"):
             self._plugins = []
+        # Revertible plugin registration records (teardown truth, keyed by name).
+        self._plugin_registrations = {}
+        # App-housed region registry (ROADMAP-SPATIAL.md): {region: [RegionContribution]}.
+        # Durable, boot-populated; the $regions store is a reactive projection.
+        self._regions = {}
+        self._region_seq = 0
+        # Set when a plugin was added/removed so the HMR watcher rebuilds its map.
+        self._hmr_map_dirty = True
+        # Cache for _plugin_importers() — warmed at lifespan startup (alongside
+        # the client VFS manifest) and invalidated on any structural change.
+        self._plugin_importers_cache = None
         # Populated by _auto_discover_dirs / _auto_import_stores.
         self._discovered_dirs = {}
         self._discovered_store_modules = []
@@ -528,6 +593,11 @@ class Basis(FastAPI, DBAppMixin):
             
             # Precompute PyScript VFS files and action mappings
             initialize_pyscript_registry(app)
+            # Warm the plugin→importers cache at app load, alongside the VFS
+            # manifest: the "is this plugin essential?" decision has exactly the
+            # manifest's lifetime. Rebuilt wherever the manifest is rebuilt
+            # (startup, plugin remove/enable); invalidated on mounts/plugins.
+            app._plugin_importers()
 
             # Call plugin on_startup hooks
             for plugin in getattr(app, "_plugins", []):
@@ -573,7 +643,7 @@ class Basis(FastAPI, DBAppMixin):
             # Reset global registries to isolate per-request SSR state and avoid DetachedInstanceError.
             # RPC endpoints are EXEMPT: store-bound @server_action methods must be able to resolve
             # their (persistent) store instance — see Store._store_blueprints / Store.reinstantiate.
-            if request.url.path not in ("/basis/api/action", "/basis/api/plugin-action"):
+            if request.url.path != "/basis/api/action":
                 Store._registry.clear()
                 Store._pending_subscriptions.clear()
                 BaseComponent._instance_registry.clear()
@@ -606,42 +676,19 @@ class Basis(FastAPI, DBAppMixin):
         if not component_module_file:
             return None
 
-        for i, m in enumerate(self._component_routes, 1):
-            #print(f"* Mount Point: '{m.path}' (Name: '{m.name}')")
-            # The directory path is stored in route.app.directory
-            #print(f"  Serving directory: '{Path(m.app.directory).absolute()}'")
-            
-            mount_path = m.path   # mount path
-            # Ensure clean mount path starting with '/' and without trailing '/' for URL logic
-            clean_mount = mount_path
-            if not clean_mount.startswith("/"):
-                clean_mount = "/" + clean_mount
-            clean_mount = clean_mount.rstrip("/")
-
-            # Ensure clean mount path starting with '/' and without trailing '/' for URL logic
-        
+        for m in self._component_routes:
             c_dir = Path(m.app.directory).absolute()
-
             if component_module_file.is_relative_to(c_dir):
-                #i.e. the module file for that component is contained within this mount point's c_dir
-                subdir = component_module_file.parent
-                subdir_rel_to_cdir = subdir.relative_to(c_dir)
-            
-                # Server relative URL must always start with './' and use POSIX path separators
-                vfs_file = "." + clean_mount + "/" + (subdir_rel_to_cdir / component_module_file.name).as_posix()
-                vfs_file = vfs_file.replace("//", "/")
-
-                # Translate file path to Python import path
-                mount_parts = [p for p in clean_mount.split("/") if p]
-                parts = mount_parts + list(subdir_rel_to_cdir.parts) + [component_module_file.stem]
-                parts = [p for p in parts if p]
-                if parts and parts[-1] == "__init__":
-                    parts.pop()
-                if parts:
-                    module_path = ".".join(parts)
+                # The module file for that component lives under this mount's dir.
+                rel = component_module_file.relative_to(c_dir)
+                module_path = mount_to_module_name(m.path, rel)
+                if module_path:
                     return module_path
 
     def include_store(self, name: str, url: str = None, target: str = None):
+        for cfg in self._global_stores:
+            if cfg.get("name") == name:
+                return self
         self._global_stores.append({
             'name': name,
             'url': url,
@@ -649,32 +696,87 @@ class Basis(FastAPI, DBAppMixin):
         })
         return self
 
-    def include_offline_pyscript(self, mount_path:str="/pyscript"):
+    def add_to_region(
+        self,
+        region: str,
+        component_cls,
+        *,
+        props: dict | None = None,
+        order: int | None = None,
+        position: str = "end",
+        owner: str | None = None,
+    ):
+        """Register a component class into *region* (the app-level primitive).
+
+        Identity is ``(region, class)``: re-adding the same class replaces the
+        existing entry (HMR-safe). Ordering: declaration order (append) by
+        default, overridable by ``order=`` (int sort key); ``position="start"``
+        prepends. Returns a ``RegionHandle`` disposer. See ROADMAP-SPATIAL.md.
+        """
+        from basis.shared.region import (
+            MIN_ORDER,
+            RegionContribution,
+            RegionHandle,
+            _register_contribution,
+        )
+        if position == "start" and order is None:
+            order = MIN_ORDER
+        contrib = RegionContribution(
+            region=region,
+            component_cls=component_cls,
+            props=props or {},
+            order=order,
+            owner=owner,
+            seq=self._region_seq,
+        )
+        self._region_seq += 1
+        _register_contribution(self, contrib)
+        return RegionHandle(contrib, app=self, owner=owner)
+
+    def remove_from_region(self, region: str, component_cls) -> bool:
+        """Remove every contribution of *component_cls* from *region*."""
+        from basis.shared.region import _unregister_contribution, cls_path_of
+        removed = False
+        for contrib in list(getattr(self, "_regions", {}).get(region, [])):
+            if contrib.cls_path == cls_path_of(component_cls):
+                _unregister_contribution(self, contrib)
+                removed = True
+        return removed
+
+    def _has_route(self, *, path: str | None = None, name: str | None = None) -> bool:
+        """True if a route already matches the given path and/or name."""
         for r in self.routes:
-            if getattr(r, "name", None) == "pyscript" or getattr(r, "path", None) == mount_path:
-                return
+            if path is not None and getattr(r, "path", None) == path:
+                return True
+            if name is not None and getattr(r, "name", None) == name:
+                return True
+        return False
+
+    def include_offline_pyscript(self, mount_path: str = "/pyscript"):
+        if self._has_route(name="pyscript") or self._has_route(path=mount_path):
+            return
         pyscript_mount = Mount(mount_path, BasisStaticFiles(packages=[("basis", "static/pyscript")]), name="pyscript")
         self.routes.append(pyscript_mount)
-    
-    def include_pyscript_json(self, mount_path:str="/pyscript.json"):
-        for r in self.routes:
-            if getattr(r, "path", None) == mount_path:
-                return
+
+    def include_pyscript_json(self, mount_path: str = "/pyscript.json"):
+        if self._has_route(path=mount_path):
+            return
         self.add_route(mount_path, pyscript_json, methods=['get'])
 
     def _get_static_files_cls(self):
         return BasisStaticFilesPyc if getattr(self, "pyc_mode", False) else BasisStaticFiles
 
-    def include_components_dir(self, mount_path:str, dir_path:str, name:str):
-        for r in self._component_routes:
-            if getattr(r, "path", None) == mount_path:
-                return
+    def include_components_dir(self, mount_path: str, dir_path: str, name: str):
+        if any(getattr(r, "path", None) == mount_path for r in self._component_routes):
+            return None
 
         static_cls = self._get_static_files_cls()
         m = Mount(mount_path, static_cls(directory=dir_path), name=name)
-        
+
         self.routes.append(m)
         self._component_routes.append(m)
+        self._invalidate_plugin_importers()
+        return m
 
     def _build_hmr_file_map(self):
         """
@@ -698,30 +800,16 @@ class Basis(FastAPI, DBAppMixin):
             if not watch_dir.exists():
                 continue
 
-            clean_mount = m.path.rstrip("/")
-            mount_parts = [p for p in clean_mount.split("/") if p]
-
             # Map each .py module file to its import name, and its companion
             # css/html assets to the same module (mirrors initialize_pyscript_registry).
             asset_owners = {}
             for f in watch_dir.rglob("*.py"):
                 if "__pycache__" in f.parts:
                     continue
-                rel = f.relative_to(watch_dir)
-                parts = list(mount_parts) + list(rel.with_suffix("").parts)
-                if parts and parts[-1] == "__init__":
-                    parts.pop()
-                if not parts:
+                module_name = mount_to_module_name(m.path, f.relative_to(watch_dir))
+                if module_name is None:
                     continue
-                module_name = ".".join(parts)
-
-                if f.name == "__init__.py":
-                    css_file = (f.parent / f.parent.name).with_suffix(".css")
-                    html_file = (f.parent / f.parent.name).with_suffix(".html")
-                else:
-                    css_file = f.with_suffix(".css")
-                    html_file = f.with_suffix(".html")
-                for asset in (css_file, html_file):
+                for asset in companion_assets(f):
                     if asset.exists():
                         asset_owners[str(asset.absolute())] = module_name
 
@@ -732,26 +820,31 @@ class Basis(FastAPI, DBAppMixin):
                 rel = f.relative_to(watch_dir)
                 meta = {"file": str(rel), "ext": f.suffix.lstrip(".")}
                 if f.suffix == ".py":
-                    parts = list(mount_parts) + list(rel.with_suffix("").parts)
-                    if parts and parts[-1] == "__init__":
-                        parts.pop()
-                    if parts:
-                        meta["module"] = ".".join(parts)
+                    module_name = mount_to_module_name(m.path, rel)
+                    if module_name is not None:
+                        meta["module"] = module_name
                 else:
                     meta["module"] = asset_owners.get(str(f.absolute()))
                 file_map[str(f.absolute())] = meta
         return file_map
 
     async def _start_file_watcher(self):
-        """Simple poller to watch for file changes and broadcast HMR events."""
+        """Simple poller to watch for file changes and broadcast HMR events.
+
+        Watch dirs are re-derived from the current component mounts each cycle,
+        and the file map is rebuilt when ``_hmr_map_dirty`` is set (a plugin was
+        added or removed), so live plugin enable/disable stays in sync with HMR.
+        """
         mtimes = {}
         file_map = self._build_hmr_file_map()
-
-        # Initial scan
-        watch_dirs = [Path(m.app.directory).absolute() for m in self._component_routes]
+        self._hmr_map_dirty = False
 
         while True:
             try:
+                if self._hmr_map_dirty:
+                    file_map = self._build_hmr_file_map()
+                    self._hmr_map_dirty = False
+                watch_dirs = [Path(m.app.directory).absolute() for m in self._component_routes]
                 for watch_dir in watch_dirs:
                     if not watch_dir.exists():
                         continue
@@ -798,32 +891,22 @@ class Basis(FastAPI, DBAppMixin):
         uvicorn.run(self, host=host, port=port)
 
     def include_framework(self):
-        client_route = None
-        shared_route = None
-
-        for r in self.routes:
-            if r.name == 'basis_client':
-                client_route = r
-            elif r.name == 'basis_shared':
-                shared_route = r
-
         static_cls = self._get_static_files_cls()
 
-        if not client_route:
+        if not self._has_route(name="basis_client"):
             client_mount = Mount("/basis/client", static_cls(packages=[('basis', 'client')]), name='basis_client')
             self.routes.append(client_mount)
 
-        if not shared_route:
+        if not self._has_route(name="basis_shared"):
             shared_mount = Mount("/basis/shared", static_cls(packages=[('basis', 'shared')]), name='basis_shared')
             self.routes.append(shared_mount)
 
     def include_ui_components(self):
-        for r in self._component_routes:
-            if getattr(r, "name", None) == 'basis_ui' or getattr(r, "path", None) == "/basis/ui/":
-                return
+        if self._has_route(name="basis_ui") or self._has_route(path="/basis/ui/"):
+            return
 
         spec = importlib.util.find_spec("basis.ui")
-        
+
         ui_path = Path(spec.origin).parent
 
         static_cls = self._get_static_files_cls()
@@ -895,42 +978,6 @@ class Basis(FastAPI, DBAppMixin):
         self.add_route(path, _ssr_handler, methods=['GET'], name=name)
         return page_cls
 
-    def include_ssr_page(
-        self,
-        path: str,
-        component_cls,
-        *,
-        page_cls=None,
-        entry_module: str = "/main.py",
-        title: str = "Basis App",
-        stores: dict | None = None,
-        pyscript_src: str = "/pyscript",
-        pyscript_json_url: str = "/pyscript.json",
-        name: str | None = None,
-    ):
-        """Deprecated alias for :meth:`include_page`.
-
-        Preserves the pre-``@app.page`` API: register a root component (and
-        optionally a custom Page shell) at ``path`` by synthesizing a page.
-        """
-        from basis.shared.page import Page
-
-        base = page_cls or Page
-
-        # Normalize the `stores` dict ({name: Store}) into the class form (list).
-        store_list = list(stores.values()) if stores else None
-
-        page_cls = _synthesize_page(
-            component_cls,
-            page_cls=base,
-            title=title,
-            stores=store_list,
-            entry_module=entry_module,
-            pyscript_src=pyscript_src,
-        )
-        return self.include_page(path, page_cls=page_cls, name=name)
-
-
     def bootstrap(self, include_offline_pyscript=True):
         if getattr(self, "_bootstrapped", False):
             return
@@ -940,7 +987,7 @@ class Basis(FastAPI, DBAppMixin):
         self.include_framework()
         self.include_ui_components()
         self.include_server_actions()
-        self.include_plugin_server_actions()
+        self.include_plugins_projection()
 
         # --- Auto-discover conventional directories (components/, stores/) ---
         # Mounts them with package-derived paths (isomorphic VFS namespace) and
@@ -948,182 +995,56 @@ class Basis(FastAPI, DBAppMixin):
         self._auto_discover_dirs()
         self._discovered_store_modules = self._auto_import_stores()
 
+        # App-global plugin registry store ($plugins) — the control plane for
+        # live plugin management. Reactive on the client, server-authoritative
+        # state (a projection of _plugin_registrations).
+        from basis.shared.plugin_registry import PluginRegistryStore
+        if not hasattr(self, "plugins"):
+            self.plugins = PluginRegistryStore("plugins")
+            self.plugins.__dict__["_app"] = self
+        self.include_store("plugins")
+
+        # App-global region store ($regions) — the spatial control plane (a
+        # reactive projection of app._regions; see ROADMAP-SPATIAL.md).
+        from basis.shared.region import RegionStore
+        if not hasattr(self, "regions"):
+            self.regions = RegionStore("regions")
+            self.regions.__dict__["_app"] = self
+        self.include_store("regions")
+
         # --- Auto-discover plugins ---
         self._auto_discover_plugins()
 
     def include_server_actions(self, mount_path: str = "/basis/api/action"):
+        """Register the single RPC endpoint for server actions.
+
+        Every action — ``@server_action`` or ``@plugin.action`` — is dispatched
+        by its canonical ``module.qualname`` path against the shared pipeline in
+        :mod:`basis.server.rpc`.
         """
-        Registers a generic RPC endpoint for server actions.
-        """
-        for r in self.routes:
+        from basis.server.rpc import make_action_handler
+
+        for r in getattr(self, "routes", []):
             if getattr(r, "path", None) == mount_path:
-                return
-        async def _action_handler(request: Request):
-            from basis.shared.actions import _action_registry
-            from basis.shared.store import Store
-            from fastapi import HTTPException
-            import asyncio
-            
-            try:
-                payload = await request.json()
-            except Exception:
-                raise HTTPException(status_code=400, detail="Invalid JSON payload")
+                return self.add_route(
+                    mount_path,
+                    make_action_handler(self),
+                    methods=["POST"],
+                    name="basis_action",
+                )
 
-            path = payload.get("path")
-            store_name = payload.get("store_name")
-            args = payload.get("args", [])
-            kwargs = payload.get("kwargs", {})
 
-            # Resolve path using the precomputed VFS-to-Server module mapping in the Basis (Starlette) app registry
-            vfs_map = getattr(request.app.state, "vfs_to_server_module", {})
-            parts = path.split(".")
-            for i in range(len(parts) - 1, 0, -1):
-                prefix = ".".join(parts[:i])
-                if prefix in vfs_map:
-                    server_module = vfs_map[prefix]
-                    suffix = parts[i:]
-                    path = ".".join([server_module] + suffix)
-                    break
+    def include_plugins_projection(self, mount_path: str = "/basis/api/plugins"):
+        """Register the ``$plugins`` listing endpoint (``GET /basis/api/plugins``)."""
+        if self._has_route(path=mount_path):
+            return
 
-            func = _action_registry.get(path)
-            if not func:
-                # Try to import the module if it's not registered
-                if "." in path:
-                    module_name = path.rsplit(".", 2)[0]
-                    try:
-                        importlib.import_module(module_name)
-                        func = _action_registry.get(path)
-                    except ImportError:
-                        pass
-                
-            if not func:
-                raise HTTPException(status_code=404, detail=f"Action '{path}' not found")
+        async def _plugins_projection_handler(request: Request):
+            from fastapi.responses import JSONResponse
+            from basis.shared.plugin_registry import _plugin_listing
+            return JSONResponse(_plugin_listing(self))
 
-            instance = None
-            if store_name:
-                instance = Store._registry.get(store_name)
-                if not instance:
-                    # The per-request registry reset may have wiped the live instance;
-                    # fall back to the persistent store blueprint registry and rebuild it.
-                    instance = Store.reinstantiate(store_name)
-                    if instance is not None:
-                        Store._registry[store_name] = instance
-                if not instance:
-                    raise HTTPException(status_code=404, detail=f"Store '{store_name}' not found")
-
-            try:
-                # Execute the action
-                if instance:
-                    if asyncio.iscoroutinefunction(func):
-                        result = await func(instance, *args, **kwargs)
-                    else:
-                        result = func(instance, *args, **kwargs)
-                else:
-                    if asyncio.iscoroutinefunction(func):
-                        result = await func(*args, **kwargs)
-                    else:
-                        result = func(*args, **kwargs)
-
-                response_data = {"data": result}
-                if instance:
-                    response_data["new_state"] = instance.serialize()
-                
-                return JSONResponse(response_data)
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                logger.error(f"Error executing server action '{path}': {e}")
-                raise HTTPException(status_code=500, detail=str(e))
-
-        self.add_route(mount_path, _action_handler, methods=["POST"], name="basis_action")
-
-    def include_plugin_server_actions(self, mount_path: str = "/basis/api/plugin-action"):
-        """
-        Registers a generic RPC endpoint for plugin-scoped server actions.
-        """
-        has_action_route = False
-        has_plugins_registry_route = False
-        for r in self.routes:
-            if getattr(r, "path", None) == mount_path:
-                has_action_route = True
-            if getattr(r, "path", None) == "/basis/api/plugins-registry":
-                has_plugins_registry_route = True
-
-        if not has_action_route:
-            async def _plugin_action_handler(request: Request):
-                from fastapi import HTTPException
-                from fastapi.responses import JSONResponse
-                
-                try:
-                    payload = await request.json()
-                except Exception:
-                    raise HTTPException(status_code=400, detail="Invalid JSON payload")
-
-                plugin_name = payload.get("plugin_name")
-                action_name = payload.get("action_name")
-                store_name = payload.get("store_name")
-                args = payload.get("args", [])
-                kwargs = payload.get("kwargs", {})
-
-                plugin = None
-                for p in getattr(self, "_plugins", []):
-                    if p.name == plugin_name:
-                        plugin = p
-                        break
-
-                if not plugin:
-                    raise HTTPException(status_code=404, detail=f"Plugin '{plugin_name}' not found")
-
-                func = getattr(plugin, "actions", {}).get(action_name)
-                if not func:
-                    raise HTTPException(status_code=404, detail=f"Action '{action_name}' not found on plugin '{plugin_name}'")
-
-                instance = None
-                if store_name:
-                    from basis.shared.store import Store
-                    instance = Store._registry.get(store_name)
-                    if not instance:
-                        instance = Store.reinstantiate(store_name)
-                        if instance is not None:
-                            Store._registry[store_name] = instance
-                    if not instance:
-                        raise HTTPException(status_code=404, detail=f"Store '{store_name}' not found")
-
-                try:
-                    import asyncio
-                    if instance:
-                        if asyncio.iscoroutinefunction(func):
-                            result = await func(instance, *args, **kwargs)
-                        else:
-                            result = func(instance, *args, **kwargs)
-                    else:
-                        if asyncio.iscoroutinefunction(func):
-                            result = await func(*args, **kwargs)
-                        else:
-                            result = func(*args, **kwargs)
-
-                    response_data = {"data": result}
-                    if instance:
-                        response_data["new_state"] = instance.serialize()
-                    
-                    return JSONResponse(response_data)
-                except Exception as e:
-                    import traceback
-                    traceback.print_exc()
-                    logger.error(f"Error executing plugin server action '{plugin_name}.{action_name}': {e}")
-                    raise HTTPException(status_code=500, detail=str(e))
-
-            self.add_route(mount_path, _plugin_action_handler, methods=["POST"], name="basis_plugin_action")
-
-        if not has_plugins_registry_route:
-            async def _plugins_registry_handler(request: Request):
-                from fastapi.responses import JSONResponse
-                registry = {}
-                for p in getattr(self, "_plugins", []):
-                    registry[p.name] = list(getattr(p, "actions", {}).keys())
-                return JSONResponse(registry)
-
-            self.add_route("/basis/api/plugins-registry", _plugins_registry_handler, methods=["GET"], name="basis_plugins_registry")
+        self.add_route(mount_path, _plugins_projection_handler, methods=["GET"], name="basis_plugins_projection")
 
     def _auto_discover_dirs(self):
         """
@@ -1187,22 +1108,32 @@ class Basis(FastAPI, DBAppMixin):
         """
         Discover and register plugins from the local ``plugins/`` directory
         and from installed packages (via ``entry_points``).
+
+        Registration order follows ``requires`` dependencies (topological): a
+        discovered plugin is registered after the plugins it depends on, and a
+        missing required plugin (or a dependency cycle) fails loudly.
         """
         # Layer 1: Local plugins/ directory (always — inherently app-scoped)
-        for plugin in discover_local_plugins(self._app_dir, self._plugins_dir):
-            self.include_plugin(plugin)
+        local = discover_local_plugins(self._app_dir, self._plugins_dir)
 
         # Layer 2: Installed plugins via entry_points (with optional filtering)
+        installed = []
         if self._plugins_config is not False:
             allowlist = (
                 self._plugins_config
                 if isinstance(self._plugins_config, list)
                 else None
             )
-            for plugin in discover_installed_plugins(
+            installed = discover_installed_plugins(
                 allowlist=allowlist, blocklist=self._exclude_plugins
-            ):
-                self.include_plugin(plugin)
+            )
+
+        discovered = _topo_sort_plugins(
+            local + installed,
+            registered_names={p.name for p in self._plugins},
+        )
+        for plugin in discovered:
+            self.include_plugin(plugin)
 
     def _detect_app_directory(self) -> Path:
         """
@@ -1239,22 +1170,45 @@ class Basis(FastAPI, DBAppMixin):
         ----------
         plugin:
             A :class:`~basis.server.plugin.BasisPlugin` instance.
+
+        Returns
+        -------
+        PluginRegistration
+            The revertible registration record (used by ``remove_plugin`` /
+            ``disable_plugin``). Returns the existing record when the include is
+            a no-op.
         """
         if not hasattr(self, "_plugins"):
             self._plugins = []
 
-        # Idempotent: skip if already registered (by identity or name)
+        # Idempotent: skip if already registered (by identity or name).
         for existing in self._plugins:
             if existing is plugin or existing.name == plugin.name:
                 logger.debug(f"Plugin '{plugin.name}' already registered, skipping.")
-                return
+                return self._plugin_registrations.get(plugin.name)
+
+        # Dependency enforcement: a plugin whose required plugin is not yet
+        # registered fails loudly. Discovery topo-sorts, so this only bites
+        # manual include order — the error names exactly what to fix.
+        missing = [r for r in plugin.requires if r not in {p.name for p in self._plugins}]
+        if missing:
+            raise ValueError(
+                f"Plugin '{plugin.name}' requires {missing} which are not "
+                f"registered. Register its dependencies first "
+                f"(app.include_plugin(dep)) or check the plugins/ directory "
+                f"for the provider."
+            )
+
+        reg = PluginRegistration(plugin=plugin)
 
         # 1. Wire all HTTP routes declared on the plugin's router.
-        self.include_router(plugin.router)
+        reg.added_routes.extend(self._capture_added_routes(
+            lambda: self.include_router(plugin.router)
+        ))
 
         # 2. Serve static/component files so PyScript can load them.
         if plugin.static_dir and plugin.static_dir.exists():
-            self.include_components_dir(
+            reg.component_mount = self.include_components_dir(
                 plugin.static_mount,
                 str(plugin.static_dir),
                 name=plugin.name,
@@ -1278,21 +1232,35 @@ class Basis(FastAPI, DBAppMixin):
             try:
                 entry_module = f"/{Path(inspect.getfile(plugin.root_component)).name}"
             except (TypeError, OSError):
-                entry_module = "/main.py"
+                entry_module = "/basis/client/entrypoint.py"
             plugin_page = _synthesize_page(
                 plugin.root_component,
                 entry_module=entry_module,
             )
-            self.include_page(plugin.prefix or "/", page_cls=plugin_page)
+            reg.added_routes.extend(self._capture_added_routes(
+                lambda: self.include_page(plugin.prefix or "/", page_cls=plugin_page)
+            ))
 
         # 4. Register the plugin's models into the app's models set.
         if not hasattr(self, "models"):
             self.models = set()
         if hasattr(plugin, "models"):
-            self.models.update(plugin.models)
+            reg.models = set(plugin.models)
+            self.models.update(reg.models)
 
-        # 5. Track included plugins
+        # 4b. Make the plugin's server actions reachable by their canonical path
+        #     (module.qualname) in the global action registry, so the single RPC
+        #     endpoint dispatches them by path. Re-applied on re-enable.
+        reg.action_registry_entries = dict(
+            getattr(plugin, "_action_registry_entries", {})
+        )
+        from basis.shared.actions import _action_registry
+        for rpc_path, wrapper in reg.action_registry_entries.items():
+            _action_registry[rpc_path] = wrapper
+
+        # 5. Track included plugins + the revertible registration record.
         self._plugins.append(plugin)
+        self._plugin_registrations[plugin.name] = reg
 
         # 6. Call on_register lifecycle hook
         try:
@@ -1300,6 +1268,252 @@ class Basis(FastAPI, DBAppMixin):
         except Exception as e:
             logger.error(f"\u274c Plugin '{plugin.name}' on_register failed: {e}")
             raise
+
+        # 6b. Region contributions declared by the plugin (module scope and/or
+        #     on_register) are flushed into the app registry and recorded on the
+        #     registration so disable/remove can unwind them (ROADMAP-SPATIAL.md).
+        from basis.shared.region import _register_contribution
+        plugin._app = self
+        pending = list(getattr(plugin, "_region_items", []) or [])
+        reg.region_items = list(pending)
+        for contrib in pending:
+            contrib.seq = self._region_seq
+            self._region_seq += 1
+            _register_contribution(self, contrib)
+
+        # 7. HMR watcher must re-derive its file map for the new mount.
+        self._after_plugin_change()
+        return reg
+
+    def _capture_added_routes(self, fn) -> list:
+        """Run *fn* and return the route objects it added to the app (by identity)."""
+        before = {id(r) for r in self.routes}
+        fn()
+        return [r for r in self.routes if id(r) not in before]
+
+    def _refresh_plugin_registry(self):
+        """Keep the app-owned ``$plugins`` store's projection in sync after a
+        plugin is included/removed. (Per-request SSR instances refresh on app
+        attach; the app-owned instance refreshes here.)"""
+        plugins = getattr(self, "plugins", None)
+        if plugins is not None:
+            refresh = getattr(plugins, "_refresh_from_app", None)
+            if refresh is not None:
+                refresh()
+
+    def _after_plugin_change(self, rebuild_vfs: bool = False):
+        """Post-registration bookkeeping shared by include/remove/enable_plugin.
+
+        Rebuilds the client VFS manifest when the plugin's *files* changed
+        (remove/enable prune or restore the static mount), and always re-derives
+        the HMR file map, the ``$plugins`` projection and the plugin→importers
+        cache so they match the current plugin set.
+        """
+        if rebuild_vfs:
+            initialize_pyscript_registry(self)
+        self._hmr_map_dirty = True
+        self._refresh_plugin_registry()
+        self._invalidate_plugin_importers()
+
+    def _plugin_importers(self) -> dict[str, list[str]]:
+        """Map each enabled plugin to the client modules that import it directly.
+
+        AST-scans every served component file (app ``components/``/``stores/``
+        and plugin static dirs) for imports of plugin-owned packages. A plain
+        list of direct importers per plugin — no transitive closure: a plugin
+        is *essential* (pinned) iff any enabled consumer imports it, and the
+        importer names give the reason surfaced when unloading is refused.
+
+        Only plugins with a resolvable package path (a real package under a
+        conventional layout) are tracked; everything else is treated as
+        optional/disableable.
+
+        The result is cached (``_plugin_importers_cache``): warmed once at app
+        load alongside the client VFS manifest, and invalidated whenever the
+        plugin set or a component-dir mount changes — so remove/disable is O(1)
+        instead of re-scanning every served file each time.
+        """
+        cached = getattr(self, "_plugin_importers_cache", None)
+        if cached is not None:
+            return cached
+
+        from basis.server.ast_utils import collect_imported_modules
+
+        # plugin name -> canonical package prefix it owns (e.g. "jotter.plugins").
+        plugin_packages: dict[str, str] = {}
+        for name, reg in self._plugin_registrations.items():
+            if reg.disposed:
+                continue
+            mount = reg.component_mount
+            if mount is None:
+                continue
+            pkg = _resolve_canonical_package(Path(mount.app.directory).absolute())
+            if pkg:
+                plugin_packages[name] = pkg
+        if not plugin_packages:
+            self._plugin_importers_cache = {}
+            return {}
+
+        # consumer module name -> source file (every served component dir).
+        consumers: dict[str, Path] = {}
+        for m in self._component_routes:
+            watch_dir = Path(m.app.directory).absolute()
+            if not watch_dir.exists():
+                continue
+            for f in watch_dir.rglob("*.py"):
+                if "__pycache__" in f.parts:
+                    continue
+                module_name = mount_to_module_name(m.path, f.relative_to(watch_dir))
+                if module_name is not None:
+                    consumers[module_name] = f
+
+        importers: dict[str, list[str]] = {}
+        for module_name, file in consumers.items():
+            # A plugin's own package files are not consumers of itself.
+            own_plugin = None
+            for pname, pkg in plugin_packages.items():
+                if module_name == pkg or module_name.startswith(pkg + "."):
+                    own_plugin = pname
+                    break
+            try:
+                source = file.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for imported in collect_imported_modules(source):
+                for pname, pkg in plugin_packages.items():
+                    if pname == own_plugin:
+                        continue
+                    if imported == pkg or imported.startswith(pkg + "."):
+                        importers.setdefault(pname, [])
+                        if module_name not in importers[pname]:
+                            importers[pname].append(module_name)
+        self._plugin_importers_cache = importers
+        return importers
+
+    def _invalidate_plugin_importers(self):
+        """Drop the cached plugin→importers map after a structural change.
+
+        Called by plugin include/remove/enable and by ``include_components_dir``
+        (the consumer-file set changed), so the next ``_plugin_importers()``
+        recomputes from the current mounts.
+        """
+        if hasattr(self, "_plugin_importers_cache"):
+            self._plugin_importers_cache = None
+
+    async def remove_plugin(self, name_or_plugin, *, force: bool = False) -> bool:
+        """
+        Unmount a registered plugin and unwind every registration it made.
+
+        Reverts the plugin's routes, component mount (from both the app route
+        list and the class-level ``_component_routes``), models, and its action
+        surface (``_plugins``), rebuilds the PyScript VFS manifest + HMR file
+        map, resets the OpenAPI cache, and runs the plugin's ``on_shutdown``
+        hook. The plugin object is kept (as a disposed registration) so
+        :meth:`enable_plugin` can re-register it later.
+
+        Refuses (returns ``False``) when a client module imports the plugin
+        directly — unloading it would prune the client VFS and break the next
+        page load. Pass ``force=True`` to override (the client bundle will then
+        fail to import the plugin on the next load).
+
+        Returns ``True`` if a plugin was unmounted, ``False`` if it was not
+        registered (or already unmounted, or refused as imported).
+        """
+        name = name_or_plugin if isinstance(name_or_plugin, str) else getattr(name_or_plugin, "name", None)
+        if not name:
+            return False
+        reg = self._plugin_registrations.get(name)
+        if reg is None or reg.disposed:
+            return False
+        if not force:
+            pinned = self._plugin_importers().get(name)
+            if pinned:
+                logger.warning(
+                    f"⚠️  Plugin '{name}' is imported by "
+                    f"{', '.join(sorted(pinned))} — refusing to unload. Remove "
+                    f"the import or pass force=True."
+                )
+                return False
+        reg.disposed = True
+
+        # 1. Routes added by the plugin's router + synthesized page.
+        for r in reg.added_routes:
+            try:
+                self.routes.remove(r)
+            except ValueError:
+                pass
+
+        # 2. Component mount — lives in BOTH the app route list and the
+        #    class-level _component_routes (shared across Basis instances).
+        if reg.component_mount is not None:
+            try:
+                self.routes.remove(reg.component_mount)
+            except ValueError:
+                pass
+            try:
+                self._component_routes.remove(reg.component_mount)
+            except ValueError:
+                pass
+
+        # 3. Models contributed by the plugin.
+        if hasattr(self, "models") and reg.models:
+            self.models -= reg.models
+
+        # 3b. Region contributions contributed by the plugin.
+        if getattr(reg, "region_items", None):
+            from basis.shared.region import _unregister_contribution
+            for contrib in reg.region_items:
+                _unregister_contribution(self, contrib)
+            reg.region_items = []
+
+        # 4. Remove from _plugins, and unregister its actions from the global
+        #    registry so a disabled plugin's actions are no longer callable.
+        if reg.plugin in self._plugins:
+            self._plugins.remove(reg.plugin)
+        from basis.shared.actions import _action_registry
+        for rpc_path in reg.action_registry_entries:
+            _action_registry.pop(rpc_path, None)
+
+        # 5. OpenAPI cache (routes changed).
+        if hasattr(self, "openapi_schema"):
+            self.openapi_schema = None
+
+        # 6. Lifecycle teardown, then post-removal bookkeeping (VFS prune + HMR map
+        #    + $plugins projection + importer cache).
+        try:
+            await reg.plugin.on_shutdown(self)
+        except Exception as e:
+            logger.warning(f"⚠️  Plugin '{name}' on_shutdown failed during remove: {e}")
+
+        self._after_plugin_change(rebuild_vfs=True)
+        logger.info(f"🔌 Removed plugin '{name}' (routes, mount, models, actions unwound).")
+        return True
+
+    async def disable_plugin(self, name, *, force: bool = False) -> bool:
+        """Unmount a plugin, keeping it re-enableable (mirrors Cordis ``disabled: true``).
+
+        Refuses (returns ``False``) when the plugin is imported by a client
+        module unless ``force=True`` — same guard as :meth:`remove_plugin`.
+        """
+        return await self.remove_plugin(name, force=force)
+
+    async def enable_plugin(self, name: str) -> bool:
+        """Re-mount a previously disabled plugin (by name) and run its startup hook."""
+        reg = self._plugin_registrations.get(name)
+        if reg is None or not reg.disposed:
+            return False
+        plugin = reg.plugin
+        self.include_plugin(plugin)  # fresh registration replaces the disposed record
+        # Re-include the plugin's static mount in the PyScript VFS manifest
+        # (mirrors remove_plugin's prune). Without this, a disable→enable cycle
+        # leaves the manifest pruned and the client can no longer import the
+        # plugin's modules on the next page load (broken SSR boot).
+        self._after_plugin_change(rebuild_vfs=True)
+        try:
+            await plugin.on_startup(self)
+        except Exception as e:
+            logger.warning(f"⚠️  Plugin '{name}' on_startup failed after re-enable: {e}")
+        return True
 
     def page(
         self,
@@ -1391,34 +1605,3 @@ class Basis(FastAPI, DBAppMixin):
             self.include_components_dir("/", str(app_dir), name="app_root")
 
         return component_cls
-
-    def entrypoint(self, component_cls=None, **kwargs):
-        """Deprecated alias for :meth:`page`."""
-        return self.page(component_cls, **kwargs)
-
-    def serve(self, component_cls, port=8000, **kwargs):
-        """
-        Bootstrap, register, and run a Basis app with HMR.
-        """
-        self.component(component_cls, **kwargs)
-
-        # Print startup info
-        import inspect
-        from pathlib import Path
-        try:
-            component_file = Path(inspect.getfile(component_cls)).absolute()
-        except:
-            component_file = Path.cwd()
-
-        print(f"\n🚀 Basis app starting at http://localhost:{port}")
-        print(f"📦 Entry module: /{component_file.name}")
-        print(f"🏠 App directory: {component_file.parent}\n")
-
-        self.run_without_hmr(port=port)
-        
-
-class BasisAPIRouter(APIRouter):
-    def component(self, cls):
-
-        print(f"declaring {cls} is a component with a filename {cls.__file__}!")
-        return cls

@@ -1,0 +1,106 @@
+import importlib
+import json
+import sys
+
+from pyscript import document
+
+from basis.client.errors import install_error_sink
+from basis.shared.hmr import start_hmr
+from basis.shared.store import Store
+
+# Structured binding-error capture: guarantees DOM safety (no "[Error: ...]"
+# in rendered output), replays SSR errors, and creates the dev overlay.
+# Installed BEFORE any component module is imported or mounted.
+install_error_sink()
+
+print("[Basis] Running Python version:", sys.version)
+
+# The page shell carries <meta name="basis-render-mode" content="ssr"> on
+# server-rendered pages (a reactive template binding); "csr" (the default)
+# selects the plain client mount.
+render_meta = document.querySelector('meta[name="basis-render-mode"]')
+is_ssr = (
+    render_meta is not None
+    and getattr(render_meta, "getAttribute", lambda _: "")("content") == "ssr"
+)
+print(f"[Basis] Zero-Config Entrypoint started (mode: {'SSR' if is_ssr else 'CSR'}).")
+
+# ── Data plane: every store exists before any component module is imported ──
+
+# 1. Framework control-plane stores ($plugins, $regions). Framework
+#    infrastructure boots before app/userland stores so components can bind to
+#    them reactively from the first render (hydrated from #basis-initial-state).
+try:
+    from basis.shared.plugin_registry import ensure_plugin_registry
+    from basis.shared.region import ensure_region_registry
+
+    ensure_plugin_registry()
+    ensure_region_registry()
+except Exception as e:
+    print(f"[Basis] Error initializing framework stores: {e}")
+
+# 2. App-level stores (stores/). Their module-scope instances self-hydrate from
+# #basis-initial-state, so Page.stores name-lists and default-to-all resolution
+# find them in Store._registry.
+store_imports_element = document.getElementById("basis-store-imports")
+if store_imports_element:
+    try:
+        store_modules = json.loads(store_imports_element.innerText)
+        print(f"[Basis] Importing store modules: {store_modules}")
+        for store_module in store_modules:
+            try:
+                importlib.import_module(store_module)
+                print(f"[Basis] Loaded store module: {store_module}")
+            except Exception as e:
+                print(f"[Basis] Error importing store module {store_module}: {e}")
+    except Exception as e:
+        print(f"[Basis] Error parsing store imports: {e}")
+
+# 3. Page-level stores (the page's explicit subset, emitted by the server).
+#    Resolve them by name before importing components. Stores declared in the
+#    page module itself have no blueprint yet and are created when that module
+#    imports (still before mount), so skip pre-resolution for them.
+page_store_element = document.getElementById("basis-page-stores")
+if page_store_element:
+    try:
+        page_store_names = json.loads(page_store_element.innerText)
+        print(f"[Basis] Resolving page stores: {page_store_names}")
+        for name in page_store_names:
+            try:
+                if name not in Store._registry and name in Store.all_names():
+                    Store.resolve(name)
+                    print(f"[Basis] Loaded page store: {name}")
+            except Exception as e:
+                print(f"[Basis] Error loading page store {name}: {e}")
+    except Exception as e:
+        print(f"[Basis] Error parsing page stores: {e}")
+
+# ── View plane: import the page component and mount it ──
+imports_element = document.getElementById("basis-entrypoint-imports")
+if imports_element:
+    try:
+        modules_dict = json.loads(imports_element.innerText)
+        print(f"[Basis] Importing component modules: {modules_dict}")
+        for component_name, module_path in modules_dict.items():
+            try:
+                module = importlib.import_module(module_path)
+                print(f"[Basis] Loaded: {module_path}")
+                page_cls = getattr(module, component_name)
+                root_component = getattr(page_cls, "root_component", None)
+                if root_component is not None:
+                    if is_ssr:
+                        root_component.mount_app_ssr(
+                            document.body.querySelector("#basis-ssr-root")
+                        )
+                    else:
+                        root_component.mount_app(document.body)
+            except Exception as e:
+                print(f"[Basis] Error loading {module_path}: {e}")
+    except Exception as e:
+        print(f"[Basis] Error parsing entrypoint imports: {e}")
+
+# Start HMR — live hot-swap of component files (.py/.html/.css) during development.
+try:
+    start_hmr()
+except Exception as e:
+    print(f"[Basis] HMR service could not be started: {e}")

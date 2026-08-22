@@ -22,12 +22,19 @@ from basis.shared.hmr import HMRClient
 
 @pytest.fixture(autouse=True)
 def _clean_registries():
+    # ``BaseComponent._registry`` is a process-global tag→class map; snapshot and
+    # restore it so clearing it here (to simulate a fresh HMR state) does not
+    # wipe custom-element registrations (e.g. ``ui-region``) for later modules.
+    saved_registry = dict(BaseComponent._registry)
+    saved_live_instances = BaseComponent._live_instances
     BaseComponent._registry.clear()
     BaseComponent._instance_registry.clear()
-    BaseComponent._live_instances = type(BaseComponent._live_instances)()
+    BaseComponent._live_instances = type(saved_live_instances)()
     yield
     BaseComponent._registry.clear()
+    BaseComponent._registry.update(saved_registry)
     BaseComponent._instance_registry.clear()
+    BaseComponent._live_instances = saved_live_instances
 
 
 @pytest.fixture()

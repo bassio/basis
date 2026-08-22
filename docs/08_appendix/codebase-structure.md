@@ -14,13 +14,13 @@ src/basis/
 │   └── theme.py          # ThemeStore (reactive design tokens)
 ├── client/               # Browser-side (PyScript) runtime
 │   ├── component.py      # Client Component: hydration, mount_app / mount_app_ssr
-│   ├── entrypoint_ssr.py # PyScript entry for SSR-hydrated pages
-│   ├── entrypoint_csr.py # PyScript entry for CSR-only pages
-│   ├── actions.py        # Server-action / plugin-action RPC proxies
+│   ├── entrypoint.py     # single PyScript entry (SSR-hydrated or CSR mount)
+│   ├── actions.py        # RPC client — call_action by canonical path
 │   ├── plugin.py         # Client-side BasisPlugin shim
 │   └── plugins.py        # Client-side plugin helpers
 ├── server/               # FastAPI-side runtime
-│   ├── app.py            # Basis (FastAPI subclass): bootstrap, page/include_page, RPC endpoints
+│   ├── app.py            # Basis (FastAPI subclass): bootstrap, page/include_page, RPC registration
+│   ├── rpc.py            # RPC pipeline: canonical-path dispatch, store binding, response/error handling
 │   ├── ssr.py            # SSR pipeline (render_page_ssr, hydration IDs)
 │   ├── tree_builder.py   # HTML → Element tree builder (r:0:1 path IDs)
 │   ├── ast_utils.py      # @server_action AST body stripper

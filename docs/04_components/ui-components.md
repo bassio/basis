@@ -443,6 +443,25 @@ It exposes `dark_mode` plus design-token attributes — `bg_primary`, `bg_second
 
 ---
 
+## 23. Plugin Manager (`<ui-plugin-manager>`)
+
+A live plugin manager bound to the app's `$plugins` registry store. It lists every registered
+plugin (state, prefix, action count, dependencies) and provides a per-plugin toggle that calls
+the store's `disable(name)` / `enable(name)` server actions — so a plugin is actually
+unmounted/remounted server-side (routes, mounts, models, actions) and the panel re-renders from
+the authoritative `new_state`.
+
+```python
+from basis.ui.plugin_manager import PluginManager
+```
+
+Use it in a template as `<ui-plugin-manager></ui-plugin-manager>`. It reads `$plugins.items`
+reactively (no component state of its own). Disabled plugins stay listed with `state: "disabled"`
+so they can be re-enabled. The `$plugins` store is framework-provided (created at bootstrap,
+hydrated into `#basis-initial-state`), so no wiring is needed.
+
+---
+
 ## Using UI Components in Custom Components
 
 Because components map to HTML Custom Elements, you can use `basis.ui` tags directly inside your component HTML templates:

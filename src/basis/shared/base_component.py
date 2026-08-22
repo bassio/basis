@@ -286,6 +286,8 @@ class BaseComponent(ReactiveObject):
 
         new_instance.__init_fields__()
 
+        new_instance.on_mounted()
+
         #with new_instance.refrain() as refrained:
         #    for k, v in kwargs.items():
         #        setattr(refrained, k, v)
@@ -306,6 +308,14 @@ class BaseComponent(ReactiveObject):
         else:
             self.add_binding(SelfBinding(component_instance=self, node=node))
         self.__dict__['_element'] = node
+
+    def on_mounted(self):
+        """Lifecycle hook called once this component's template is bound and its
+        initial effects have run (end of ``initialize``, on both server and
+        client). Override for imperative post-mount setup — e.g. dynamically
+        mounting children into ``__element__`` (the region primitive).
+        """
+        pass
 
     def add_binding(self, binding):
 

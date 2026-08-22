@@ -47,8 +47,8 @@ Your reactive components mount inside `<div id="basis-ssr-root">` during both se
 | :--- | :--- | :--- | :--- |
 | `title` | `str` | `"Basis App"` | Browser tab title. |
 | `root_component` | `Component` | `None` | The root component mounted inside the page (the single reactive tree). `None` = abstract/static shell (no reactive root). |
-| `stores` | `list[Store \| str]` | `[]` | Page-level stores registered on the client at boot and serialized into initial state. May be a list of store *instances* (kept for backwards compatibility), a list of store *names* (`["app_state", ...]`), or **empty** (`[]` = all auto-discovered stores from `stores/`). |
-| `entry_module` | `str` | `"/main.py"` | URL path to the Python file PyScript executes on load. |
+| `stores` | `list[str]` | `[]` | Page-level stores registered on the client at boot and serialized into initial state. A list of store *names* (`["app_state", ...]`), or **empty** (`[]` = all auto-discovered stores from `stores/`). Stores are instantiated at module scope in `stores/` and referenced by name. |
+| `entry_module` | `str` | `"/basis/client/entrypoint.py"` | URL path to the Python file PyScript executes on load. |
 | `pyscript_src` | `str` | `"/pyscript"` | Base path for the (offline) PyScript bundle. |
 | `pyscript_json_url` | `str` | `"/pyscript.json"` | URL of the manifest PyScript uses to resolve imports. |
 | `initial_state_json` | `str` | `"{}"` | Serialized store state injected during SSR; read by the client at boot. |

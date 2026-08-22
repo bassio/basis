@@ -1,84 +1,66 @@
 import json
 from typing import Any
 
-async def call_server_action(path: str, store_name: str | None, *args, **kwargs) -> Any:
-    """
-    Makes an HTTP POST request to the server to execute an action.
-    """
-    # Use pyfetch from pyodide.http (available in PyScript)
+
+async def _post_rpc(payload: dict) -> Any:
+    """POST an RPC payload to ``/basis/api/action`` and apply any ``new_state``
+    to the target store."""
     try:
         from pyodide.http import pyfetch
     except ImportError:
         # Fallback for non-PyScript environments (e.g. tests)
-        print(f"Warning: pyfetch not available. Mocking RPC call to {path}")
+        print("Warning: pyfetch not available. Mocking RPC call to /basis/api/action")
         return None
 
-    payload = {
-        "path": path,
-        "store_name": store_name,
-        "args": list(args),
-        "kwargs": kwargs
-    }
-    
     response = await pyfetch(
         "/basis/api/action",
         method="POST",
         headers={"Content-Type": "application/json"},
-        body=json.dumps(payload)
+        body=json.dumps(payload),
     )
-    
+
     if not response.ok:
         error_text = await response.string()
-        raise Exception(f"Server action '{path}' failed with status {response.status}: {error_text}")
-        
+        raise Exception(
+            f"Server action failed with status {response.status}: {error_text}"
+        )
+
     result = await response.json()
-    
+
     # Handle state synchronization
-    if "new_state" in result and store_name:
+    if "new_state" in result and payload.get("store_name"):
         from basis.shared.store import Store
-        store = Store._registry.get(store_name)
+        store = Store._registry.get(payload["store_name"])
         if store:
             store.update(result["new_state"])
-            
+
     return result.get("data")
 
 
-async def call_plugin_server_action(plugin_name: str, action_name: str, store_name: str | None, *args, **kwargs) -> Any:
-    """
-    Makes an HTTP POST request to the server to execute a plugin-scoped action.
-    """
-    try:
-        from pyodide.http import pyfetch
-    except ImportError:
-        print(f"Warning: pyfetch not available. Mocking RPC call to plugin {plugin_name} action {action_name}")
-        return None
+async def call_action(
+    path,
+    store_name: str | None = None,
+    *args,
+    action_name: str | None = None,
+    plugin_name: str | None = None,
+    **kwargs,
+) -> Any:
+    """Call a server action from the client by its canonical path.
 
+    ``path`` is the canonical ``module.qualname`` identity for both
+    ``@server_action`` and ``@plugin.action`` (the latter registers under the
+    same rule). ``store_name`` is sent when the action is bound to a store so
+    its ``new_state`` is applied back to that store on the client.
+    ``action_name`` / ``plugin_name`` are optional self-describing metadata.
+    """
     payload = {
-        "plugin_name": plugin_name,
-        "action_name": action_name,
+        "path": path,
         "store_name": store_name,
         "args": list(args),
-        "kwargs": kwargs
+        "kwargs": kwargs,
     }
-    
-    response = await pyfetch(
-        "/basis/api/plugin-action",
-        method="POST",
-        headers={"Content-Type": "application/json"},
-        body=json.dumps(payload)
-    )
-    
-    if not response.ok:
-        error_text = await response.string()
-        raise Exception(f"Plugin server action '{plugin_name}.{action_name}' failed with status {response.status}: {error_text}")
-        
-    result = await response.json()
-    
-    # Handle state synchronization
-    if "new_state" in result and store_name:
-        from basis.shared.store import Store
-        store = Store._registry.get(store_name)
-        if store:
-            store.update(result["new_state"])
-            
-    return result.get("data")
+    if action_name:
+        payload["action_name"] = action_name
+    if plugin_name:
+        payload["plugin_name"] = plugin_name
+    return await _post_rpc(payload)

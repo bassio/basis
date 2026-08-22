@@ -10,7 +10,7 @@ files pushed by the file watcher:
                module, then hot-swap every live instance to the new class
 
 ``start_hmr()`` is idempotent and should be called once from the client
-entrypoints (``entrypoint_csr.py`` / ``entrypoint_ssr.py``).
+entrypoint (``entrypoint.py``).
 """
 
 import importlib

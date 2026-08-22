@@ -46,6 +46,45 @@ def _format_config(config: dict) -> str:
     return f"({', '.join(parts)})"
 
 
+def attach_app_to_store(store, app) -> None:
+    """Attach the owning app to an app-bound store (``_requires_app``) and
+    refresh its derived state (e.g. the ``$plugins`` listing).
+
+    No-op for stores that don't opt in (no ``_requires_app``) or already have
+    the app attached. Shared by the SSR/CSR serializers and both RPC handlers so
+    every store-rebuild path (including ``Store.resolve`` reinstantiation) keeps
+    ``_app`` in sync before ``serialize()``/listing is read.
+    """
+    if store is None or app is None:
+        return
+    if getattr(type(store), "_requires_app", False) and getattr(store, "_app", None) is None:
+        store.__dict__["_app"] = app
+        refresh = getattr(store, "_refresh_from_app", None)
+        if refresh is not None:
+            refresh()
+
+
+# Framework-provided control-plane stores. These are always serialized into
+# ``#basis-initial-state`` so they hydrate on every page — on SSR they are added
+# to the app's ``_global_stores``; on CSR they are unioned into the page's
+# serialized set regardless of the page's ``Page.stores`` subset.
+FRAMEWORK_STORE_NAMES = ("plugins", "regions")
+
+
+def ensure_store(name: str, store_cls: type) -> Store:
+    """Return the live store registered under *name*, creating it if absent.
+
+    The generic "ensure this framework store exists" primitive behind
+    ``ensure_plugin_registry`` / ``ensure_region_registry`` (and any future
+    framework-provided control-plane store). Idempotent: an existing instance
+    in ``Store._registry`` is returned as-is.
+    """
+    existing = Store._registry.get(name)
+    if existing is not None:
+        return existing
+    return store_cls(name)
+
+
 class Store(ReactiveObject):
     _registry = ContextVarProxyDict("store_registry")
     _pending_subscriptions = ContextVarProxyDict("store_pending_subscriptions")

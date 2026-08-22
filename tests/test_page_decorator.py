@@ -8,12 +8,22 @@ Tests for the Page / root-component API:
 * ``include_page`` requires a Page subclass.
 * ``Page`` defaults: ``root_component = None`` (abstract/static shell), ``stores = []``.
 * Synthesized pages are NOT emitted into ``#basis-entrypoint-imports``.
+* SSR pages carry a ``<meta name="basis-render" content="ssr">`` marker (the
+  unified client entrypoint dispatches on it); a strict page store subset is
+  emitted as ``#basis-page-stores`` and framework control-plane stores
+  (``$plugins``/``$regions``) are always serialized on CSR.
 """
+import json
+import re
+
 import pytest
+from fastapi import Request
+from fastapi.responses import HTMLResponse
 from fastapi.testclient import TestClient
 
 from basis.server.app import Basis
 from basis.shared.component import Component
+from basis.shared.store import Store
 
 
 def test_page_decorator_serves_at_root_by_default():
@@ -193,3 +203,132 @@ def test_synthesized_page_not_in_entrypoint_imports():
     # The synthesized class is server-side shell config only — its (unimportable)
     # name must not leak into #basis-entrypoint-imports.
     assert "HomePage" not in resp.text
+
+
+def test_ssr_page_emits_render_mode_marker():
+    from basis.shared.page import Page
+
+    app = Basis()
+    app.bootstrap()
+
+    class Root(Component):
+        """<div>hi</div>"""
+
+    class MyPage(Page):
+        root_component = Root
+        entry_module = "/test_root.py"
+
+    app.include_page("/ssr", page_cls=MyPage)
+
+    client = TestClient(app)
+    resp = client.get("/ssr")
+    assert resp.status_code == 200
+    # The render-mode meta is a reactive template binding on the Page shell;
+    # render_page_ssr stamps it "ssr" so the unified client entrypoint picks
+    # the SSR hydration mount. (Void elements self-close.)
+    assert '<meta name="basis-render-mode" content="ssr" />' in resp.text
+
+
+def test_csr_page_renders_render_mode_csr():
+    from basis.shared.page import Page
+
+    app = Basis()
+    app.bootstrap()
+
+    class Root(Component):
+        """<div>hi</div>"""
+
+    class MyPage(Page):
+        root_component = Root
+        entry_module = "/test_root.py"
+
+    @app.get("/csr")
+    async def csr(request: Request):
+        page_instance = MyPage.load()
+        return HTMLResponse(page_instance.render_full_page(request=request))
+
+    client = TestClient(app)
+    resp = client.get("/csr")
+    assert resp.status_code == 200
+    # CSR keeps the class default — the client treats anything but "ssr" as a
+    # plain client mount.
+    assert '<meta name="basis-render-mode" content="csr" />' in resp.text
+
+
+def test_page_subset_emits_page_store_names_for_client():
+    from basis.shared.page import Page
+
+    app = Basis()
+    app.bootstrap()
+
+    class S(Store):
+        def __init__(self, name):
+            super().__init__(name)
+            self.v = 1
+
+    S("page_subset_store")
+
+    class Root(Component):
+        """<div>hi</div>"""
+
+    class MyPage(Page):
+        root_component = Root
+        stores = ["page_subset_store"]
+        entry_module = "/test_root.py"
+
+    app.include_page("/p", page_cls=MyPage)
+
+    client = TestClient(app)
+    resp = client.get("/p")
+    assert resp.status_code == 200
+    match = re.search(
+        r'<script id="basis-page-stores"[^>]*>(.*?)</script>', resp.text, re.DOTALL
+    )
+    assert match, "basis-page-stores script not found"
+    assert json.loads(match.group(1)) == ["page_subset_store"]
+
+
+def test_csr_page_always_serializes_framework_stores_with_strict_subset():
+    from basis.shared.page import Page
+
+    app = Basis()
+    app.bootstrap()
+
+    class S(Store):
+        def __init__(self, name):
+            super().__init__(name)
+            self.v = 1
+
+    S("csr_subset_store")
+
+    class Root(Component):
+        """<div>hi</div>"""
+
+    class MyPage(Page):
+        root_component = Root
+        stores = ["csr_subset_store"]
+        entry_module = "/test_root.py"
+
+    @app.get("/csr")
+    async def csr(request: Request):
+        page_instance = MyPage.load()
+        return HTMLResponse(page_instance.render_full_page(request=request))
+
+    client = TestClient(app)
+    resp = client.get("/csr")
+    assert resp.status_code == 200
+
+    match = re.search(
+        r'<script id="basis-initial-state"[^>]*>(.*?)</script>',
+        resp.text,
+        re.DOTALL,
+    )
+    assert match, "basis-initial-state script not found"
+    state = json.loads(match.group(1))
+
+    # The page's explicit subset is serialized...
+    assert "csr_subset_store" in state
+    # ...and framework control-plane stores hydrate even though the page did
+    # not list them (they must exist on every page, not just default-all ones).
+    assert "plugins" in state
+    assert "regions" in state

@@ -94,7 +94,7 @@ Initializes framework-level assets and endpoints in a single call:
 2. **Manifest**: Registers `/pyscript.json` providing PyScript with the VFS file map and client module declarations.
 3. **Runtime Libraries**: Mounts `basis.client` and `basis.shared`.
 4. **UI Components**: Mounts the `basis.ui` component library at `/basis/ui/`.
-5. **RPC Endpoint**: Registers `/basis/api/action` for global server actions and `/basis/api/plugin-action` for plugin actions.
+5. **RPC Endpoint**: Registers `/basis/api/action` — the single endpoint dispatching both `@server_action` and `@plugin.action` by their canonical `module.qualname` path.
 6. **Conventional Directory Auto-Discovery**: mounts `components/` and `stores/` at their package paths (isomorphic VFS namespace) and imports `stores/` modules so their module-scope store instances register.
 7. **Plugin Auto-Discovery**: Scans `plugins/` directory and `basis.plugins` entry points.
 
@@ -139,7 +139,7 @@ app.include_page("/admin", page_cls=MyAdminPage)
 @app.include_page("/admin")
 class AdminPage(Page):
     root_component = Admin
-    stores = [AppState("app_state"), RouterStore("router")]
+    stores = ["app_state", "router"]   # store names, instantiated in stores/
 ```
 
 ---

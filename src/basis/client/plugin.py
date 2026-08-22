@@ -1,7 +1,37 @@
+import keyword
 from functools import wraps
 from typing import Any, cast, Callable, TypeVar
 
 T = TypeVar("T", bound=Callable[..., Any])
+
+
+def _is_valid_plugin_name(name: str) -> bool:
+    return name.isidentifier() and not keyword.iskeyword(name)
+
+
+def _sanitize_plugin_name(value: str) -> str:
+    out = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in value)
+    if not out:
+        out = "plugin"
+    if out[0].isdigit():
+        out = "_" + out
+    if keyword.iskeyword(out):
+        out += "_"
+    return out
+
+
+def _resolve_plugin_name(name: str | None, prefix: str) -> str:
+    if name is not None:
+        if not _is_valid_plugin_name(name):
+            raise ValueError(
+                f"Plugin name {name!r} must be a valid Python identifier "
+                f"(no spaces, hyphens, or leading digits, and not a Python "
+                f"keyword) — it is used as $plugins.<name> and the client "
+                f"proxy attribute."
+            )
+        return name
+    return _sanitize_plugin_name(prefix.strip("/").replace("/", "_") or "plugin")
+
 
 class APIRouter:
     def __init__(self, *args, **kwargs):
@@ -62,10 +92,11 @@ class BasisPlugin(ModelRegistryMixin):
         self.prefix = prefix.rstrip("/")
         self.static_dir = static_dir
         self.static_mount = static_mount or self.prefix
-        self.name = name or self.prefix.strip("/").replace("/", "_") or "plugin"
+        self.name = _resolve_plugin_name(name, self.prefix)
         self.requires = requires or []
         self.models = set()
         self._settings = {}
+        self._region_items = []
         self.router = APIRouter(prefix=self.prefix, tags=tags or [])
 
     def action(self, func_or_name: T | str | None = None, name: str | None = None) -> Any:
@@ -76,9 +107,13 @@ class BasisPlugin(ModelRegistryMixin):
             if not action_name:
                 action_name = func.__name__
 
+            # Canonical RPC path — the same module.qualname rule as @server_action,
+            # so client and server resolve the action identically.
+            canonical_path = f"{func.__module__}.{func.__qualname__}"
+
             @wraps(func)
             async def wrapper(*args, **kwargs):
-                from basis.client.actions import call_plugin_server_action
+                from basis.client.actions import call_action
 
                 store_name = None
                 from basis.shared.store import Store
@@ -86,8 +121,14 @@ class BasisPlugin(ModelRegistryMixin):
                     store_name = args[0].get_store_name()
                     args = args[1:]
 
-                return await call_plugin_server_action(self.name, action_name, store_name, *args, **kwargs)
+                return await call_action(
+                    canonical_path, store_name, *args,
+                    action_name=action_name, plugin_name=self.name, **kwargs,
+                )
 
+            # Expose the action as an attribute so `await plugin.<action>()` works
+            # on the client (the plugin object mirrors the server shim).
+            setattr(self, action_name, wrapper)
             return cast(T, wrapper)
 
         if callable(func_or_name):
@@ -96,6 +137,45 @@ class BasisPlugin(ModelRegistryMixin):
 
     def get(self, path: str, **kwargs):
         return lambda f: f
+
+    def add_to_region(self, region, component_cls, *, props=None, order=None, position="end"):
+        """Client-side mirror of :meth:`basis.server.plugin.BasisPlugin.add_to_region`.
+
+        No app exists client-side: the contribution is mirrored into the
+        ``$regions`` store if present (an ephemeral runtime add — the SSR/CSR
+        initial state is authoritative on boot). Returns a ``RegionHandle``.
+        """
+        from basis.shared.region import (
+            MIN_ORDER,
+            RegionContribution,
+            RegionHandle,
+        )
+        if position == "start" and order is None:
+            order = MIN_ORDER
+        contrib = RegionContribution(
+            region=region,
+            component_cls=component_cls,
+            props=props or {},
+            order=order,
+            owner=self.name,
+        )
+        if not hasattr(self, "_region_items"):
+            self._region_items = []
+        self._region_items.append(contrib)
+        try:
+            from basis.shared.store import Store
+            store = Store._registry.get("regions")
+            if store is not None:
+                store.add_local(region, contrib.cls_path, props=props or {}, order=order)
+        except Exception:
+            pass
+        return RegionHandle(contrib, app=None, owner=self)
+
+    def region(self, name, **kwargs):
+        def decorator(cls):
+            self.add_to_region(name, cls, **kwargs)
+            return cls
+        return decorator
 
     def post(self, path: str, **kwargs):
         return lambda f: f

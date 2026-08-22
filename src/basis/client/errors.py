@@ -3,7 +3,7 @@ basis/client/errors.py
 ----------------------
 Client-side structured error reporting.
 
-Installed once by the entrypoints (``entrypoint_csr.py`` / ``entrypoint_ssr.py``)
+Installed once by the client entrypoint (``entrypoint.py``)
 via :func:`install_error_sink`.  The sink guarantees DOM safety (evaluation
 helpers return an empty value rather than a raw ``[Error: ...]`` string) and
 surfaces every failure as structured data — ``window.__basisErrors`` plus a

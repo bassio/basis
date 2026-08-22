@@ -17,11 +17,25 @@ from basis.shared.base_component import BaseComponent
 from basis.shared.hydration import apply_hydration_to_component
 from basis.shared.errors import ErrorCollector, get_error_sink, set_error_sink
 
+def _attach_app_to_store_bound_stores(all_stores, request_app):
+    """Attach the request app to app-bound stores (``_requires_app``) and
+    refresh their projection so components render and serialization see current
+    app state. Called both inside ``_get_all_stores`` (global/page stores) and
+    over the whole registry in ``render_page_ssr`` (stores swept in later, e.g.
+    when a caller renders a Page directly without ``global_stores``)."""
+    if request_app is None:
+        return
+    from basis.shared.store import attach_app_to_store
+    for store in all_stores.values():
+        attach_app_to_store(store, request_app)
+
+
 def _get_all_stores(
     page_cls,
     root_component_cls,
     stores: dict | None = None,
-    global_stores: list | None = None
+    global_stores: list | None = None,
+    request_app=None
 ) -> dict[str, Store]:
     """Collect all stores from Page, Component, and global configurations.
 
@@ -53,6 +67,11 @@ def _get_all_stores(
                 else:
                     store = Store._registry[name]
                 all_stores[name] = store
+
+    # App-bound stores (e.g. PluginRegistryStore) opt in via a ``_requires_app``
+    # class attr; attach the request's app so they can project app-global state
+    # (e.g. plugin registrations) at serialize time.
+    _attach_app_to_store_bound_stores(all_stores, request_app)
     return all_stores
 
 def _serialize_initial_state(all_stores: dict[str, Store], errors=None) -> str:
@@ -127,7 +146,7 @@ async def render_page_ssr(
         root_component = getattr(page_cls, "root_component", None)
 
     title = getattr(page_cls, "title", "Basis App")
-    entry_module = getattr(page_cls, "entry_module", "/basis/client/entrypoint_ssr.py")
+    entry_module = getattr(page_cls, "entry_module", "/basis/client/entrypoint.py")
     pyscript_src = getattr(page_cls, "pyscript_src", "/pyscript")
     pyscript_json_url = getattr(page_cls, "pyscript_json_url", "/pyscript.json")
 
@@ -140,6 +159,7 @@ async def render_page_ssr(
 
     # 1. Setup Page instance
     page_instance = page_cls.load(ssr=True, request=request)
+    page_instance.render_mode = "ssr"
     page_instance.title = title
     page_instance.entry_module = entry_module
     page_instance.pyscript_src = pyscript_src
@@ -151,7 +171,15 @@ async def render_page_ssr(
         router_store.current_path = request.url.path
 
     # 2. Collect stores
-    all_stores = _get_all_stores(page_cls, root_component, None, global_stores)
+    all_stores = _get_all_stores(
+        page_cls, root_component, None, global_stores, request_app=request.app
+    )
+
+    # Attach the request app to any app-bound store already in the registry
+    # (Page.load creates every blueprint store; a caller that renders a Page
+    # directly without ``global_stores`` only picks them up via the later
+    # registry sweep — attach here so components render a refreshed projection).
+    _attach_app_to_store_bound_stores(Store._registry, request.app)
 
     # 3. Locate the SSR mount point in the page shell
     basis_ssr_root = None

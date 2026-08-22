@@ -475,7 +475,7 @@ def test_ssr_emits_markers_and_text_ordinals():
     """Full SSR render must emit hydration markers AND the deterministic
     ``data-basis-text`` ordinal, with text preserved."""
     from fastapi.testclient import TestClient
-    from basis.server.app import Basis
+    from basis.server.app import Basis, _synthesize_page
     from basis.shared.component import Component
 
     app = Basis()
@@ -497,7 +497,7 @@ def test_ssr_emits_markers_and_text_ordinals():
 
         message = "Hello"
 
-    app.include_ssr_page("/", Root, entry_module="/test_root.py")
+    app.include_page("/", page_cls=_synthesize_page(Root, entry_module="/test_root.py"))
     client = TestClient(app)
     resp = client.get("/")
     assert resp.status_code == 200
@@ -519,7 +519,7 @@ def test_ssr_stamps_loop_body_nodes_and_text_ordinals():
     the SSR output, so the client's hydration pass (via ``all_body_bindings()``)
     can match and re-point them — making plain loop bodies reactive on /ssr."""
     from fastapi.testclient import TestClient
-    from basis.server.app import Basis
+    from basis.server.app import Basis, _synthesize_page
     from basis.shared.component import Component
 
     app = Basis()
@@ -534,7 +534,7 @@ def test_ssr_stamps_loop_body_nodes_and_text_ordinals():
 
         items = [{"k": 1, "name": "Alpha"}, {"k": 2, "name": "Beta"}]
 
-    app.include_ssr_page("/", Root, entry_module="/test_loop_root.py")
+    app.include_page("/", page_cls=_synthesize_page(Root, entry_module="/test_loop_root.py"))
     client = TestClient(app)
     resp = client.get("/")
     assert resp.status_code == 200
@@ -553,7 +553,7 @@ def test_ssr_stamps_nested_loop_body_nodes_and_text_ordinals():
     (the recursion in ``marked_for_hydration`` / ``text_binding_nodes``), so
     the client's structural matcher can re-point inner loop bodies on /ssr."""
     from fastapi.testclient import TestClient
-    from basis.server.app import Basis
+    from basis.server.app import Basis, _synthesize_page
     from basis.shared.component import Component
 
     app = Basis()
@@ -572,7 +572,7 @@ def test_ssr_stamps_nested_loop_body_nodes_and_text_ordinals():
         groups = [{"g": "A", "items": [{"name": "a1"}, {"name": "a2"}]},
                   {"g": "B", "items": [{"name": "b1"}]}]
 
-    app.include_ssr_page("/", Root, entry_module="/test_nested_loop_root.py")
+    app.include_page("/", page_cls=_synthesize_page(Root, entry_module="/test_nested_loop_root.py"))
     client = TestClient(app)
     resp = client.get("/")
     assert resp.status_code == 200
