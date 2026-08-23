@@ -63,7 +63,7 @@ src/basis/
 ## Directory & Module Details
 
 - **`src/basis/cli/`**: Implements the `basis` command-line utility (`basis dev`, `basis init`, `basis plugin list`) using Typer and Rich.
-- **`src/basis/ui/`**: Pre-built accessible UI primitives — `Button`, `Badge`, `Toggle`, `Toast`, `Breadcrumbs`, `CommandPalette`, `AudioRecorder`, `Accordion`, `Calendar`, `Card`, `Checkbox`, `ContextMenu`, `FileUpload`, `TextInput`, `Modal`, `Schedule`, `ScrollArea`, `Select`, `Sidebar`, `SplitPane`, `Tabs`, `TreeView` — plus `theme.py` (`ThemeStore` design tokens). See [Built-in UI Suite](../04_components/ui-components.md).
+- **`src/basis/plugins/ui/`**: The official `ui` plugin — the pre-built accessible UI primitives, one package per family directly under the plugin — `Button`, `Badge`, `Toggle`, `Toast`, `Breadcrumbs`, `CommandPalette`, `AudioRecorder`, `Accordion`, `Calendar`, `Card`, `Checkbox`, `ContextMenu`, `FileUpload`, `TextInput`, `Modal`, `Schedule`, `ScrollArea`, `Select`, `Sidebar`, `SplitPane`, `Tabs`, `TreeView` — plus `theme.py` at the plugin root (`ThemeStore` design tokens). See [Built-in UI Suite](../04_components/ui-components.md).
 - **`src/basis/client/`**: Browser-side PyScript mount logic, SSR/CSR entrypoints, action invocation, and DOM hydration.
 - **`src/basis/server/`**: FastAPI application class (`Basis`), server-side rendering pipeline, element tree builder, `.pyc` bytecode compiler, and `@server_action` RPC endpoints.
 - **`src/basis/shared/reactive.py`**: The central `DependencyGraph` (DAG), `StateNode`, `ComputedNode`, `EffectNode`, `@computed`, and `ReactiveObject` implementation.
@@ -73,5 +73,5 @@ src/basis/
 - **`src/basis/shared/hydration.py`**: The canonical hydration-path algorithm shared by SSR and client, plus loop re-pointing (`repoint_loop_to_ssr`).
 - **`src/basis/shared/base_component.py`**: Component initialization, AST template analysis, blueprint compilation, slot filling, and state node creation.
 - **`src/basis/shared/store.py`**: `Store`, `ModelStore` (reactive CRUD), `WebSocketStore`, and `ReactiveCollection`.
-- **`src/basis/plugins/`**: Official in-tree plugins, registered through the `basis.plugins` entry point like third-party plugins. `regions/` ships the spatial primitive — `<ui-region>`, the `$regions` `RegionStore`, `add_to_region` / `@plugin.region`, and the registry primitives (`RegionContribution`, `RegionHandle`, `resolve_component` / `mount_component`). See [Regions — the Spatial API](../07_plugins/spatial-api.md).
+- **`src/basis/plugins/`**: Official in-tree plugins, registered through the `basis.plugins` entry point like third-party plugins. `regions/` ships the spatial primitive — `<ui-region>`, the `$regions` `RegionStore`, `add_to_region` / `@plugin.region`, and the registry primitives (`RegionContribution`, `RegionHandle`, `resolve_component` / `mount_component`). `ui/` ships the built-in component suite (one package per family + `theme.py`). See [Regions — the Spatial API](../07_plugins/spatial-api.md) and [Built-in UI Suite](../04_components/ui-components.md).
 - **`src/basis/static/pyscript/`**: The offline PyScript/Pyodide bundle served from `/pyscript`.

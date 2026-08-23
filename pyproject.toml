@@ -22,6 +22,7 @@ basis = "basis.cli.main:app"
 # instance attribute if resolved as ``...regions:plugin``.
 [project.entry-points."basis.plugins"]
 regions = "basis.plugins.regions.plugin:plugin"
+ui = "basis.plugins.ui.plugin:plugin"
 
 [project.optional-dependencies]
 db = [

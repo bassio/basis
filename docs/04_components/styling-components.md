@@ -1,6 +1,6 @@
 # Styling Components
 
-This is the **look-and-feel** guide. Basis components are real web components that render in **light DOM** by default, which means you style them with the same CSS you already know — no build step, no CSS-in-JS, no shadow-DOM restrictions. Every built-in `basis.ui` component is designed to be re-skinned, and most customization is a few lines of CSS.
+This is the **look-and-feel** guide. Basis components are real web components that render in **light DOM** by default, which means you style them with the same CSS you already know — no build step, no CSS-in-JS, no shadow-DOM restrictions. Every built-in `basis.plugins.ui` component is designed to be re-skinned, and most customization is a few lines of CSS.
 
 > [!TIP]
 > Here you'll find the *styling* techniques: [design tokens](#1-design-tokens-theming-with-css-variables), [plain CSS overrides](#2-override-with-plain-css), [host styling](#3-style-the-host-element-inline), and [encapsulation](#4-encapsulation-with-scoped). To change a component's *structure or behavior* instead — new props, new template, new logic — see [Extending & Customizing Components](extending-components.md).
@@ -26,15 +26,15 @@ The mental picture: *styling a Basis component is styling an HTML subtree.* You 
 
 ## 1. Design tokens: theming with CSS variables
 
-The `basis.ui` suite is built on **CSS custom properties (design tokens)** with sensible fallbacks:
+The `basis.plugins.ui` suite is built on **CSS custom properties (design tokens)** with sensible fallbacks:
 
 ```css
-/* basis/ui/button/button.py */
+/* basis/plugins/ui/button/button.py */
 .ui-btn-primary {
     background-color: var(--accent-color, #007acc);
     border-radius: var(--radius-md, 0.5rem);
 }
-/* basis/ui/card/card.py */
+/* basis/plugins/ui/card/card.py */
 ui-card {
     background: var(--bg-secondary, #1e2431);
     border: 1px solid var(--border-color, #2d3245);
@@ -84,7 +84,7 @@ Set a variable inline on the tag — the standard Custom Element idiom:
 For **runtime** theming — light/dark mode, a user-selected accent color — use the reactive [`ThemeStore`](ui-components.md#themestore-basisuitheme). It holds the same tokens as reactive state, and a `<ui-theme-provider>` injects them as CSS variables:
 
 ```python
-from basis.ui.theme import ThemeStore, ThemeProvider
+from basis.plugins.ui.theme import ThemeStore, ThemeProvider
 
 theme = ThemeStore()            # registered as "theme" → reachable as $theme
 theme.dark_mode = True          # flips every light-dark() token
@@ -215,7 +215,7 @@ Because `style` targets the host `<ui-button>`, while the visible button is the 
 
 Yes. Subclass `Page` and add a `<link>` or `<style>` to the `<head>` (see [The Page Component](page-component.md)), or put your CSS in a `.css` companion file / `<style>` block inside a component template.
 
-**Do the `basis.ui` components have hard-coded colors?**
+**Do the `basis.plugins.ui` components have hard-coded colors?**
 
 No — they read design tokens with fallbacks (`var(--accent-color, #007acc)`), so every color, radius, shadow, and font is overridable. See [Design tokens](#1-design-tokens-theming-with-css-variables).
 

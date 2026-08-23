@@ -93,7 +93,7 @@ Initializes framework-level assets and endpoints in a single call:
 1. **Offline PyScript**: Mounts PyScript WebAssembly assets at `/pyscript`.
 2. **Manifest**: Registers `/pyscript.json` providing PyScript with the VFS file map and client module declarations.
 3. **Runtime Libraries**: Mounts `basis.client` and `basis.shared`.
-4. **UI Components**: Mounts the `basis.ui` component library at `/basis/ui/`.
+4. **UI Components**: The built-in UI component suite ships as the official `ui` plugin (`basis.plugins.ui`) and is served to the client at `/basis/plugins/ui` when the plugin auto-registers (step 7).
 5. **RPC Endpoint**: Registers `/basis/api/action` — the single endpoint dispatching both `@server_action` and `@plugin.action` by their canonical `module.qualname` path.
 6. **Conventional Directory Auto-Discovery**: mounts `components/` and `stores/` at their package paths (isomorphic VFS namespace) and imports `stores/` modules so their module-scope store instances register.
 7. **Plugin Auto-Discovery**: Scans `plugins/` directory and `basis.plugins` entry points.

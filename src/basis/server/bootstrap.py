@@ -6,7 +6,7 @@ Extracted from ``app.py`` so the app class stays a thin composition of focused
 mixins. Plugin *discovery* lives in :mod:`basis.server.plugins`; the mount
 helpers (``include_components_dir`` etc.) stay on ``Basis``.
 """
-import importlib.util
+import importlib
 import inspect
 import logging
 from pathlib import Path
@@ -69,9 +69,12 @@ class BootstrapMixin:
     """Boot orchestration + conventional-dir/store auto-discovery for ``Basis``.
 
     Hosts ``bootstrap`` and the boot-time route/mount registrations it runs
-    (RPC endpoint, offline PyScript, ``/pyscript.json``, framework client/shared
-    mounts, the ``basis.ui`` suite) plus conventional ``components/``/
-    ``stores/``/``plugins/`` auto-discovery. The host app provides (during
+    (RPC endpoint, offline PyScript, ``/pyscript.json``, framework
+    client/shared mounts) plus conventional ``components/``/``stores/``/
+    ``plugins/`` auto-discovery. The built-in UI component suite ships as the
+    official ``ui`` plugin (``basis.plugins.ui``), registered through the
+    standard ``basis.plugins`` entry point along with the other in-tree
+    plugins. The host app provides (during
     construction) ``_app_dir``, ``_components_dir``, ``_stores_dir``,
     ``_plugins_dir``, ``_discovered_dirs``,
     ``_bootstrapped``, ``_component_routes`` and ``vfs``, plus ``include_store``
@@ -87,7 +90,6 @@ class BootstrapMixin:
         self.include_offline_pyscript()
         self.include_pyscript_json()
         self.include_framework()
-        self.include_ui_components()
         self.include_server_actions()
         self.include_plugins_projection()
 
@@ -154,21 +156,6 @@ class BootstrapMixin:
         if not self._has_route(name="basis_shared"):
             shared_mount = Mount("/basis/shared", static_cls(packages=[('basis', 'shared')]), name='basis_shared')
             self.routes.append(shared_mount)
-
-    def include_ui_components(self):
-        if self._has_route(name="basis_ui") or self._has_route(path="/basis/ui/"):
-            return
-
-        spec = importlib.util.find_spec("basis.ui")
-
-        ui_path = Path(spec.origin).parent
-
-        static_cls = self._get_static_files_cls()
-        ui_mount = Mount("/basis/ui/", static_cls(directory=ui_path), name='basis_ui')
-
-        self.routes.append(ui_mount)
-        self._component_routes.append(ui_mount)
-        self.vfs.add_component_route("/basis/ui/", ui_path)
 
     def _auto_discover_dirs(self):
         """

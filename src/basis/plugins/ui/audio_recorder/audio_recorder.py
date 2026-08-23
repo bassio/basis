@@ -323,7 +323,7 @@ class AudioRecorder(Component):
         
         try:
             from basis.client.actions import call_action
-            path = "basis.ui.audio_recorder.audio_recorder.save_audio_chunk"
+            path = "basis.plugins.ui.audio_recorder.audio_recorder.save_audio_chunk"
             
             res = await call_action(path, None, session_id, index, base64_data, content_type)
             if res and res.get("success"):
@@ -387,7 +387,7 @@ class AudioRecorder(Component):
             self.status_text = "Merging audio..."
             try:
                 from basis.client.actions import call_action
-                path = "basis.ui.audio_recorder.audio_recorder.combine_audio_chunks"
+                path = "basis.plugins.ui.audio_recorder.audio_recorder.combine_audio_chunks"
 
                 res = await call_action(path, None, session_id)
                 if res and res.get("success"):

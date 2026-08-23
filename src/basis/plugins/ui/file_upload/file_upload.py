@@ -277,7 +277,7 @@ class FileUpload(Component):
 
                 # Call backend action with verification parameters
                 res = await call_action(
-                    "basis.ui.file_upload.file_upload.save_upload_chunk",
+                    "basis.plugins.ui.file_upload.file_upload.save_upload_chunk",
                     None,
                     file_id,
                     js_file.name,

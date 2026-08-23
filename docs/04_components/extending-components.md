@@ -69,7 +69,7 @@ There is no single "right" way to customize a component — you pick the techniq
 
 ## 1. Configure with attributes (props)
 
-Every class-level attribute on a component is a **prop** — settable from HTML. The `basis.ui` suite exposes its options this way, so the most common "customization" needs no code at all:
+Every class-level attribute on a component is a **prop** — settable from HTML. The `basis.plugins.ui` suite exposes its options this way, so the most common "customization" needs no code at all:
 
 ```html
 <ui-button label="Save" variant="danger" size="lg"></ui-button>
@@ -117,7 +117,7 @@ The simplest extension: keep a component's behavior and structure, change its lo
 
 ```python
 from basis.shared.component import Component, scoped
-from basis.ui.button import Button
+from basis.plugins.ui.button import Button
 
 class GhostButton(Button):
     __tag__ = "ghost-button"

@@ -108,4 +108,4 @@ class TodoList(Component):
 ```
 
 > [!TIP]
-> Once you can define a component, learn how to customize and extend it — including the built-in `basis.ui` suite — in [Styling Components](styling-components.md) (look & feel) and [Extending & Customizing Components](extending-components.md) (structure & behavior).
+> Once you can define a component, learn how to customize and extend it — including the built-in `basis.plugins.ui` suite — in [Styling Components](styling-components.md) (look & feel) and [Extending & Customizing Components](extending-components.md) (structure & behavior).

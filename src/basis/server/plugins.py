@@ -26,10 +26,11 @@ logger.setLevel(logging.DEBUG)
 
 
 # Framework-essential plugins: effectively core primitives that would strand an
-# app if unloaded (e.g. `regions` provides <ui-region> / $regions). remove_plugin
-# / disable_plugin refuse to unload these unless force=True — the plugin manager
-# must not be able to break a page that depends on them.
-FRAMEWORK_PLUGIN_NAMES = ("regions",)
+# app if unloaded (e.g. `regions` provides <ui-region> / $regions, `ui` provides
+# the built-in component suite apps import from basis.plugins.ui).
+# remove_plugin / disable_plugin refuse to unload these unless force=True — the
+# plugin manager must not be able to break a page that depends on them.
+FRAMEWORK_PLUGIN_NAMES = ("regions", "ui")
 
 
 @dataclass

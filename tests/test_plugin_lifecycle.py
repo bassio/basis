@@ -628,7 +628,7 @@ def test_ssr_page_serializes_plugin_registry_store():
 
 def test_plugin_manager_renders_registry_rows():
     from basis.shared.component import Component
-    from basis.ui.plugin_manager.plugin_manager import PluginManager  # noqa: F401  (registers the element)
+    from basis.plugins.ui.plugin_manager.plugin_manager import PluginManager  # noqa: F401  (registers the element)
     from basis.shared.page import Page
 
     app = Basis()
@@ -657,7 +657,7 @@ def test_plugin_manager_renders_registry_rows():
 
 
 def test_plugin_manager_toggle_dispatches_disable_then_enable():
-    from basis.ui.plugin_manager.plugin_manager import PluginManager
+    from basis.plugins.ui.plugin_manager.plugin_manager import PluginManager
 
     comp = PluginManager()
     calls = []
@@ -715,7 +715,7 @@ def test_ssr_direct_page_render_attaches_app_to_registry_swept_store():
     from basis.shared.component import Component
     from basis.server.ssr import render_page_ssr
     from basis.shared.page import Page
-    import basis.ui.plugin_manager.plugin_manager  # noqa: F401
+    import basis.plugins.ui.plugin_manager.plugin_manager  # noqa: F401
 
     app = Basis()
     app.bootstrap()

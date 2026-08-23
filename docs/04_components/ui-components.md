@@ -1,8 +1,8 @@
-# Built-in UI Component Suite (`basis.ui`)
+# Built-in UI Component Suite (`basis.plugins.ui`)
 
-Basis ships with a built-in suite of UI components (`basis.ui`) designed for high visual appeal, accessibility, and smooth integration into Basis apps without requiring external CSS libraries or build steps.
+Basis ships with a built-in suite of UI components (`basis.plugins.ui`) designed for high visual appeal, accessibility, and smooth integration into Basis apps without requiring external CSS libraries or build steps.
 
-When `app.bootstrap()` runs (or when using `@app.page`), Basis automatically mounts the UI suite at `/basis/ui/`.
+The UI suite ships as an official in-tree plugin (`ui`, under `basis.plugins.ui`), registered through the standard `basis.plugins` entry point. When `app.bootstrap()` runs, Basis auto-registers the plugin and serves its component files at `/basis/plugins/ui` so the client VFS can import them; you then import the components you actually use (e.g. `import basis.plugins.ui.button.button`), exactly as you would any component module.
 
 ---
 
@@ -427,12 +427,12 @@ A recursive file/folder explorer.
 
 ---
 
-## ThemeStore (`basis.ui.theme`)
+## ThemeStore (`basis.plugins.ui.theme`)
 
 `ThemeStore` is a reactive `Store` of CSS design tokens, registered by default under the name `"theme"` (so it's reachable as `$theme` in templates):
 
 ```python
-from basis.ui.theme import ThemeStore
+from basis.plugins.ui.theme import ThemeStore
 
 theme = ThemeStore()          # registers the store as "theme"
 theme.dark_mode = True
@@ -452,7 +452,7 @@ unmounted/remounted server-side (routes, mounts, models, actions) and the panel 
 the authoritative `new_state`.
 
 ```python
-from basis.ui.plugin_manager import PluginManager
+from basis.plugins.ui.plugin_manager import PluginManager
 ```
 
 Use it in a template as `<ui-plugin-manager></ui-plugin-manager>`. It reads `$plugins.items`
@@ -464,7 +464,7 @@ hydrated into `#basis-initial-state`), so no wiring is needed.
 
 ## Using UI Components in Custom Components
 
-Because components map to HTML Custom Elements, you can use `basis.ui` tags directly inside your component HTML templates:
+Because components map to HTML Custom Elements, you can use `basis.plugins.ui` tags directly inside your component HTML templates:
 
 ```python
 from basis.shared.component import Component
@@ -486,4 +486,4 @@ class SettingsPanel(Component):
 ```
 
 > [!TIP]
-> The `basis.ui` components are designed to be **customized and extended** — via attributes, CSS variable theming, plain CSS overrides, and Python subclassing. See [Styling Components](styling-components.md) for look & feel, and [Extending & Customizing Components](extending-components.md) for Python-level changes.
+> The `basis.plugins.ui` components are designed to be **customized and extended** — via attributes, CSS variable theming, plain CSS overrides, and Python subclassing. See [Styling Components](styling-components.md) for look & feel, and [Extending & Customizing Components](extending-components.md) for Python-level changes.
