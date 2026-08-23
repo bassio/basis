@@ -17,9 +17,24 @@ module); everything here is duck-typed against the server ``Element`` model and
 the browser DOM, and against ``LoopItem`` / ``LoopBinding`` by attribute.
 """
 
+import inspect
 from dataclasses import dataclass
+from functools import lru_cache
 
 from basis.shared.expr import ALLOWED_BUILTINS, LoopScope, _FORMATTER, safe_format
+from basis.shared.reactive import ComputedNode, DependencyGraph, ReactiveScope
+
+
+@lru_cache(maxsize=None)
+def _derived_methods(cls):
+    """Discover ``@derived`` methods on a component class (cached per class).
+
+    Returns ``(name, function)`` pairs; inherited methods are included.  The
+    loop body builder instantiates one memoized ``ComputedNode`` per pair per
+    loop item (REACTIVITY-OVERHAUL.md P4c).
+    """
+    return [(name, member) for name, member in inspect.getmembers(cls)
+            if hasattr(member, "_is_derived")]
 
 
 # ---------------------------------------------------------------------------
@@ -159,26 +174,41 @@ class Reconciler:
 class LoopItem:
     """Per-item render unit for a loop.
 
-    NOT a Component: no DAG, no lifecycle, no subscriptions.  It holds the
-    cloned body node, the body's bindings (bound to the OWNER, carrying this
-    item's LoopScope), the mutable per-item scope, and the reconciliation key.
+    NOT a Component: no reactive attribute registry, no lifecycle, no
+    subscriptions.  It holds the cloned body node, the body's bindings (bound
+    to the OWNER, carrying this item's LoopScope), the mutable per-item scope,
+    the reconciliation key, a ``ReactiveScope`` (``_subscope``) that owns the
+    item's owner-DAG effects and derived nodes so they are torn down together
+    on removal, and a bare per-item mini ``DependencyGraph`` (``_dag``) for
+    memoized per-item @derived values (P4c).
 
     For CUSTOM-ELEMENT loop children it also holds the mounted component
     (``instance``) and its ChildBinding, so ONE entry type drives removal,
     movement and hydration for both kinds of loop child.
     """
     __slots__ = ("node", "bindings", "scope", "key",
-                 "instance", "child_binding", "_effect_names")
+                 "instance", "child_binding", "_subscope", "_dag")
 
     def __init__(self, node, bindings, scope, key,
-                 instance=None, child_binding=None):
+                 instance=None, child_binding=None, subscope=None):
         self.node = node
         self.bindings = bindings
         self.scope = scope
         self.key = key
         self.instance = instance            # mounted custom-element child, else None
         self.child_binding = child_binding  # its ChildBinding (custom children only)
-        self._effect_names = []
+        self._subscope = subscope if subscope is not None else ReactiveScope()
+        # Per-item mini-DAG for @derived values (P4c): one ComputedNode per
+        # derived per item, torn down together with _subscope.
+        self._dag = DependencyGraph()
+
+    def invalidate_derived(self):
+        """Drop every derived memo on this item's mini-DAG (no cascade — the
+        caller re-renders explicitly).  Used on item reuse, where the derived's
+        dependencies haven't changed but its input key (the item value) has."""
+        for node in self._dag.nodes.values():
+            if isinstance(node, ComputedNode):
+                node.invalidate()
 
     def render(self):
         """Re-run every body binding (initial render / reuse / scope mutation)."""
@@ -187,16 +217,15 @@ class LoopItem:
             if update is not None:
                 update()
 
-    def dispose(self, dag):
+    def dispose(self):
         """Teardown before removal: destroy body bindings (detach listeners,
-        unmount children), then unregister this item's owner-DAG effects."""
+        unmount children), then tear down this item's scoped owner-DAG effects
+        and child scopes."""
         for b in self.bindings:
             destroy = getattr(b, "destroy", None)
             if destroy is not None:
                 destroy()
-        for name in self._effect_names:
-            dag.remove_effect(name)
-        self._effect_names = []
+        self._subscope.destroy()
 
 
 # ---------------------------------------------------------------------------
@@ -276,10 +305,35 @@ class LoopBodyBuilder:
                 binding.scope = scope
                 binding.activate()
                 bindings.append(binding)
-        item = LoopItem(node=cloned, bindings=bindings, scope=scope, key=key)
+        item = LoopItem(node=cloned, bindings=bindings, scope=scope, key=key,
+                        subscope=self.component_instance._scope.child())
+        self._register_derived(item, scope)
         for binding in bindings:
             self._register_owner_effect(binding, scope, item)
         return item
+
+    def _register_derived(self, item, scope):
+        """Instantiate one memoized ComputedNode per @derived method on the
+        item's mini-DAG, keyed by the derived name and registered on the item's
+        sub-scope (so ``destroy()`` removes them).
+
+        Each node's body is ``derived(owner, item)``; the lambda closes over
+        the item and reads the CURRENT item value each update, so item reuse
+        needs only an explicit stale mark, not re-wiring.  Owner/store reads
+        inside the body become real cross-object edges via execution tracking
+        (P3), so an owner change cascades to the node and from there to the
+        body bindings that render it.
+        """
+        owner = self.component_instance
+        item_name = self.item
+        for name, method in _derived_methods(owner.__class__):
+            node = item._subscope.add_computed(
+                item._dag, name,
+                lambda owner, m=method: m(owner, item.scope.vars[item_name]),
+                owner, [],
+            )
+            node.is_derived = True  # item-data-only deps are legit (no warning)
+            scope.derived[name] = node
 
     def _scope_var_names(self, scope):
         """All loop-variable names visible through a scope chain."""
@@ -292,12 +346,23 @@ class LoopBodyBuilder:
 
     def _register_owner_effect(self, binding, scope, item):
         """Register a body binding's update on the OWNER's DAG, keyed by its
-        owner-deps fields (fields minus every loop-var name in the scope chain).
-        This is what makes owner state changes re-render loop bodies live."""
+        owner-deps fields (fields minus every loop-var name in the scope chain
+        and every @derived name).  This is what makes owner state changes
+        re-render loop bodies live.
+
+        @derived fields are NOT owner fields — each is wired as a direct
+        cross-graph dependency from the binding's effect to the item's
+        per-item ComputedNode.  The effect is created even when the binding's
+        only deps are derived (owner_fields empty): otherwise nothing would
+        re-run it when the derived's owner dependency changes."""
         owner = self.component_instance
+        loop_vars = self._scope_var_names(scope)
         owner_fields = [f for f in binding.fields
-                        if f not in self._scope_var_names(scope)]
-        if owner_fields and hasattr(binding, "update"):
+                        if f not in loop_vars and scope.derived_node(f) is None]
+        derived_fields = [f for f in binding.fields
+                          if f not in loop_vars and scope.derived_node(f) is not None]
+        if (owner_fields or derived_fields) and hasattr(binding, "update"):
             effect_name = f"loop_effect_{id(binding)}"
-            owner._dag.add_effect(effect_name, binding.update, owner_fields)
-            item._effect_names.append(effect_name)
+            item._subscope.add_effect(owner._dag, effect_name, binding.update, owner_fields)
+            for f in derived_fields:
+                owner._dag.nodes[effect_name].add_dependency(scope.derived_node(f))

@@ -1,4 +1,4 @@
-import ast
+import contextlib
 import inspect
 import weakref
 from typing import Callable, Set, Dict, List, Any
@@ -20,6 +20,13 @@ class ReactiveNode:
             self.dependencies.add(node)
             node.dependents.add(self)
 
+    def clear_dependencies(self):
+        """Drop all current dependencies (removing this node from each old
+        dependency's ``dependents`` set) so dependencies can be re-collected."""
+        for dep in self.dependencies:
+            dep.dependents.discard(self)
+        self.dependencies.clear()
+
     def mark_stale(self):
         if not self.stale:
             self.stale = True
@@ -28,6 +35,54 @@ class ReactiveNode:
 
     def update(self):
         raise NotImplementedError
+
+
+# ──────────────────────────────────────────────
+# Reactive read-tracking (execution-tracked deps)
+# ──────────────────────────────────────────────
+
+# Stack of "trackers" — the computed/effect currently being evaluated. While
+# non-empty, ReactiveObject.__getattribute__ records every public reactive read
+# against the innermost tracker. Empty in the common path (zero overhead).
+_tracker_stack: List[ReactiveNode] = []
+
+# Effects marked stale but not yet flushed. Cross-object edges mark dependents
+# on OTHER objects' graphs, so a trigger on any graph flushes them all.
+_dirty_effects = set()
+
+
+class _TrackingProbe(ReactiveNode):
+    """Ephemeral tracker used by ``ReactiveObject._tracked_reads``. Records
+    reads into its own dependency set without wiring dependents back onto the
+    read nodes (P1 probe — no cross-edge side effects)."""
+
+    def __init__(self):
+        super().__init__("__tracking_probe__")
+
+    def add_dependency(self, node: ReactiveNode):
+        self.dependencies.add(node)
+
+
+def _start_tracking(node: ReactiveNode):
+    _tracker_stack.append(node)
+
+
+def _stop_tracking(node: ReactiveNode):
+    # Pop the innermost tracker; tolerate a mismatched/unbalanced stack.
+    if _tracker_stack and _tracker_stack[-1] is node:
+        _tracker_stack.pop()
+    elif node in _tracker_stack:
+        _tracker_stack.remove(node)
+
+
+@contextlib.contextmanager
+def _track(node: ReactiveNode):
+    _start_tracking(node)
+    try:
+        yield
+    finally:
+        _stop_tracking(node)
+
 
 class StateNode(ReactiveNode):
     """Represents a source of truth (raw attribute)."""
@@ -39,27 +94,113 @@ class StateNode(ReactiveNode):
         self.stale = False
 
 class ComputedNode(ReactiveNode):
-    """Represents a derived value that depends on other nodes."""
+    """Represents a derived value that depends on other nodes.
+
+    Dependencies are discovered by EXECUTION TRACKING: every update() runs the
+    body under a tracking context (``_track``), so each reactive read — even
+    through helper methods, ``getattr``, or another object — becomes a real DAG
+    edge. Declared dependencies (``@computed(dependencies=[...])``) are
+    re-attached on every update. Values are computed lazily on first access and
+    memoized while not stale.
+    """
     def __init__(self, name: str, func: Callable, owner: Any):
         super().__init__(name)
         self.func = func
         self.owner = weakref.ref(owner)
         self.value = None
+        # A fresh lazy node is NOT "stale" in the propagation sense: if it
+        # started stale, the first mark_stale() would short-circuit and never
+        # cascade to dependents (effects/loops/subscriptions would not fire).
+        self.stale = False
+        self._computed = False  # has the body been evaluated at least once?
+        self._declared_deps: List[ReactiveNode] = []
+        self._computing = False
+        # @derived nodes (per-loop-item) may legitimately have no tracked deps
+        # (item-data-only reads) — the empty-dep dev warning is @computed-only.
+        self.is_derived = False
+        self._warned_empty = False
+
+    def add_declared(self, node: ReactiveNode):
+        self._declared_deps.append(node)
+        self.add_dependency(node)
 
     def update(self):
-        if not self.stale:
+        if self._computed and not self.stale:
             return self.value
-        
-        # Ensure dependencies are updated first
-        for dep in self.dependencies:
-            dep.update()
-            
+
+        if self._computing:
+            raise RecursionError(
+                f"Circular @computed dependency detected involving '{self.name}'"
+            )
+        self._computing = True
+        try:
+            # Ensure current dependencies are fresh before recomputing.
+            for dep in list(self.dependencies):
+                dep.update()
+
+            owner = self.owner()
+            if owner is None:
+                self.value = None
+                self.stale = False
+                self._computed = True
+                return None
+
+            # Re-collect dependencies by executing the body under a tracking
+            # context, then re-attach the declared ones (manual
+            # dependencies=[...] and AST pre-wiring may not be re-read).
+            self.clear_dependencies()
+            with _track(self):
+                self.value = self.func(owner)
+            for node in self._declared_deps:
+                self.add_dependency(node)
+
+            self.stale = False
+            self._computed = True
+            if (not self.is_derived and not self._warned_empty
+                    and not self.dependencies):
+                self._warned_empty = True
+                print(
+                    f"Basis Reactivity Warning: computed '{self.name}' has no "
+                    f"reactive dependencies — it will never recompute. Read a "
+                    f"reactive field, or pass dependencies=[...]."
+                )
+            return self.value
+        finally:
+            self._computing = False
+
+    def invalidate(self):
+        """Drop the memo without cascading to dependents.
+
+        Used on loop-item reuse (P4c): a @derived's dependencies haven't
+        changed, but its input key (the item value) has — the caller re-renders
+        explicitly, so no propagation is wanted (a full ``mark_stale`` would
+        re-enqueue the owner effect mid-flush and double-render).
+        """
+        self.stale = True
+
+    def prime_deps(self):
+        """Eagerly establish dependency edges by dry-running the body under a
+        tracking probe (no value is computed or memoized; errors are swallowed).
+
+        Called at registration so a @computed that is subscribed to but never
+        read in a template (e.g. a Store computed a component watches via
+        ``$store.x``) still propagates when its deps change.  The real update()
+        re-collects deps lazily on first access, so this is only an edge-priming
+        pass — it must NOT abort the mount (the P2 lazy-boot fix).
+        """
+        if self._computed:
+            return
         owner = self.owner()
-        if owner:
-            self.value = self.func(owner)
-        
-        self.stale = False
-        return self.value
+        if owner is None:
+            return
+        try:
+            probe = _TrackingProbe()
+            with _track(probe):
+                self.func(owner)
+            for dep in probe.dependencies:
+                self.add_dependency(dep)
+        except Exception:
+            pass
 
 class EffectNode(ReactiveNode):
     """Represents a side-effect (e.g., DOM binding or subscription notification)."""
@@ -69,12 +210,19 @@ class EffectNode(ReactiveNode):
 
     def update(self):
         if self.stale:
-            # First, ensure all dependencies are updated (especially computed ones)
-            for dep in self.dependencies:
-                dep.update()
-
+            # Computed dependencies update lazily when the update_func reads
+            # them (via their @computed property). There is no eager dep pass
+            # here — an error inside a computed surfaces through the binding's
+            # error-tolerant evaluation instead of aborting the whole effect.
             self.update_func()
             self.stale = False
+
+    def mark_stale(self):
+        if not self.stale:
+            self.stale = True
+            _dirty_effects.add(self)
+            for dependent in self.dependents:
+                dependent.mark_stale()
 
 
 # ──────────────────────────────────────────────
@@ -112,7 +260,7 @@ class DependencyGraph:
         self.nodes[name] = new_node
         for dep_name in dependencies:
             dep_node = self.nodes.get(dep_name) or self.get_or_create_state(dep_name)
-            new_node.add_dependency(dep_node)
+            new_node.add_declared(dep_node)
         # Wire any existing wildcard effects to this new computed node
         for wc_effect in self._wildcard_effects:
             wc_effect.add_dependency(new_node)
@@ -147,6 +295,24 @@ class DependencyGraph:
             self.effects.remove(node)
         if node and node in self._wildcard_effects:
             self._wildcard_effects.remove(node)
+        if node:
+            _dirty_effects.discard(node)
+
+    def remove_node(self, name: str):
+        """Remove any node (state, computed, or effect) by name, detaching it
+        from both its dependencies and dependents so nothing dangles."""
+        node = self.nodes.pop(name, None)
+        if node is None:
+            return
+        for dep in node.dependencies:
+            dep.dependents.discard(node)
+        for depd in node.dependents:
+            depd.dependencies.discard(node)
+        if node in self.effects:
+            self.effects.remove(node)
+        if node in self._wildcard_effects:
+            self._wildcard_effects.remove(node)
+        _dirty_effects.discard(node)
 
     def trigger(self, name: str):
         if name in self.nodes:
@@ -166,66 +332,69 @@ class DependencyGraph:
         self.process_updates()
 
     def process_updates(self):
-        """Update all stale effect nodes."""
-        for node in self.effects:
-            if node.stale:
-                node.update()
+        """Flush stale effects across ALL objects' graphs. Cross-object edges
+        mark dependents on other objects, so a trigger on any graph drains the
+        shared dirty queue (each effect runs at most once per flush)."""
+        while _dirty_effects:
+            effect = _dirty_effects.pop()
+            effect.update()
 
 
 # ──────────────────────────────────────────────
-# AST-based Dependency Extraction
+# Reactive scopes — grouped teardown (P4)
 # ──────────────────────────────────────────────
 
-class DependencyVisitor(ast.NodeVisitor):
-    def __init__(self, self_name='self'):
-        self.self_name = self_name
-        self.dependencies = set()
+class ReactiveScope:
+    """Owns the effects/computeds/subscriptions created inside a dynamic region
+    of a component tree (a loop item, a region contribution, a mounted child, a
+    subscription, a component instance) so they are torn down together with one
+    ``destroy()`` call.
 
-    def _get_full_attr_path(self, node):
-        if isinstance(node, ast.Name):
-            return node.id
-        if isinstance(node, ast.Attribute):
-            base = self._get_full_attr_path(node.value)
-            if base:
-                return f"{base}.{node.attr}"
-        return None
+    Nodes still live on their owner's per-object ``DependencyGraph``; the scope
+    merely records ``(graph, name)`` pairs (plus child scopes) so removal is a
+    single pass. ``destroy()`` is idempotent.
+    """
 
-    def visit_Attribute(self, node):
-        path = self._get_full_attr_path(node)
-        if path and path.startswith(self.self_name + "."):
-            # strip 'self.'
-            dep = path[len(self.self_name)+1:]
-            self.dependencies.add(dep)
-        self.generic_visit(node)
+    def __init__(self, parent=None):
+        self.parent = parent
+        self.children = []
+        self._effects = []      # list[(DependencyGraph, name)]
+        self._computeds = []    # list[(DependencyGraph, name)]
+        if parent is not None:
+            parent.children.append(self)
 
-def extract_func_dependencies(func) -> List[str]:
-    try:
-        source = inspect.getsource(func)
-        # Handle indentation and potential decorator noise
-        source = inspect.cleandoc(source)
-        tree = ast.parse(source)
-        
-        # We look for the first function definition
-        func_def = None
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
-                func_def = node
-                break
-        
-        if not func_def:
-            return []
+    def child(self):
+        """Create a child scope (auto-linked to this one)."""
+        return ReactiveScope(parent=self)
 
-        # Determine the name of 'self'
-        self_name = 'self'
-        if func_def.args.args:
-            self_name = func_def.args.args[0].arg
-        
-        visitor = DependencyVisitor(self_name=self_name)
-        visitor.visit(func_def)
-        return list(visitor.dependencies)
-    except Exception as e:
-        print(f"Basis Reactivity Warning: Could not automatically detect dependencies for '{func.__name__}': {e}")
-        return []
+    def add_effect(self, graph, name, update_func, dependencies):
+        graph.add_effect(name, update_func, dependencies)
+        self._effects.append((graph, name))
+
+    def add_computed(self, graph, name, func, owner, dependencies):
+        node = graph.add_computed(name, func, owner, dependencies)
+        self._computeds.append((graph, name))
+        return node
+
+    def record_effect(self, graph, name):
+        """Record an effect created elsewhere (e.g. a subscription edge on a
+        target's graph) so ``destroy()`` removes it from that graph."""
+        self._effects.append((graph, name))
+
+    def destroy(self):
+        """Tear down every owned resource (recursively) and detach from the
+        parent scope. Idempotent."""
+        for child in list(self.children):
+            child.destroy()
+        for graph, name in self._effects:
+            graph.remove_effect(name)
+        for graph, name in self._computeds:
+            graph.remove_node(name)
+        self._effects = []
+        self._computeds = []
+        self.children = []
+        if self.parent is not None and self in self.parent.children:
+            self.parent.children.remove(self)
 
 
 # ──────────────────────────────────────────────
@@ -234,14 +403,18 @@ def extract_func_dependencies(func) -> List[str]:
 
 def computed(args=None, dependencies=None):
     """
-    Decorator to mark a method as a computed property.
+    Decorator to mark a method as a computed property — a memoized, lazily
+    computed value whose dependencies are discovered by EXECUTION TRACKING when
+    the body first runs (every reactive read becomes a real DAG edge). An
+    explicit ``dependencies=[...]`` list (e.g. ``["$store.x"]`` relay deps) is
+    honored and re-attached on every update.
     Can be used as @computed or @computed(dependencies=['a', 'b'])
     """
     def decorator(func):
         # Store metadata on the function itself
         func._is_computed = True
-        # Use provided dependencies or try to auto-detect
-        actual_deps = dependencies if dependencies is not None else extract_func_dependencies(func)
+        # Declared deps only — the body's reactive reads are tracked at run time.
+        actual_deps = dependencies if dependencies is not None else []
         func._dependencies = actual_deps
         
         @property
@@ -273,6 +446,23 @@ def computed(args=None, dependencies=None):
         dependencies = args
         
     return decorator
+
+
+def derived(func):
+    """Decorator marking a method as a per-context (keyed) derived value.
+
+    Unlike ``@computed`` (one reactive property per object), a ``@derived``
+    method is a reactive FUNCTION: the surrounding context builder (e.g. the
+    loop body builder) instantiates one ``ComputedNode`` per key — per loop
+    item — each memoized and invalidated by execution-tracked dependencies
+    (owner/store reads) or by a new key arriving (item reuse). See
+    REACTIVITY-OVERHAUL.md P4c.
+
+    V1: dependencies are discovered by execution tracking only (no
+    ``dependencies=[...]`` escape hatch) — revisit in P5.
+    """
+    func._is_derived = True
+    return func
 
 
 # ──────────────────────────────────────────────
@@ -321,6 +511,9 @@ class ReactiveObject:
         super().__init__()
         self.__dict__['_dag'] = DependencyGraph()
         self.__dict__['_dag_nodes'] = self._dag.nodes
+        # Root reactive scope — owns the effects/computeds/subscriptions this
+        # object creates so they can be torn down together (P4).
+        self.__dict__['_scope'] = ReactiveScope()
 
     def __setattr__(self, name, value):
         # Private attributes bypass the DAG entirely
@@ -343,6 +536,57 @@ class ReactiveObject:
                 or value != old_value:
                     self._dag.trigger(name)
 
+    def __getattribute__(self, name):
+        # Execution read-tracking (P1, additive). When a computed/effect is
+        # being evaluated (a tracker is on the stack), every public reactive
+        # read is recorded against the innermost tracker. No tracker -> plain
+        # attribute lookup (the common path — zero behavior change).
+        if _tracker_stack and not name.startswith('_'):
+            node = self._resolve_read_node(name)
+            if node is not None:
+                _tracker_stack[-1].add_dependency(node)
+        return object.__getattribute__(self, name)
+
+    def _resolve_read_node(self, name):
+        """Map a public attribute read to its DAG node (state or computed), or
+        None when the attribute is not a registered reactive value. During
+        tracking, a real public attribute (a class default, or a cross-object
+        read) is promoted to a StateNode on demand so future assignments trigger
+        it."""
+        dag_nodes = self.__dict__.get('_dag_nodes')
+        if dag_nodes is None:
+            return None
+        node = dag_nodes.get(name)
+        if isinstance(node, (StateNode, ComputedNode)):
+            return node
+        if _tracker_stack and self._is_trackable_attr(name):
+            return self._dag.get_or_create_state(name)
+        return None
+
+    def _is_trackable_attr(self, name):
+        """True when ``name`` resolves to a real, non-callable attribute on this
+        object (instance or class level) — i.e. a would-be StateNode."""
+        if name.startswith('_'):
+            return False
+        if name in self.__dict__:
+            return not callable(self.__dict__[name])
+        for klass in type(self).__mro__:
+            if name in klass.__dict__:
+                value = klass.__dict__[name]
+                if isinstance(value, property):
+                    return False
+                return not callable(value)
+        return False
+
+    def _tracked_reads(self, func):
+        """Run ``func(self)`` inside a fresh tracking context and return the
+        set of DAG nodes the body read — across objects. P1 additive plumbing;
+        ``ComputedNode.update`` switches to this as its dependency source in P2."""
+        probe = _TrackingProbe()
+        with _track(probe):
+            func(self)
+        return probe.dependencies
+
     def react(self, names: list[str]):
         if isinstance(names, str):
             raise Exception("Please pass only a list of strings to react().")
@@ -352,7 +596,12 @@ class ReactiveObject:
         return Refrain(self)
 
     def _init_computed(self):
-        """Scan class for @computed methods and register them as ComputedNodes in the DAG."""
+        """Scan class for @computed methods and register them as ComputedNodes.
+        Values are computed lazily on first access, with dependencies discovered
+        by execution tracking at that point.  Dependency EDGES are primed
+        eagerly (a tracking dry-run that computes no value and swallows errors)
+        so a computed that is subscribed to but never rendered still
+        propagates."""
         for name, member in inspect.getmembers(self.__class__):
             member_func = getattr(member, 'fget', member)
             if hasattr(member_func, '_is_computed'):
@@ -360,5 +609,4 @@ class ReactiveObject:
                 original_func = getattr(member_func, '_original_func', None)
                 if original_func:
                     node = self._dag.add_computed(name, original_func, self, deps)
-                    # Force an initial calculation so we don't start with None
-                    node.update()
+                    node.prime_deps()

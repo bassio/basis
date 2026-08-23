@@ -220,7 +220,10 @@ class Store(ReactiveObject):
         # Fulfill pending subscriptions
         if name in Store._pending_subscriptions:
             for subscribing_component_instance, attr_name in Store._pending_subscriptions.pop(name):
-                self.add_subscription(subscribing_component_instance, attr_name)
+                self.add_subscription(
+                    subscribing_component_instance, attr_name,
+                    scope=getattr(subscribing_component_instance, "_scope", None),
+                )
                 subscribed_field = f"${name}.{attr_name}" if attr_name else f"${name}"
                 with subscribing_component_instance.refrain() as refrained:
                     if attr_name:
@@ -291,7 +294,7 @@ class Store(ReactiveObject):
     def get_store_name(self):
         return self.__dict__['_name']
 
-    def add_subscription(self, component_instance, attr_name:str):
+    def add_subscription(self, component_instance, attr_name:str, scope=None):
         if (component_instance, attr_name) in self._subscriptions:
             return
         # Dedup bookkeeping only — the reactive edge is the DAG effect below.
@@ -324,6 +327,9 @@ class Store(ReactiveObject):
                 effect_name,
                 make_wildcard_callback(component_instance, store_name)
             )
+
+        if scope is not None:
+            scope.record_effect(self._dag, effect_name)
 
     def remove_subscription(self, component_instance, attr_name:str):
         self.__dict__['_subscriptions'] = [

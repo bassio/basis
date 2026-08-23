@@ -138,26 +138,42 @@ _MISSING = object()
 class LoopScope:
     """Per-item name overlay for loop bodies.
 
-    ``vars`` maps a loop-variable name to the current item; ``parent`` is the
-    enclosing LoopScope (an outer loop) or None.  The owning component is NOT
-    stored here — it is the binding's ``component_instance`` (the eval context).
-    Resolution is innermost→outermost so a loop variable shadows the owner
-    (Vue/Svelte rule).  A chain (not a merged dict) lets an outer item be
-    updated in place and stay live for every inner scope that chains to it.
+    ``vars`` maps a loop-variable name to the current item; ``derived`` maps a
+    @derived name to its per-item ComputedNode (one node per item); ``parent``
+    is the enclosing LoopScope (an outer loop) or None.  The owning component
+    is NOT stored here — it is the binding's ``component_instance`` (the eval
+    context).  Resolution is innermost→outermost so a loop variable shadows the
+    owner (Vue/Svelte rule), and a @derived shadows the owner but not a loop
+    variable.  A chain (not a merged dict) lets an outer item be updated in
+    place and stay live for every inner scope that chains to it.
     """
-    __slots__ = ("vars", "parent")
+    __slots__ = ("vars", "parent", "derived")
 
-    def __init__(self, vars: dict, parent: "LoopScope|None" = None):
+    def __init__(self, vars: dict, parent: "LoopScope|None" = None,
+                 derived: "dict | None" = None):
         self.vars = vars
         self.parent = parent
+        self.derived = derived if derived is not None else {}
 
     def lookup(self, name):
         s = self
         while s is not None:
             if name in s.vars:
                 return s.vars[name], True
+            if name in s.derived:
+                return s.derived[name].update(), True
             s = s.parent
         return None, False
+
+    def derived_node(self, name):
+        """The per-item ComputedNode for a @derived name in this scope chain
+        (innermost first), or None when ``name`` is not a derived here."""
+        s = self
+        while s is not None:
+            if name in s.derived:
+                return s.derived[name]
+            s = s.parent
+        return None
 
 
 def _eval_ast(node, context, allowed_builtins, scope=None):

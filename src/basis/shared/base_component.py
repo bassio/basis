@@ -9,7 +9,7 @@ from basis.shared.bindings import BindingBlueprint, Binding, SelfBinding, TextBi
     ALLOWED_BUILTINS
 from basis.shared.bindings import extract_dependencies
 from basis.shared.store import Store
-from basis.shared.reactive import ReactiveObject, DependencyGraph, StateNode, ComputedNode, EffectNode, computed, Refrain
+from basis.shared.reactive import ReactiveObject, DependencyGraph, StateNode, ComputedNode, EffectNode, computed, Refrain, ReactiveScope
 from basis.shared.context import ContextVarProxyDict
 
 
@@ -60,6 +60,10 @@ class BaseComponent(ReactiveObject):
     # HMR to live-update a component's CSS even when the <style> lives inside a
     # shadow root (where document.querySelectorAll cannot reach it).
     _style_elements = {}
+    # Identity for `#name` cross-component references. When set, the component
+    # registers under this name in the instance registry instead of relying on
+    # the root element's `id`. Default: the root element's `id`.
+    __component_id__ = None
 
     S = Store._registry
     C = _instance_registry
@@ -347,9 +351,10 @@ class BaseComponent(ReactiveObject):
                 if field not in self.__fields__:
                     self.__fields__.append(field)
 
-            # DAG integration: Register as an EffectNode
+            # DAG integration: Register as an EffectNode, owned by this
+            # component's reactive scope (teardown via _scope.destroy()).
             effect_name = f"effect_{id(binding)}"
-            self._dag.add_effect(effect_name, binding.update, binding.fields)
+            self._scope.add_effect(self._dag, effect_name, binding.update, binding.fields)
 
     def remove_binding(self, binding):
         # Lifecycle: teardown (detach listeners, unmount children).
@@ -662,18 +667,28 @@ class BaseComponent(ReactiveObject):
 
         #print(f"Bindings of {self.__class__}:", self.__bindings__)
         
-        # add to component instance registry if it is has an id
+        # register this component for `#name` references under its identity
+        # (__component_id__, plus the root element's id when present)
         self_element = self.__element__
-        if self_element.hasAttribute('id'):
-            component_id = self_element.getAttribute('id')
+        identities = []
+        cls_id = getattr(self.__class__, "__component_id__", None)
+        if cls_id:
+            identities.append(cls_id)
+        if self_element is not None and self_element.hasAttribute('id'):
+            identities.append(self_element.getAttribute('id'))
+
+        for component_id in dict.fromkeys(identities):
             self.__class__._instance_registry[component_id] = self
-            
+
             if component_id in self.__class__._pending_subscriptions:
                 for subscribing_component_instance, attr_name in self.__class__._pending_subscriptions.pop(component_id):
-                    self.add_subscription(subscribing_component_instance, attr_name)
+                    self.add_subscription(
+                        subscribing_component_instance, attr_name,
+                        ref_name=component_id,
+                        scope=getattr(subscribing_component_instance, "_scope", None),
+                    )
                     subscribed_field = f"#{component_id}.{attr_name}"
                     with subscribing_component_instance.refrain() as refrained:
-                        #setattr(refrained, subscribed_field, self)
                         setattr(refrained, subscribed_field, getattr(self, attr_name))
 
 
@@ -716,7 +731,7 @@ class BaseComponent(ReactiveObject):
                     if store_name in Store._registry:
                         store_instance = Store._registry[store_name]
                         setattr(refrained, field, store_instance)
-                        store_instance.add_subscription(self, attr_name)
+                        store_instance.add_subscription(self, attr_name, scope=self._scope)
                     else:
                         # Register pending subscription
                         if store_name not in Store._pending_subscriptions:
@@ -736,7 +751,8 @@ class BaseComponent(ReactiveObject):
 
                             setattr(refrained, field, component_instance)
                             
-                            component_instance.add_subscription(self, attr_name)
+                            component_instance.add_subscription(
+                                self, attr_name, ref_name=component_name, scope=self._scope)
                             # Register in DAG
                             self._dag.get_or_create_state(field)
 
@@ -1013,6 +1029,8 @@ class BaseComponent(ReactiveObject):
         # 1. Clean up old bindings and DAG
         for b in list(self.__bindings__):
             self.remove_binding(b)
+        self._scope.destroy()
+        self.__dict__['_scope'] = ReactiveScope()
 
         self.__dict__['__bindings__'] = []
         self.__dict__['_selfattr_bindings'] = {}
@@ -1153,23 +1171,37 @@ class BaseComponent(ReactiveObject):
 
     # refrain() is inherited from ReactiveObject
 
-    def add_subscription(self, component_instance, attr_name: str):
+    def _component_registry_name(self):
+        """The identity this component is registered under for ``#name``
+        references: ``__component_id__`` if set, else the root element's ``id``."""
+        cls_id = getattr(self.__class__, "__component_id__", None)
+        if cls_id:
+            return cls_id
+        element = getattr(self, "__element__", None)
+        element_id = element.getAttribute("id") if element is not None else None
+        return element_id or None
+
+    def add_subscription(self, component_instance, attr_name: str, ref_name: str = None, scope=None):
         """Register a reactive edge from this component's ``attr`` to a
         subscriber — a first-class DAG edge, mirroring
         ``Store.add_subscription``.
 
         When ``attr`` changes on this component, the subscriber's DAG is
-        re-triggered via ``subscriber.react(['#<id>.<attr>'])``.
+        re-triggered via ``subscriber.react(['#<ref_name>.<attr>'])``, where
+        ``ref_name`` is the identity the subscriber referenced (defaults to this
+        component's own registry name).
         """
         if (component_instance, attr_name) in self._subscriptions:
             return
         self.__dict__['_subscriptions'].append((component_instance, attr_name))
 
-        element = getattr(self, "__element__", None)
-        target_id = element.getAttribute("id") if element is not None else None
+        target_id = ref_name or self._component_registry_name()
         if not target_id:
-            # The subscriber references us as #<id>.attr, so we need an id to
-            # forward to; without one there is nothing to react on.
+            # A #-reference to a component with no identity — fail loudly rather
+            # than silently never reacting.
+            print(f"[basis] warning: '#...' subscription on {self.__class__.__name__} "
+                  f"has no component identity (set __component_id__ or put an id "
+                  f"on the root element); the subscriber will not update.")
             return
 
         effect_name = f"sub_{id(component_instance)}_{attr_name}"
@@ -1184,6 +1216,8 @@ class BaseComponent(ReactiveObject):
             make_callback(component_instance, target_id, attr_name),
             [attr_name],
         )
+        if scope is not None:
+            scope.record_effect(self._dag, effect_name)
 
     def remove_subscription(self, component_instance, attr_name: str):
         self.__dict__['_subscriptions'] = [

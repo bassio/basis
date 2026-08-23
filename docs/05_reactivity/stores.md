@@ -26,6 +26,24 @@ user_store = UserSession("session")
 
 The constructor string (`"session"`) registers the store globally under that name for template subscriptions.
 
+### `@computed` on stores (execution-tracked)
+
+A store `@computed` uses the same execution-tracked DAG as components: dependencies are whatever the body reads at runtime (lazy + memoized), and a computed on one store can read another store directly — no string plumbing:
+
+```python
+prices = Store("prices")
+prices.rates = {"apple": 1.5, "banana": 0.5}
+
+class Cart(Store):
+    items = [{"name": "apple", "qty": 2}]
+
+    @computed
+    def total(self):
+        return sum(prices.rates[i["name"]] * i["qty"] for i in self.items)
+```
+
+Change `prices.rates` (or `cart.items`) and `total` recomputes; every `$cart.total` binding or subscription updates. For a manual relay dependency use `@computed(dependencies=["$other_store.attr"])`. See [The DAG Reactivity Engine](dag.md) for the full contract.
+
 ---
 
 ## 1b. The `stores/` auto-discovery convention

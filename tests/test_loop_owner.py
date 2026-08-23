@@ -25,8 +25,10 @@ def _event_binding(item):
 
 
 def test_plain_loop_item_is_thin_holder_not_component():
-    """A plain-element loop child is a thin LoopItem (no DAG) and its handler
-    is owner-bound natively."""
+    """A plain-element loop child is a thin LoopItem (not a ReactiveObject /
+    Component) and its handler is owner-bound natively.  P4c gives it a bare
+    per-item mini-DAG for @derived values, but no reactive attribute registry
+    (``_dag_nodes``) and no lifecycle."""
     class Owner(Component):
         items = []
 
@@ -45,7 +47,8 @@ def test_plain_loop_item_is_thin_holder_not_component():
 
     item = next(iter(_loop(mounted).instances.values()))
     assert isinstance(item, LoopItem)
-    assert not hasattr(item, "_dag")
+    assert not hasattr(item, "_dag_nodes")
+    assert hasattr(item, "_dag")
 
 
 def test_loop_body_handler_runs_on_owner():

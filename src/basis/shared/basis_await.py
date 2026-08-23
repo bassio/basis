@@ -36,6 +36,10 @@ class BasisAwait(Component):
                     for d in deps_to_remove:
                         node.dependencies.remove(d)
                         d.dependents.discard(node)
+                    # Drop them from the declared set too, so a computed re-track
+                    # does not resurrect stale cross-store deps on store switch.
+                    declared = getattr(node, "_declared_deps", [])
+                    node._declared_deps = [d for d in declared if not d.name.startswith("$")]
 
         self._subscribed_store = store_name
 
@@ -50,8 +54,11 @@ class BasisAwait(Component):
             for node_name in ["_show_loading", "_show_error", "_show_content"]:
                 node = self._dag.nodes.get(node_name)
                 if node:
-                    node.add_dependency(dep_loading_node)
-                    node.add_dependency(dep_error_node)
+                    # Declared deps survive the computed's dependency re-collect
+                    # (execution tracking additionally records the store's real
+                    # loading/error nodes once the store exists).
+                    node.add_declared(dep_loading_node)
+                    node.add_declared(dep_error_node)
 
             store = Store._registry.get(store_name)
             if store:

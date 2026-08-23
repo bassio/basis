@@ -62,9 +62,9 @@ class Region(Component):
             return
         if (self, "items") in store._subscriptions:
             return  # already wired — don't double-register the DAG effect
-        store.add_subscription(self, "items")
+        store.add_subscription(self, "items", scope=self._scope)
         self._dag.get_or_create_state("$regions.items")
-        self._dag.add_effect("region_sync", self._sync, ["$regions.items"])
+        self._scope.add_effect(self._dag, "region_sync", self._sync, ["$regions.items"])
 
     def on_hydrated(self):
         """Client-only (via ``initialize_ssr``). The SSR tree pre-rendered each
@@ -94,8 +94,15 @@ class Region(Component):
         mounted = self.__dict__.setdefault("_region_mounted", {})
         for path in list(mounted):
             if path not in expected_paths:
-                node = mounted.pop(path)
+                instance = mounted.pop(path)
+                # Real teardown: the contribution's scope owns its bindings /
+                # subscriptions; then remove its DOM node.
                 try:
+                    instance._scope.destroy()
+                except Exception:
+                    pass
+                try:
+                    node = instance.__element__
                     node.remove()
                 except Exception:
                     pass
@@ -108,7 +115,7 @@ class Region(Component):
                 node = instance.__element__
                 if hasattr(node, "setAttribute"):
                     node.setAttribute("data-region-item", path)
-                mounted[path] = node
+                mounted[path] = instance
             except Exception:
                 # One broken contribution must not break the whole region.
                 continue

@@ -1083,9 +1083,9 @@ class LoopBinding(NodeBinding):
         self.instances = new_map
 
     def _remove_item(self, entry):
-        """Dispose an item (owner-DAG effects + body listeners), drop its
+        """Dispose an item (scoped owner-DAG effects + body listeners), drop its
         ChildBinding, and remove the wrapper node."""
-        entry.dispose(self.component_instance._dag)
+        entry.dispose()
         if entry.child_binding is not None:
             self.component_instance.remove_binding(entry.child_binding)
         node = entry.node
@@ -1135,6 +1135,10 @@ class LoopBinding(NodeBinding):
                 for k, v in props.items():
                     setattr(refrained, k, v)
         else:
+            # Item reuse: the deriveds' deps haven't changed, but their input
+            # key has — drop their memos (no cascade) before re-rendering so
+            # {derived} re-evaluates against the new item value.
+            entry.invalidate_derived()
             entry.render()
         entry.node.setAttribute("data-item-key", str(key))
         return entry
@@ -1240,13 +1244,12 @@ class LoopBinding(NodeBinding):
 
     def destroy(self):
         """Tear down the whole loop: remove each item's child binding, dispose
-        each item (body listeners + owner-DAG effects), and clear the map.
-        (Per-item removal during update() is handled inline there.)"""
-        dag = self.component_instance._dag
+        each item (body listeners + scoped owner-DAG effects), and clear the
+        map. (Per-item removal during update() is handled inline there.)"""
         for entry in list(self.instances.values()):
             if entry.child_binding is not None:
                 self.component_instance.remove_binding(entry.child_binding)
-            entry.dispose(dag)
+            entry.dispose()
         self.instances.clear()
 
 @dataclass

@@ -54,7 +54,7 @@ class Counter(Component):
 Class-level variables like `count = 0` are automatically converted into reactive state nodes during component setup. Assigning to `self.count` inside event handlers updates the state and triggers the reactive graph to update bound DOM nodes.
 
 ### `@computed` Properties
-Decorating a method with `@computed` creates a derived state node. Basis analyzes the function's AST to detect state dependencies (such as `self.count`) and recalculates `double_count` only when `count` changes.
+Decorating a method with `@computed` creates a derived state node. Dependencies are discovered by **execution tracking**: Basis records whatever reactive attributes the body actually reads when it runs (including reads through helper methods or other objects) and recalculates `double_count` only when one of those changes. Values are **lazy** and **memoized**. For the full contract — manual `dependencies=[...]`, cross-store/cross-component edges, the in-place-mutation rule, and the per-loop-item `@derived` decorator — see [The DAG Reactivity Engine](../05_reactivity/dag.md).
 
 ---
 
