@@ -1,8 +1,32 @@
 import inspect
 from fastapi import Depends, Request, HTTPException
-from sqlmodel import Session, select, delete
+from sqlmodel import Session, select, delete, SQLModel
 from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy import inspect as sqlalchemy_inspect
+
+from basis.shared.serialization import register_serializer
+
+
+@register_serializer(for_type=SQLModel)
+def _serialize_sqlmodel(obj):
+    """Serialize a SQLModel record: model_dump plus any loaded relationships.
+
+    Registered at the DB layer (not in core ``serialization.py``) so the shared
+    serializer stays free of sqlalchemy/sqlmodel — the "db teaches the framework
+    how to serialize its models" plugin pattern. The generic ``model_dump``
+    fallback in :func:`~basis.shared.serialization.jsonable` covers models even
+    without this handler.
+    """
+    data = obj.model_dump()
+    try:
+        mapper = sqlalchemy_inspect(obj.__class__)
+        for rel in mapper.relationships.keys():
+            if rel in obj.__dict__:
+                data[rel] = obj.__dict__[rel]
+    except Exception:
+        pass
+    return data
+
 
 async def get_db_session(request: Request):
     app = request.app
@@ -39,7 +63,7 @@ def create_expose_wrapper(modelcls, method: str = "GET", one: bool = False, rela
     """
     Creates a FastAPI route handler for a model class based on the method.
     """
-    from basis.shared.db import _make_serializable
+    from basis.shared.serialization import jsonable
     method = method.upper()
 
     if method == "GET":
@@ -79,9 +103,9 @@ def create_expose_wrapper(modelcls, method: str = "GET", one: bool = False, rela
                 res = results.first()
                 if res is None:
                     raise HTTPException(status_code=404, detail="Record not found")
-                return _make_serializable(res)
+                return jsonable(res)
             else:
-                return [_make_serializable(x) for x in results.all()]
+                return [jsonable(x) for x in results.all()]
             
         return get_wrapper
 
@@ -90,7 +114,7 @@ def create_expose_wrapper(modelcls, method: str = "GET", one: bool = False, rela
             session.add(data)
             session.commit()
             session.refresh(data)
-            return _make_serializable(data)
+            return jsonable(data)
         return post_wrapper
 
     elif method == "PUT" or method == "PATCH":
@@ -119,7 +143,7 @@ def create_expose_wrapper(modelcls, method: str = "GET", one: bool = False, rela
             session.commit()
             session.refresh(db_record)
 
-            return _make_serializable(db_record)
+            return jsonable(db_record)
             
         return put_wrapper
 
@@ -143,7 +167,7 @@ def create_expose_wrapper(modelcls, method: str = "GET", one: bool = False, rela
                     raise HTTPException(status_code=404, detail="Record not found")
                 session.delete(db_record)
                 session.commit()
-                return {"detail": "Deleted successfully", "record": _make_serializable(db_record)}
+                return {"detail": "Deleted successfully", "record": jsonable(db_record)}
             else:
                 db_records = results.all()
                 if not db_records:
@@ -151,7 +175,7 @@ def create_expose_wrapper(modelcls, method: str = "GET", one: bool = False, rela
                 for db_record in db_records:
                     session.delete(db_record)
                 session.commit()
-                return {"detail": f"Deleted {len(db_records)} records successfully", "records": [_make_serializable(db_record) for db_record in db_records]}
+                return {"detail": f"Deleted {len(db_records)} records successfully", "records": [jsonable(db_record) for db_record in db_records]}
         return delete_wrapper
     
     else:

@@ -15,6 +15,14 @@ dependencies = [
 [project.scripts]
 basis = "basis.cli.main:app"
 
+# Official in-tree plugins, registered through the same entry-point mechanism
+# third-party plugins use ("everything is a plugin").
+# NOTE: point at the submodule explicitly (``...regions.plugin:plugin``) — the
+# package also imports a submodule named ``plugin``, which would shadow the
+# instance attribute if resolved as ``...regions:plugin``.
+[project.entry-points."basis.plugins"]
+regions = "basis.plugins.regions.plugin:plugin"
+
 [project.optional-dependencies]
 db = [
     "sqlmodel>=0.0.38",

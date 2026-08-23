@@ -35,6 +35,24 @@ else:
 from basis.shared.base_component import include_store, include_model
 
 
+# While the client mounts for SSR hydration (``mount_app_ssr``) components live
+# in a detached shadow that will be re-pointed at the live SSR tree. Dynamic
+# mounters (e.g. ``<ui-region>``) read this to defer real work to
+# ``on_hydrated``. Always ``False`` on the server (SSR render mounts normally).
+_SSR_HYDRATION = False
+
+
+def in_ssr_hydration() -> bool:
+    """True while the client is inside ``mount_app_ssr`` (the SSR-hydration
+    mount). False on the server and during plain CSR mounts."""
+    return _SSR_HYDRATION
+
+
+def _set_ssr_hydration(value: bool) -> None:
+    global _SSR_HYDRATION
+    _SSR_HYDRATION = value
+
+
 def client(func):
     @wraps(func)
     def wrapper(*args, **kwargs):

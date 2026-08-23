@@ -1,10 +1,10 @@
 """Bootstrap orchestration + conventional auto-discovery for the Basis server.
 
 The boot-time wiring (``BootstrapMixin`` mixed into ``Basis``) plus the
-conventional ``components/`` / ``stores/`` auto-discovery. Extracted from
-``app.py`` so the app class stays a thin composition of focused mixins.
-Plugin discovery lives in :mod:`basis.server.plugins`; the mount helpers
-(``include_components_dir`` etc.) stay on ``Basis``.
+conventional ``components/`` / ``stores/`` / ``plugins/`` auto-discovery.
+Extracted from ``app.py`` so the app class stays a thin composition of focused
+mixins. Plugin *discovery* lives in :mod:`basis.server.plugins`; the mount
+helpers (``include_components_dir`` etc.) stay on ``Basis``.
 """
 import importlib.util
 import inspect
@@ -25,19 +25,31 @@ def _discover_conventional_dirs(
     app_dir: Path,
     components_dir: str = "components",
     stores_dir: str = "stores",
+    plugins_dir: str = "plugins",
 ) -> list[dict]:
     """
     Find conventional subdirectories under *app_dir* (``components/``,
-    ``stores/``) that exist as proper Python packages.
+    ``stores/``, ``plugins/``) that exist as proper Python packages.
 
     Isomorphism invariant: the mount path for a discovered dir reproduces its
     package path, so the client VFS import name equals the filesystem import
     name (and what IDEs resolve). A conventional dir is only discovered if it
     is a real package (has an ``__init__.py``); otherwise it is skipped with a
     warning — silently inventing a VFS-only namespace would break IDE parity.
+
+    ``plugins/`` is mounted like the other two so local plugin files (flat
+    modules and packages alike) are served once at their package path — a local
+    plugin must NOT self-mount its ``static_dir`` (a flat-file plugin would
+    otherwise mount its whole parent ``plugins/`` dir and duplicate every
+    sibling's VFS destination). Installed plugins live outside the app tree and
+    keep their own package-dir static mounts.
     """
     found = []
-    for name, subdir in (("components", components_dir), ("stores", stores_dir)):
+    for name, subdir in (
+        ("components", components_dir),
+        ("stores", stores_dir),
+        ("plugins", plugins_dir),
+    ):
         path = app_dir / subdir
         if not path.is_dir():
             continue
@@ -59,8 +71,9 @@ class BootstrapMixin:
     Hosts ``bootstrap`` and the boot-time route/mount registrations it runs
     (RPC endpoint, offline PyScript, ``/pyscript.json``, framework client/shared
     mounts, the ``basis.ui`` suite) plus conventional ``components/``/
-    ``stores/`` auto-discovery. The host app provides (during construction)
-    ``_app_dir``, ``_components_dir``, ``_stores_dir``, ``_discovered_dirs``,
+    ``stores/``/``plugins/`` auto-discovery. The host app provides (during
+    construction) ``_app_dir``, ``_components_dir``, ``_stores_dir``,
+    ``_plugins_dir``, ``_discovered_dirs``,
     ``_bootstrapped``, ``_component_routes`` and ``vfs``, plus ``include_store``
     and the plugin/region stores that :meth:`bootstrap` wires together. The
     ``basis.shared.*`` imports inside :meth:`bootstrap` are intentionally local
@@ -78,9 +91,11 @@ class BootstrapMixin:
         self.include_server_actions()
         self.include_plugins_projection()
 
-        # --- Auto-discover conventional directories (components/, stores/) ---
+        # --- Auto-discover conventional directories (components/, stores/, plugins/) ---
         # Mounts them with package-derived paths (isomorphic VFS namespace) and
         # imports stores/ modules so their module-scope instances register.
+        # plugins/ is mounted too so local plugin files are served once at their
+        # package path (flat-file plugins must not self-mount their parent dir).
         self._auto_discover_dirs()
         self._discovered_store_modules = self._auto_import_stores()
 
@@ -93,15 +108,11 @@ class BootstrapMixin:
             self.plugins.__dict__["_app"] = self
         self.include_store("plugins")
 
-        # App-global region store ($regions) — the spatial control plane (a
-        # reactive projection of app._regions; see ROADMAP-SPATIAL.md).
-        from basis.shared.region import RegionStore
-        if not hasattr(self, "regions"):
-            self.regions = RegionStore("regions")
-            self.regions.__dict__["_app"] = self
-        self.include_store("regions")
-
         # --- Auto-discover plugins ---
+        # Official in-tree plugins (e.g. basis.plugins.regions — the $regions
+        # store, <ui-region> and the region contribution API) are registered
+        # through the standard basis.plugins entry-point mechanism, exactly like
+        # third-party plugins ("everything is a plugin").
         self._auto_discover_plugins()
 
     def include_server_actions(self, mount_path: str = "/basis/api/action"):
@@ -161,16 +172,20 @@ class BootstrapMixin:
 
     def _auto_discover_dirs(self):
         """
-        Mount conventional subdirectories (``components/``, ``stores/``) with
-        package-derived mount paths so the client VFS namespace equals the
-        filesystem import namespace (isomorphism). Idempotent: an existing
-        mount wins. A conventional dir is only discovered if it is a real
-        Python package (has ``__init__.py``); otherwise it is skipped with a
-        warning (see ``_discover_conventional_dirs``).
+        Mount conventional subdirectories (``components/``, ``stores/``,
+        ``plugins/``) with package-derived mount paths so the client VFS
+        namespace equals the filesystem import namespace (isomorphism).
+        Idempotent: an existing mount wins. A conventional dir is only
+        discovered if it is a real Python package (has ``__init__.py``);
+        otherwise it is skipped with a warning (see
+        ``_discover_conventional_dirs``).
         """
         self._discovered_dirs = {}
         for cfg in _discover_conventional_dirs(
-            self._app_dir, self._components_dir, self._stores_dir
+            self._app_dir,
+            self._components_dir,
+            self._stores_dir,
+            self._plugins_dir,
         ):
             mount = "/" + cfg["pkg"].replace(".", "/") + "/"
             # Starlette strips the trailing slash from Mount paths; compare the

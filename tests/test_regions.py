@@ -9,6 +9,7 @@ and an end-to-end SSR render where a ``<ui-region>`` mounts a contributed
 component's HTML.
 """
 import json
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,9 +20,13 @@ from basis.server.plugin import BasisPlugin
 from basis.shared.component import Component
 from basis.shared.store import Store
 
+# The official regions plugin provides the <ui-region> custom element, the
+# $regions store and the contribution API (app-level add_to_region moved into
+# the plugin space — REGIONS-PLUGIN-PLAN.md D2).
+from basis.plugins.regions import regions_plugin
 # Register the <ui-region> custom element / component class so templates that
 # reference the tag resolve it as a child component (server + client).
-import basis.ui.region.region  # noqa: F401
+import basis.plugins.regions.region  # noqa: F401
 
 
 @pytest.fixture(autouse=True)
@@ -57,7 +62,7 @@ class MetricStatus(Component):
 
 
 def _listing(app):
-    from basis.shared.region import _region_listing
+    from basis.plugins.regions.registry import _region_listing
     return _region_listing(app)
 
 
@@ -68,7 +73,7 @@ def _listing(app):
 def test_add_to_region_registers_and_store_projects():
     app = Basis()
     app.bootstrap()
-    app.add_to_region("statusbar-right", StatusPill, props={"text": "synced"})
+    regions_plugin.add_to_region("statusbar-right", StatusPill, props={"text": "synced"})
 
     listing = _listing(app)
     assert "statusbar-right" in listing
@@ -84,8 +89,9 @@ def test_add_to_region_registers_and_store_projects():
 
 def test_duplicate_class_same_region_replaces():
     app = Basis()
-    app.add_to_region("statusbar-right", StatusPill, props={"text": "first"})
-    app.add_to_region("statusbar-right", StatusPill, props={"text": "second"})
+    app.bootstrap()
+    regions_plugin.add_to_region("statusbar-right", StatusPill, props={"text": "first"})
+    regions_plugin.add_to_region("statusbar-right", StatusPill, props={"text": "second"})
     items = app._regions["statusbar-right"]
     assert len(items) == 1  # class-as-identity → replace, not duplicate
     assert items[0].props == {"text": "second"}
@@ -93,15 +99,16 @@ def test_duplicate_class_same_region_replaces():
 
 def test_ordering_default_then_order_then_position_start():
     app = Basis()
-    app.add_to_region("bar", StatusPill)
-    app.add_to_region("bar", MetricStatus, order=1)
-    app.add_to_region("bar", MetricStatus, order=1)  # replaced (same class) → no dup
-    app.add_to_region("bar", StatusPill, position="start")  # replaced → no dup
+    app.bootstrap()
+    regions_plugin.add_to_region("bar", StatusPill)
+    regions_plugin.add_to_region("bar", MetricStatus, order=1)
+    regions_plugin.add_to_region("bar", MetricStatus, order=1)  # replaced (same class) → no dup
+    regions_plugin.add_to_region("bar", StatusPill, position="start")  # replaced → no dup
     # Re-add distinct classes with different orders:
     app._regions.clear()
-    app.add_to_region("bar", StatusPill)                       # natural (append)
-    app.add_to_region("bar", MetricStatus, order=1)            # explicit order
-    app.add_to_region("bar", StatusPill, position="start")     # prepend
+    regions_plugin.add_to_region("bar", StatusPill)                   # natural (append)
+    regions_plugin.add_to_region("bar", MetricStatus, order=1)        # explicit order
+    regions_plugin.add_to_region("bar", StatusPill, position="start")  # prepend
 
     paths = [c.cls_path for c in app._regions["bar"]]
     # position="start" (MIN_ORDER) first, then order=1, then natural append last.
@@ -112,14 +119,15 @@ def test_ordering_default_then_order_then_position_start():
 
 def test_remove_from_region_and_handle_dispose():
     app = Basis()
-    handle = app.add_to_region("sidebar", MetricStatus, props={"metric": "cpu"})
+    app.bootstrap()
+    handle = regions_plugin.add_to_region("sidebar", MetricStatus, props={"metric": "cpu"})
     assert app._regions["sidebar"]
 
     handle.dispose()
     assert not app._regions["sidebar"]
 
-    app.add_to_region("sidebar", MetricStatus)
-    assert app.remove_from_region("sidebar", MetricStatus) is True
+    regions_plugin.add_to_region("sidebar", MetricStatus)
+    assert regions_plugin.remove_from_region("sidebar", MetricStatus) is True
     assert not app._regions["sidebar"]
 
 
@@ -128,13 +136,13 @@ def test_remove_from_region_and_handle_dispose():
 # ---------------------------------------------------------------------------
 
 def test_resolve_component_round_trip():
-    from basis.shared.region import cls_path_of, resolve_component
+    from basis.plugins.regions.registry import cls_path_of, resolve_component
     cls_path = cls_path_of(StatusPill)
     assert resolve_component(cls_path) is StatusPill
 
 
 def test_mount_component_by_cls_path_into_element():
-    from basis.shared.region import mount_component
+    from basis.plugins.regions.registry import mount_component
     from basis.server.tree_builder import html_to_element
 
     container = html_to_element("<div id='host'></div>")
@@ -178,13 +186,48 @@ def test_plugin_region_flushes_on_include_and_unwinds_on_remove():
 # ---------------------------------------------------------------------------
 
 def test_region_store_add_local_and_remove_local():
-    from basis.shared.region import RegionStore
+    from basis.plugins.regions.store import RegionStore
     store = RegionStore("regions")
     store.add_local("statusbar-right", "demo.StatusPill", {"text": "x"}, order=1)
     store.add_local("statusbar-right", "demo.StatusPill", {"text": "y"})  # replace
     assert len(store.items_for("statusbar-right")) == 1
     store.remove_local("statusbar-right", "demo.StatusPill")
     assert store.items_for("statusbar-right") == []
+
+
+def test_region_store_add_local_replaces_in_place_does_not_reorder():
+    """Regression: re-adding an existing contribution must replace it IN PLACE.
+
+    A contribution's module can be imported lazily *while* the region mounts it
+    (``resolve_component``), which re-runs ``@plugin.region`` and calls
+    ``add_local`` again. The old remove+re-append implementation moved the
+    contribution to the end, silently flipping the region order on the client
+    (the TeamExplorer jumped above the regions_demo banner after hydration).
+    The hydrated ``#basis-initial-state`` order is authoritative on boot.
+    """
+    from basis.plugins.regions.store import RegionStore
+    store = RegionStore("regions")
+    store.__dict__["items"] = {
+        "workspace-center": [
+            {"cls_path": "jotter.plugins.regions_demo.RegionDemoBanner", "props": {}, "order": None},
+            {"cls_path": "jotter.plugins.heroes.TeamExplorer", "props": {}, "order": None},
+        ]
+    }
+
+    # Simulate the lazy import of regions_demo happening while the region
+    # mounts its contributions (the banner gets re-registered mid-flight).
+    store.add_local("workspace-center", "jotter.plugins.regions_demo.RegionDemoBanner", props={"p": 1})
+
+    assert [it["cls_path"] for it in store.items_for("workspace-center")] == [
+        "jotter.plugins.regions_demo.RegionDemoBanner",
+        "jotter.plugins.heroes.TeamExplorer",
+    ]
+    # The replaced entry keeps its position AND its updated props.
+    assert store.items_for("workspace-center")[0]["props"] == {"p": 1}
+
+    # A genuinely new contribution appends at the end.
+    store.add_local("workspace-center", "x.New")
+    assert [it["cls_path"] for it in store.items_for("workspace-center")][-1] == "x.New"
 
 
 # ---------------------------------------------------------------------------
@@ -202,8 +245,8 @@ def test_ssr_renders_region_items():
         </div>
         """
 
-    app.add_to_region("statusbar-right", StatusPill, props={"text": "synced"})
-    app.add_to_region("statusbar-right", MetricStatus, props={"metric": "cpu", "value": "12%"})
+    regions_plugin.add_to_region("statusbar-right", StatusPill, props={"text": "synced"})
+    regions_plugin.add_to_region("statusbar-right", MetricStatus, props={"metric": "cpu", "value": "12%"})
 
     app.include_page("/", page_cls=_synthesize_page(Root, entry_module="/test_root.py"))
     client = TestClient(app)
@@ -228,3 +271,29 @@ def test_ssr_renders_region_items():
     )
     assert "regions" in state
     assert "statusbar-right" in state["regions"]["items"]
+
+
+def test_ssr_renders_region_items_in_declared_order():
+    """Contributions render in declaration order — a re-registration must never
+    silently reorder the region (this is the SSR-side contract of the client
+    ``add_local`` in-place fix)."""
+    app = Basis()
+    app.bootstrap()
+
+    class Root(Component):
+        """
+        <div class="app-root">
+            <ui-region name="statusbar-right"></ui-region>
+        </div>
+        """
+
+    regions_plugin.add_to_region("statusbar-right", StatusPill, props={"text": "synced"})
+    regions_plugin.add_to_region("statusbar-right", MetricStatus, props={"metric": "cpu", "value": "12%"})
+
+    app.include_page("/", page_cls=_synthesize_page(Root, entry_module="/test_root.py"))
+    client = TestClient(app)
+    resp = client.get("/")
+    assert resp.status_code == 200
+
+    markers = re.findall(r'data-region-item="([^"]+)"', resp.text)
+    assert [m.rsplit(".", 1)[-1] for m in markers] == ["StatusPill", "MetricStatus"]

@@ -97,6 +97,7 @@ class BasisPlugin(ModelRegistryMixin):
         self.models = set()
         self._settings = {}
         self._region_items = []
+        self._store_items = []
         self.router = APIRouter(prefix=self.prefix, tags=tags or [])
 
     def action(self, func_or_name: T | str | None = None, name: str | None = None) -> Any:
@@ -145,7 +146,7 @@ class BasisPlugin(ModelRegistryMixin):
         ``$regions`` store if present (an ephemeral runtime add — the SSR/CSR
         initial state is authoritative on boot). Returns a ``RegionHandle``.
         """
-        from basis.shared.region import (
+        from basis.plugins.regions.registry import (
             MIN_ORDER,
             RegionContribution,
             RegionHandle,
@@ -176,6 +177,43 @@ class BasisPlugin(ModelRegistryMixin):
             self.add_to_region(name, cls, **kwargs)
             return cls
         return decorator
+
+    def store(self, func_or_name=None, name=None):
+        """Client-side mirror of :meth:`basis.server.plugin.BasisPlugin.store`.
+
+        The declaration is recorded so a plugin module imports identically on
+        both sides; the wiring happens server-side at include time.
+        """
+        if name is None and isinstance(func_or_name, str):
+            name = func_or_name
+
+        def decorator(cls):
+            self._store_items.append((name, cls))
+            return cls
+
+        if callable(func_or_name):
+            return decorator(func_or_name)
+        return decorator
+
+    def include_store(self, app=None, store_cls=None, name=None):
+        """Client-side mirror of the server store-inclusion API.
+
+        No app exists client-side: if the store isn't already registered (e.g.
+        hydrated from ``#basis-initial-state``), ensure it in the local registry
+        as a pure reactive view. Returns the store instance (or ``None``).
+        """
+        from basis.shared.store import Store
+
+        if name is None and store_cls is not None:
+            instance = store_cls()
+            name = instance.get_store_name()
+        if name is None:
+            return None
+        instance = Store._registry.get(name)
+        if instance is None and store_cls is not None:
+            instance = store_cls(name)
+            Store._registry[name] = instance
+        return instance
 
     def post(self, path: str, **kwargs):
         return lambda f: f

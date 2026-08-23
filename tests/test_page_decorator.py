@@ -10,8 +10,9 @@ Tests for the Page / root-component API:
 * Synthesized pages are NOT emitted into ``#basis-entrypoint-imports``.
 * SSR pages carry a ``<meta name="basis-render" content="ssr">`` marker (the
   unified client entrypoint dispatches on it); a strict page store subset is
-  emitted as ``#basis-page-stores`` and framework control-plane stores
-  (``$plugins``/``$regions``) are always serialized on CSR.
+  emitted as ``#basis-page-stores`` and the framework control-plane store
+  (``$plugins``) is always serialized on CSR (``$regions`` is a plugin-provided
+  store — serialized by default, or listed in ``Page.stores`` explicitly).
 """
 import json
 import re
@@ -328,7 +329,55 @@ def test_csr_page_always_serializes_framework_stores_with_strict_subset():
 
     # The page's explicit subset is serialized...
     assert "csr_subset_store" in state
-    # ...and framework control-plane stores hydrate even though the page did
-    # not list them (they must exist on every page, not just default-all ones).
+    # ...and the framework control-plane store hydrates even though the page
+    # did not list it (it must exist on every page, not just default-all ones).
     assert "plugins" in state
+    # $regions is a plugin-provided store, NOT a framework control plane: it is
+    # not force-serialized for a strict subset unless the page lists it.
+    assert "regions" not in state
+
+
+def test_csr_page_serializes_regions_when_listed_in_strict_subset():
+    from basis.shared.page import Page
+
+    app = Basis()
+    app.bootstrap()
+
+    class S(Store):
+        def __init__(self, name):
+            super().__init__(name)
+            self.v = 1
+
+    # Unique name: Store blueprints persist across tests in this file (no
+    # per-test registry reset here), so a second local S with the same name
+    # would trip the conflict-aware redeclaration guard.
+    S("csr_subset_store_b")
+
+    class Root(Component):
+        """<div>hi</div>"""
+
+    class MyPage(Page):
+        root_component = Root
+        stores = ["csr_subset_store_b", "regions"]
+        entry_module = "/test_root.py"
+
+    @app.get("/csr")
+    async def csr(request: Request):
+        page_instance = MyPage.load()
+        return HTMLResponse(page_instance.render_full_page(request=request))
+
+    client = TestClient(app)
+    resp = client.get("/csr")
+    assert resp.status_code == 200
+
+    match = re.search(
+        r'<script id="basis-initial-state"[^>]*>(.*?)</script>',
+        resp.text,
+        re.DOTALL,
+    )
+    assert match, "basis-initial-state script not found"
+    state = json.loads(match.group(1))
+
+    # Listing "regions" in the page's strict subset serializes the $regions
+    # projection (the regions plugin registered its store at boot).
     assert "regions" in state

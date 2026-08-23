@@ -2,8 +2,7 @@
 
 A data-driven mount point: the component reads its page's ``$regions`` slice
 for ``name`` and mounts each contribution's component class into its own root,
-live, on both SSR and the client. See ``ROADMAP-SPATIAL.md`` (Tier A1/A2) and
-the Advanced docs on dynamic mounting.
+live, on both SSR and the client. See ``ROADMAP-SPATIAL.md`` (Tier A1/A2).
 
 Not a ``<slot>`` — slots are static and shadow-DOM-bound. A region grows and
 shrinks with the ``$regions`` store (which is app-housed and page-scoped): the
@@ -11,8 +10,10 @@ shrinks with the ``$regions`` store (which is app-housed and page-scoped): the
 boot, and runtime add/remove re-runs a scoped re-sync of this region only.
 """
 
-from basis.shared.component import Component
-from basis.shared.region import ensure_region_registry, mount_component
+from basis.shared.component import Component, in_ssr_hydration
+
+from basis.plugins.regions.registry import mount_component
+from basis.plugins.regions.store import ensure_region_registry
 
 
 class Region(Component):
@@ -40,14 +41,48 @@ class Region(Component):
         registered — this is a declarative read of ``$regions`` for ``name``.
         Runtime add/remove re-runs ``_sync`` (a scoped re-sync, not a page
         re-render).
+
+        On the client's SSR-hydration path the app is first mounted into a
+        detached shadow before ``initialize_ssr`` re-points every component at
+        the live SSR tree. Mounting contributions here would leave their
+        bindings on shadow nodes the user never sees (dead reactivity), so the
+        region defers and re-runs after hydration (``on_hydrated``).
         """
         ensure_region_registry()
+        if in_ssr_hydration():
+            # Client, SSR path: mount + store wiring happen after hydration
+            # re-points this component at the live SSR region node.
+            return
         self._sync()
+        self._subscribe_to_region_store()
+
+    def _subscribe_to_region_store(self):
         store = self.S.get("regions")
-        if store is not None:
-            store.add_subscription(self, "items")
-            self._dag.get_or_create_state("$regions.items")
-            self._dag.add_effect("region_sync", self._sync, ["$regions.items"])
+        if store is None:
+            return
+        if (self, "items") in store._subscriptions:
+            return  # already wired — don't double-register the DAG effect
+        store.add_subscription(self, "items")
+        self._dag.get_or_create_state("$regions.items")
+        self._dag.add_effect("region_sync", self._sync, ["$regions.items"])
+
+    def on_hydrated(self):
+        """Client-only (via ``initialize_ssr``). The SSR tree pre-rendered each
+        contribution statically, but item roots carry no canonical hydration ids
+        and the shadow-mounted copies were deferred — so the client takes over
+        the subtree: drop the static items and re-mount live contributions into
+        the hydrated (SSR) region node. Their bindings then act on the visible
+        DOM, restoring reactivity (e.g. selecting a team in the sidebar updates
+        a region-hosted explorer)."""
+        element = self.__element__  # live SSR region node (post-hydration)
+        for node in list(element.querySelectorAll("[data-region-item]")):
+            try:
+                node.remove()
+            except Exception:
+                pass
+        self._region_mounted = {}
+        self._sync()
+        self._subscribe_to_region_store()
 
     def _sync(self):
         """Reconcile mounted contributions against the current store slice."""

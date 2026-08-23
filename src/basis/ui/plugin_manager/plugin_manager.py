@@ -34,6 +34,11 @@ class PluginManager(Component):
         event dispatch — an async handler runs later (on the event loop) when
         ``currentTarget`` is already ``JsNull``. So read the target here and
         schedule the store's server action on the loop.
+
+        The disable/enable action returns the fresh ``$regions`` listing (when
+        the regions plugin is active), which the client RPC layer applies to the
+        ``$regions`` store automatically — so this panel does not need to know
+        about regions at all.
         """
         target = getattr(event, "currentTarget", None)
         if target is None:

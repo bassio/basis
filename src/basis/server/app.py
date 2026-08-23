@@ -65,10 +65,6 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
             self._plugins = []
         # Revertible plugin registration records (teardown truth, keyed by name).
         self._plugin_registrations = {}
-        # App-housed region registry (ROADMAP-SPATIAL.md): {region: [RegionContribution]}.
-        # Durable, boot-populated; the $regions store is a reactive projection.
-        self._regions = {}
-        self._region_seq = 0
         # Set when a plugin was added/removed so the HMR watcher rebuilds its map.
         self._hmr_map_dirty = True
         # Cache for _plugin_importers() — warmed at lifespan startup (alongside
@@ -164,53 +160,6 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
             'target': target
         })
         return self
-
-    def add_to_region(
-        self,
-        region: str,
-        component_cls,
-        *,
-        props: dict | None = None,
-        order: int | None = None,
-        position: str = "end",
-        owner: str | None = None,
-    ):
-        """Register a component class into *region* (the app-level primitive).
-
-        Identity is ``(region, class)``: re-adding the same class replaces the
-        existing entry (HMR-safe). Ordering: declaration order (append) by
-        default, overridable by ``order=`` (int sort key); ``position="start"``
-        prepends. Returns a ``RegionHandle`` disposer. See ROADMAP-SPATIAL.md.
-        """
-        from basis.shared.region import (
-            MIN_ORDER,
-            RegionContribution,
-            RegionHandle,
-            _register_contribution,
-        )
-        if position == "start" and order is None:
-            order = MIN_ORDER
-        contrib = RegionContribution(
-            region=region,
-            component_cls=component_cls,
-            props=props or {},
-            order=order,
-            owner=owner,
-            seq=self._region_seq,
-        )
-        self._region_seq += 1
-        _register_contribution(self, contrib)
-        return RegionHandle(contrib, app=self, owner=owner)
-
-    def remove_from_region(self, region: str, component_cls) -> bool:
-        """Remove every contribution of *component_cls* from *region*."""
-        from basis.shared.region import _unregister_contribution, cls_path_of
-        removed = False
-        for contrib in list(getattr(self, "_regions", {}).get(region, [])):
-            if contrib.cls_path == cls_path_of(component_cls):
-                _unregister_contribution(self, contrib)
-                removed = True
-        return removed
 
     def _has_route(self, *, path: str | None = None, name: str | None = None) -> bool:
         """True if a route already matches the given path and/or name."""

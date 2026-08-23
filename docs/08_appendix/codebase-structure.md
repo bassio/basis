@@ -18,9 +18,12 @@ src/basis/
 │   ├── actions.py        # RPC client — call_action by canonical path
 │   ├── plugin.py         # Client-side BasisPlugin shim
 │   └── plugins.py        # Client-side plugin helpers
+├── plugins/              # Official in-tree plugins (registered via basis.plugins entry points)
+│   └── regions/          # The regions / spatial primitive: <ui-region>, $regions store,
+│                         #   add_to_region / @plugin.region, RegionStore, registry primitives
 ├── server/               # FastAPI-side runtime
 │   ├── app.py            # Basis (FastAPI subclass): composition root, init, include_components_dir, page/include_page
-│   ├── bootstrap.py      # BootstrapMixin: boot orchestration + boot mounts (offline PyScript, /pyscript.json, framework, ui) + conventional-dir/store auto-discovery
+│   ├── bootstrap.py      # BootstrapMixin: boot orchestration + boot mounts (offline PyScript, /pyscript.json, framework, ui) + conventional-dir/store auto-discovery (components/, stores/, plugins/)
 │   ├── rpc.py            # RPC pipeline: canonical-path dispatch, store binding, response/error handling
 │   ├── ssr.py            # SSR pipeline (render_page_ssr, hydration IDs)
 │   ├── tree_builder.py   # HTML → Element tree builder (r:0:1 path IDs)
@@ -70,4 +73,5 @@ src/basis/
 - **`src/basis/shared/hydration.py`**: The canonical hydration-path algorithm shared by SSR and client, plus loop re-pointing (`repoint_loop_to_ssr`).
 - **`src/basis/shared/base_component.py`**: Component initialization, AST template analysis, blueprint compilation, slot filling, and state node creation.
 - **`src/basis/shared/store.py`**: `Store`, `ModelStore` (reactive CRUD), `WebSocketStore`, and `ReactiveCollection`.
+- **`src/basis/plugins/`**: Official in-tree plugins, registered through the `basis.plugins` entry point like third-party plugins. `regions/` ships the spatial primitive — `<ui-region>`, the `$regions` `RegionStore`, `add_to_region` / `@plugin.region`, and the registry primitives (`RegionContribution`, `RegionHandle`, `resolve_component` / `mount_component`). See [Regions — the Spatial API](../07_plugins/spatial-api.md).
 - **`src/basis/static/pyscript/`**: The offline PyScript/Pyodide bundle served from `/pyscript`.

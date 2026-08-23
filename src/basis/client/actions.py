@@ -27,7 +27,10 @@ async def _post_rpc(payload: dict) -> Any:
 
     result = await response.json()
 
-    # Handle state synchronization
+    # Handle state synchronization. Dependent app-bound stores re-sync through
+    # their own cross-store DAG edges (e.g. $regions observes $plugins.items),
+    # which fire on the setattr inside update() — no framework-level dependency
+    # registry here.
     if "new_state" in result and payload.get("store_name"):
         from basis.shared.store import Store
         store = Store._registry.get(payload["store_name"])

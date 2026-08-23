@@ -166,6 +166,9 @@ class BasisPlugin(ModelRegistryMixin):
         # Region contributions declared via add_to_region / @plugin.region. Flushed
         # into the app registry by include_plugin (ROADMAP-SPATIAL.md A1).
         self._region_items = []
+        # Stores declared via include_store / @plugin.store. Wired into the app
+        # by include_plugin (and recorded on PluginRegistration for unwind).
+        self._store_items = []
         self._app = None
         # Public router — use @plugin.router.get(...) for full FastAPI control,
         # or the convenience shorthands below.
@@ -230,7 +233,7 @@ class BasisPlugin(ModelRegistryMixin):
         ``PluginRegistration`` so disable/remove unwind them); if the plugin is
         already registered they register immediately.
         """
-        from basis.shared.region import (
+        from basis.plugins.regions.registry import (
             MIN_ORDER,
             RegionContribution,
             RegionHandle,
@@ -260,6 +263,55 @@ class BasisPlugin(ModelRegistryMixin):
             self.add_to_region(name, cls, **kwargs)
             return cls
         return decorator
+
+    def store(self, func_or_name=None, name=None):
+        """Decorator: declare a store class this plugin provides (wired on include).
+
+        Usable as ``@plugin.store`` (the store class's own default constructor
+        name is used, e.g. ``RegionStore()`` → ``"regions"``), as
+        ``@plugin.store("name")``, or as ``@plugin.store(name="name")``.
+        """
+        if name is None and isinstance(func_or_name, str):
+            name = func_or_name
+
+        def decorator(cls):
+            self._store_items.append((name, cls))
+            return cls
+
+        if callable(func_or_name):
+            return decorator(func_or_name)
+        return decorator
+
+    def include_store(self, app, store_cls, name=None):
+        """Wire a store this plugin provides into *app* (first-class store API).
+
+        Constructs/reuses the store (blueprint-aware), registers it in the app's
+        store registry, app-attaches it if it opts in via ``_requires_app`` (e.g.
+        ``$regions``), and adds it to the app's global store list so SSR/CSR
+        collect it. Returns the wired instance.
+
+        Used by a plugin's ``on_register`` (the app is available there) and by
+        ``include_plugin`` for stores declared with :meth:`store`.
+        """
+        from basis.shared.store import Store, attach_app_to_store
+
+        if name is None:
+            instance = store_cls()
+            name = instance.get_store_name()
+        else:
+            instance = (
+                Store._registry.get(name)
+                or Store.reinstantiate(name)
+                or store_cls(name)
+            )
+        Store._registry[name] = instance
+        attach_app_to_store(instance, app)
+        app.include_store(name)
+        # Record as a plugin-provided store so include/remove can unwind it.
+        item = (name, store_cls)
+        if item not in self._store_items:
+            self._store_items.append(item)
+        return instance
 
     # ------------------------------------------------------------------
     # Convenience aliases — delegate to self.router so callers can write

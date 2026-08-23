@@ -143,7 +143,8 @@ class VFSRegistry:
             "basis_await.py",
             "validation.py",
             "plugin_registry.py",
-            "region.py",
+            "serialization.py",
+            "app_state.py",
         ]:
             stem = Path(f_name).stem
             target = stem + py_ext

@@ -98,7 +98,30 @@ plugin = AuthPlugin(prefix="/auth", ...)
 
 ---
 
-## 5. Plugin Server Actions
+## 5. Official In-Tree Plugins
+
+Basis ships several framework features as **official plugins** — ordinary
+`BasisPlugin`s registered through the `basis.plugins` entry point, exactly like
+a third-party plugin. This is deliberate: the framework "dogfoods" the plugin
+system it extends, so nothing special-cased in the core is exempt from the same
+lifecycle (discovery, include/enable/disable, revertible registration).
+
+Current official plugins:
+
+| Plugin | Provides | Entry point |
+| :--- | :--- | :--- |
+| `regions` | `$regions` store, `<ui-region>`, the region contribution API | `basis.plugins.regions.plugin:plugin` |
+
+The `regions` plugin is the spatial primitive of Basis — see
+[Regions — the Spatial API](./spatial-api.md) for the full guide to hosting
+`<ui-region>` tags and contributing `@plugin.region` panels.
+
+> [!NOTE]
+> Official plugins that are effectively core (like `regions`) are
+> **non-disableable** — `disable_plugin` / `remove_plugin` refuse to unload them
+> so the plugin manager cannot strand an app that depends on their primitives.
+
+## 6. Plugin Server Actions
 
 Plugins can register scoped RPC actions using `@plugin.action`:
 
@@ -139,7 +162,7 @@ result = await plugin.generate_random_hero()
 
 ---
 
-## 6. Inspecting Plugins with CLI
+## 7. Inspecting Plugins with CLI
 
 To list all registered local and package plugins:
 

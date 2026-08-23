@@ -28,8 +28,8 @@ else:
     pyfetch = None
 
 from basis.shared.context import ContextVarProxyDict
-from basis.shared.db import _make_serializable
 from basis.shared.reactive import ReactiveObject
+from basis.shared.serialization import jsonable
 
 
 def _format_config(config: dict) -> str:
@@ -68,16 +68,19 @@ def attach_app_to_store(store, app) -> None:
 # ``#basis-initial-state`` so they hydrate on every page — on SSR they are added
 # to the app's ``_global_stores``; on CSR they are unioned into the page's
 # serialized set regardless of the page's ``Page.stores`` subset.
-FRAMEWORK_STORE_NAMES = ("plugins", "regions")
+# NOTE: ``$regions`` is NOT here — it is provided by the official regions plugin
+# (basis.plugins.regions), which registers its store at boot so it is picked up
+# by the default "all stores" serialization path.
+FRAMEWORK_STORE_NAMES = ("plugins",)
 
 
 def ensure_store(name: str, store_cls: type) -> Store:
     """Return the live store registered under *name*, creating it if absent.
 
-    The generic "ensure this framework store exists" primitive behind
-    ``ensure_plugin_registry`` / ``ensure_region_registry`` (and any future
-    framework-provided control-plane store). Idempotent: an existing instance
-    in ``Store._registry`` is returned as-is.
+    The generic "ensure this store exists" primitive behind
+    ``ensure_plugin_registry`` (and ``ensure_region_registry`` in the regions
+    plugin). Idempotent: an existing instance in ``Store._registry`` is
+    returned as-is.
     """
     existing = Store._registry.get(name)
     if existing is not None:
@@ -268,7 +271,7 @@ class Store(ReactiveObject):
             if callable(v):
                 continue
             try:
-                serializable_v = _make_serializable(v)
+                serializable_v = jsonable(v)
                 json.dumps(serializable_v)     # quick serialisability check
                 state[k] = serializable_v
             except (TypeError, ValueError):
@@ -329,6 +332,21 @@ class Store(ReactiveObject):
         # Remove from DAG
         effect_name = f"sub_{id(component_instance)}_{attr_name}"
         self._dag.remove_effect(effect_name)
+
+    def _require_app(self):
+        """Return the owning app for an app-bound store (``_requires_app``).
+
+        The RPC layer attaches ``_app`` before dispatching to an app-bound store
+        (``attach_app_to_store``), so client-facing server actions can rely on
+        this being present server-side.
+        """
+        app = self.__dict__.get("_app")
+        if app is None:
+            raise RuntimeError(
+                f"{type(self).__name__} requires the owning Basis app "
+                "(server-side). Perform the mutation on the server directly."
+            )
+        return app
 
     def update(self, new_state: dict):
         """

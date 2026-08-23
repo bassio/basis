@@ -69,45 +69,5 @@ else:
             return cls(**filtered_obj)
 
 
-def _make_serializable(val: Any, seen: set | None = None) -> Any:
-    if seen is None:
-        seen = set()
-
-    if val is None:
-        return None
-    if isinstance(val, (str, int, float, bool)):
-        return val
-
-    val_id = id(val)
-    if val_id in seen:
-        return None
-
-    new_seen = seen | {val_id}
-
-    if isinstance(val, (list, tuple, set)):
-        return [_make_serializable(x, new_seen) for x in val]
-    elif isinstance(val, dict):
-        return {k: _make_serializable(v, new_seen) for k, v in val.items()}
-    elif hasattr(val, "model_dump") or (hasattr(val, "dict") and callable(val.dict)):
-        if hasattr(val, "model_dump"):
-            data = val.model_dump()
-        else:
-            data = val.dict()
-
-        # Check if it has SQLAlchemy relationships loaded
-        try:
-            from sqlalchemy import inspect as sqlalchemy_inspect
-            mapper = sqlalchemy_inspect(val.__class__)
-            relationships = mapper.relationships.keys()
-            for rel in relationships:
-                if rel in val.__dict__:
-                    data[rel] = val.__dict__[rel]
-        except Exception:
-            pass
-        return _make_serializable(data, new_seen)
-    elif hasattr(val, "__dict__"):
-        return _make_serializable({k: v for k, v in val.__dict__.items() if not k.startswith("_")}, new_seen)
-    return val
-
 
         

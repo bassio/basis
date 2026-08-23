@@ -1,4 +1,4 @@
-"""App-housed, page-scoped region registry — the ``$regions`` spatial primitive.
+"""Region contribution primitives (the registry machinery behind ``$regions``).
 
 A region is a named, ordered list of *component recipes* (a ``Component`` class +
 initial ``props``). The class is the identity of a contribution: there is at most
@@ -6,29 +6,20 @@ one instance per ``(region, class)``, re-adding the same class replaces the
 existing entry (HMR-safe), and the framework owns every live instance (mount,
 hydrate, dispose).
 
-Layering (see ``ROADMAP-SPATIAL.md``, Tier A1/A2):
-
-- **App-housed**: the authoritative registry lives on the app (``Basis._regions``)
-  and is populated at boot by plugins / the skeleton. The ``RegionStore``
-  (``$regions``) is a reactive ``_requires_app`` projection of it, serialized
-  into ``#basis-initial-state``.
-- **Page-scoped**: a page's visible regions are the ``<ui-region name=...>``
-  tags its component tree hosts; each page renders only ``hosted ∩ registered``.
+This module is the low-level, app-agnostic half of the regions plugin: the
+``RegionContribution`` / ``RegionHandle`` records, the app registry
+(``app._regions``) mutators, and the dynamic-mount primitives
+(``resolve_component`` / ``mount_component``). The reactive ``$regions`` store
+and the ``<ui-region>`` component live in :mod:`basis.plugins.regions.store` and
+:mod:`basis.plugins.regions.region`.
 
 Registration timing: contributions register at import/boot (never at render —
 render only reads); render points (``<ui-region>`` tags) are declarative reads,
-never registered; hosted sets are derived lazily at first render of each page
-and cached.
-
-The one new primitive underneath regions is :func:`mount_component` — resolve a
-component by class or ``module.path.ClassName`` and mount it into a node,
-duck-typed for the server ``Element`` model and the client DOM.
+never registered.
 """
 
 import importlib
 from dataclasses import dataclass, field
-
-from basis.shared.store import Store
 
 # Sentinel used by ``position="start"`` so a contribution sorts before any
 # explicit positive ``order`` (append = ``order=None`` → sorts last).
@@ -176,63 +167,3 @@ def mount_component(node, component_cls_or_path, props: dict | None = None):
     else:
         component_cls = component_cls_or_path
     return component_cls.mount(node, replace=False, **(props or {}))
-
-
-class RegionStore(Store):
-    """Reactive, app-global region registry (registered under the name ``regions``).
-
-    Server: a ``_requires_app`` projection of ``app._regions`` (durable,
-    boot-populated), refreshed at app-attach time. Client: a pure reactive view
-    hydrated from ``#basis-initial-state``, plus ``add_local`` / ``remove_local``
-    for ephemeral runtime adds (never written back to the server registry).
-    """
-
-    _requires_app = True
-
-    def __init__(self, name: str = "regions"):
-        super().__init__(name)
-        # Reactive projection: {region: [{cls_path, props, order}, ...]}.
-        # Never clobber the SSR-hydrated items (store-subclass footgun).
-        if not getattr(self, "_hydrated_from_ssr", False):
-            self.__dict__["items"] = {}
-
-    def _refresh_from_app(self) -> None:
-        app = self.__dict__.get("_app")
-        if app is None:
-            return
-        self.__dict__["items"] = _region_listing(app)
-
-    def serialize(self) -> dict:
-        self._refresh_from_app()
-        return super().serialize()
-
-    def items_for(self, region: str) -> list:
-        return (self.items or {}).get(region, [])
-
-    def add_local(self, region: str, cls_path: str, props: dict | None = None, order=None) -> None:
-        """Ephemeral client-side add (replace by ``cls_path``)."""
-        items = dict(self.items or {})
-        region_items = [it for it in items.get(region, []) if it.get("cls_path") != cls_path]
-        region_items.append({"cls_path": cls_path, "props": props or {}, "order": order})
-        items[region] = region_items
-        self.items = items
-
-    def remove_local(self, region: str, cls_path: str) -> None:
-        """Ephemeral client-side removal."""
-        items = dict(self.items or {})
-        region_items = [it for it in items.get(region, []) if it.get("cls_path") != cls_path]
-        items[region] = region_items
-        self.items = items
-
-
-def ensure_region_registry() -> RegionStore:
-    """Return the region store, creating it if absent.
-
-    Called by the client entrypoints (and lazily by ``ui-region``) so
-    ``$regions`` resolves on every page. On SSR/CSR the store hydrates from
-    ``#basis-initial-state``; ``add_local`` / ``remove_local`` cover ephemeral
-    runtime adds.
-    """
-    from basis.shared.store import ensure_store
-
-    return ensure_store("regions", RegionStore)

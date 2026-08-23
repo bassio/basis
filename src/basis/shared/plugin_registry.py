@@ -12,7 +12,7 @@ On the server side, the relevant data is ``PluginRegistration`` records.
 """
 
 from basis.shared.actions import server_action
-from basis.shared.store import Store
+from basis.shared.app_state import AppStateStore
 
 
 def _plugin_listing(app) -> dict:
@@ -36,16 +36,14 @@ def _plugin_listing(app) -> dict:
     return snapshot
 
 
-class PluginRegistryStore(Store):
+class PluginRegistryStore(AppStateStore):
     """Reactive, app-global plugin registry (registered under the name ``plugins``).
 
-    Non-reactive wiring: ``_app`` (the owning :class:`Basis` app) is attached
-    server-side by the app / SSR collector / action handler — app-bound stores
-    opt in via the ``_requires_app`` class attribute. On the client ``_app`` is
-    ``None`` and the store is a pure reactive view.
+    An :class:`AppStateStore` whose ``items`` projection is the app's plugin
+    registrations. Non-reactive wiring: ``_app`` (the owning :class:`Basis`
+    app) is attached server-side by the app / SSR collector / action handler;
+    on the client ``_app`` is ``None`` and the store is a pure reactive view.
     """
-
-    _requires_app = True
 
     def __init__(self, name: str = "plugins"):
         super().__init__(name)
@@ -54,26 +52,9 @@ class PluginRegistryStore(Store):
         if not getattr(self, "_hydrated_from_ssr", False):
             self.__dict__["items"] = {}
 
-    def _require_app(self):
-        app = self.__dict__.get("_app")
-        if app is None:
-            raise RuntimeError(
-                "PluginRegistryStore requires the owning Basis app (server-side). "
-                "This is a client-facing RPC surface; call app.remove_plugin / "
-                "app.enable_plugin directly on the server."
-            )
-        return app
-
-    def _refresh_from_app(self) -> None:
-        """Recompute ``items`` as a listing of the app's plugin registrations."""
-        app = self.__dict__.get("_app")
-        if app is None:
-            return
-        self.__dict__["items"] = _plugin_listing(app)
-
-    def serialize(self) -> dict:
-        self._refresh_from_app()
-        return super().serialize()
+    def project(self, app) -> dict:
+        """Project the app's plugin registrations as the store's ``items``."""
+        return {"items": _plugin_listing(app)}
 
     @server_action
     async def disable(self, name: str) -> dict:
@@ -93,18 +74,6 @@ class PluginRegistryStore(Store):
         changed = await app.enable_plugin(name)
         return {"ok": changed}
 
-    @server_action
-    async def refresh(self) -> dict:
-        """Re-sync the projection from the server (client → server RPC).
-
-        On the client the store has no ``_app``, so on a CSR page (no SSR
-        initial state) ``items`` starts empty. This action pulls the
-        authoritative projection from the server; the RPC layer also applies it
-        as ``new_state`` so ``$plugins.items`` updates reactively.
-        """
-        app = self._require_app()
-        self._refresh_from_app()
-        return {"ok": True, "items": self.__dict__.get("items", {})}
 
 
 def ensure_plugin_registry() -> PluginRegistryStore:

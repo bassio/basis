@@ -317,6 +317,15 @@ class BaseComponent(ReactiveObject):
         """
         pass
 
+    def on_hydrated(self):
+        """Lifecycle hook called on the client after this component's bindings
+        are re-pointed at the live SSR tree (end of ``initialize_ssr``). Override
+        for post-hydration setup that must act on the live DOM — e.g. the region
+        primitive re-mounting its contributions so their bindings stay live.
+        No-op by default; never called on the server.
+        """
+        pass
+
     def add_binding(self, binding):
 
         self.__dict__['__bindings__'].append(binding)

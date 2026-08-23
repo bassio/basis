@@ -366,7 +366,10 @@ def test_include_plugin_idempotent_returns_existing_registration():
     first = app.include_plugin(plugin)
     second = app.include_plugin(plugin)
     assert second is first
-    assert len(app._plugins) == 1
+    # Idempotent — the same plugin instance is never added twice. (Bootstrap
+    # auto-registers the official regions plugin, so _plugins has more than
+    # just this one; count-by-identity is the robust assertion.)
+    assert app._plugins.count(plugin) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -433,7 +436,7 @@ def test_registry_store_refresh_server_action_returns_projection():
     app.include_plugin(plugin)
     client = TestClient(app)
 
-    path = "basis.shared.plugin_registry.PluginRegistryStore.refresh"
+    path = "basis.shared.app_state.AppStateStore.refresh"
     r = client.post("/basis/api/action", json={
         "path": path, "store_name": "plugins", "args": [], "kwargs": {},
     })
@@ -469,14 +472,15 @@ def test_plugins_projection_endpoint_includes_disabled_plugins():
     client = TestClient(app)
 
     registry = client.get("/basis/api/plugins").json()
-    assert registry == {
-        "svc": {
-            "state": "enabled",
-            "prefix": "/svc",
-            "actions": ["do_thing"],
-            "requires": [],
-        }
+    # The official regions plugin is auto-registered by bootstrap, so assert the
+    # svc entry exactly rather than the whole listing.
+    assert registry["svc"] == {
+        "state": "enabled",
+        "prefix": "/svc",
+        "actions": ["do_thing"],
+        "requires": [],
     }
+    assert registry["regions"]["state"] == "enabled"
 
     asyncio.run(app.disable_plugin("svc"))
     registry = client.get("/basis/api/plugins").json()

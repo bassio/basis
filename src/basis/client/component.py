@@ -344,6 +344,11 @@ class Component(BaseComponent):
             for k, v in kwargs.items():
                 setattr(refrained, k, v)
 
+        # Post-hydration hook: bindings now point at the live SSR nodes, so the
+        # component can do imperative setup against the real DOM (e.g. the
+        # region primitive re-mounting its contributions).
+        self.on_hydrated()
+
     def _repoint_binding(self, binding, ssr_map, report, repointed_attachments):
         """Re-point one owner binding to its live SSR node.
 
@@ -501,7 +506,18 @@ class Component(BaseComponent):
 
     @classmethod
     def mount_app_ssr(cls, ssr_root=None, replace=False):
-        
+        # Flag the SSR-hydration mount phase so dynamic mounters (e.g.
+        # <ui-region>) defer their real work until ``initialize_ssr`` re-points
+        # them at the live SSR tree (see shared/component.in_ssr_hydration).
+        from basis.shared.component import _set_ssr_hydration
+        _set_ssr_hydration(True)
+        try:
+            cls._mount_app_ssr_impl(ssr_root, replace)
+        finally:
+            _set_ssr_hydration(False)
+
+    @classmethod
+    def _mount_app_ssr_impl(cls, ssr_root=None, replace=False):
         shadow_element_div = document.createElement("div")
         shadow = shadow_element_div.attachShadow({ 'mode': 'open' })
 

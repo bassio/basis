@@ -25,6 +25,13 @@ logger = logging.getLogger('uvicorn.error')
 logger.setLevel(logging.DEBUG)
 
 
+# Framework-essential plugins: effectively core primitives that would strand an
+# app if unloaded (e.g. `regions` provides <ui-region> / $regions). remove_plugin
+# / disable_plugin refuse to unload these unless force=True — the plugin manager
+# must not be able to break a page that depends on them.
+FRAMEWORK_PLUGIN_NAMES = ("regions",)
+
+
 @dataclass
 class PluginRegistration:
     """App-side record of one plugin's registration.
@@ -40,6 +47,7 @@ class PluginRegistration:
     page_route: Any | None = None
     models: set = field(default_factory=set)
     region_items: list = field(default_factory=list)
+    store_items: list = field(default_factory=list)
     action_registry_entries: dict = field(default_factory=dict)
     disposed: bool = False
 
@@ -430,14 +438,26 @@ class PluginMixin:
         # 6b. Region contributions declared by the plugin (module scope and/or
         #     on_register) are flushed into the app registry and recorded on the
         #     registration so disable/remove can unwind them (ROADMAP-SPATIAL.md).
-        from basis.shared.region import _register_contribution
+        from basis.plugins.regions.registry import _register_contribution
         plugin._app = self
         pending = list(getattr(plugin, "_region_items", []) or [])
         reg.region_items = list(pending)
         for contrib in pending:
-            contrib.seq = self._region_seq
-            self._region_seq += 1
+            # Lazily initialize the app-owned insertion counter: the regions
+            # plugin normally owns it, but a contributing plugin may be included
+            # before the regions plugin registers.
+            contrib.seq = getattr(self, "_region_seq", 0)
+            self._region_seq = contrib.seq + 1
             _register_contribution(self, contrib)
+
+        # 6c. Stores declared by the plugin (@plugin.store / include_store) are
+        #     wired into the app: constructed/blueprinted, app-attached (if
+        #     _requires_app), and added to the app-global store list. Recorded
+        #     on the registration so remove/disable can unwind them.
+        pending_stores = list(getattr(plugin, "_store_items", []) or [])
+        reg.store_items = list(pending_stores)
+        for store_name, store_cls in pending_stores:
+            plugin.include_store(self, store_cls, store_name)
 
         # 7. HMR watcher must re-derive its file map for the new mount.
         self._after_plugin_change()
@@ -565,10 +585,14 @@ class PluginMixin:
         ``on_shutdown`` hook. The plugin object is kept (as a disposed
         registration) so :meth:`enable_plugin` can re-register it later.
 
-        Refuses (returns ``False``) when a client module imports the plugin
-        directly — unloading it would prune the client VFS and break the next
-        page load. Pass ``force=True`` to override (the client bundle will then
-        fail to import the plugin on the next load).
+        Refuses (returns ``False``) when the plugin is imported by a client
+        module directly — unloading it would prune the client VFS and break the
+        next page load. Pass ``force=True`` to override (the client bundle will
+        then fail to import the plugin on the next load).
+
+        Framework-essential plugins (``FRAMEWORK_PLUGIN_NAMES`` — currently
+        ``regions``) are always refused unless ``force=True``: they provide core
+        primitives (``<ui-region>`` / ``$regions``) that a page may depend on.
 
         Returns ``True`` if a plugin was unmounted, ``False`` if it was not
         registered (or already unmounted, or refused as imported).
@@ -580,6 +604,13 @@ class PluginMixin:
         if reg is None or reg.disposed:
             return False
         if not force:
+            if name in FRAMEWORK_PLUGIN_NAMES:
+                logger.warning(
+                    f"⚠️  Plugin '{name}' is a framework-essential plugin "
+                    f"(provides core primitives like <ui-region>) — refusing "
+                    f"to unload. Pass force=True to override."
+                )
+                return False
             pinned = self._plugin_importers().get(name)
             if pinned:
                 logger.warning(
@@ -616,10 +647,25 @@ class PluginMixin:
 
         # 3b. Region contributions contributed by the plugin.
         if getattr(reg, "region_items", None):
-            from basis.shared.region import _unregister_contribution
+            from basis.plugins.regions.registry import _unregister_contribution
             for contrib in reg.region_items:
                 _unregister_contribution(self, contrib)
             reg.region_items = []
+
+        # 3c. Stores contributed by the plugin (@plugin.store / include_store):
+        #     drop them from the app-global store list and the live registry so
+        #     they stop being collected/serialized. The persistent store
+        #     blueprint is intentionally kept (full teardown is a Phase-4
+        #     decision — disabling a store-providing plugin is otherwise
+        #     half-hearted until then).
+        if getattr(reg, "store_items", None):
+            from basis.shared.store import Store
+            for store_name, _store_cls in reg.store_items:
+                self._global_stores[:] = [
+                    c for c in self._global_stores if c.get("name") != store_name
+                ]
+                Store._registry.pop(store_name, None)
+            reg.store_items = []
 
         # 4. Remove from _plugins, and unregister its actions from the global
         #    registry so a disabled plugin's actions are no longer callable.

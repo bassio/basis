@@ -114,6 +114,34 @@ def test_auto_discover_mounts_at_package_derived_paths(tmp_path):
     assert app._discovered_dirs["stores"]["pkg"] == "myapp.stores"
     paths = [getattr(m, "path", None) for m in app._component_routes]
     assert "/myapp/components" in paths
+
+
+def test_auto_discover_mounts_plugins_dir_and_serves_flat_file_once(tmp_path):
+    """plugins/ is a conventional dir too: mounted at its package path so local
+    plugin files are served once at their isomorphic destination.
+
+    This is the root-cause guard for the "Duplicated destination" CSR crash: a
+    flat-file plugin (heroes.py) must NOT self-mount its parent plugins/ dir,
+    because that would re-serve every sibling's file to the same VFS
+    destination. Mounting the conventional dir once covers flat and package
+    plugins alike.
+    """
+    pkg = _make_app_layout(tmp_path)
+    (pkg / "plugins").mkdir(exist_ok=True)
+    (pkg / "plugins" / "__init__.py").write_text("")
+    (pkg / "plugins" / "flat.py").write_text("plugin = None\n")
+
+    app = Basis()
+    app._app_dir = pkg
+    app._auto_discover_dirs()
+
+    assert app._discovered_dirs["plugins"]["pkg"] == "myapp.plugins"
+    paths = [getattr(m, "path", None) for m in app._component_routes]
+    assert "/myapp/plugins" in paths
+    # The flat plugin file is served at its isomorphic destination, exactly once.
+    dests = [v for v in app.vfs.files.values() if v.startswith("./myapp/plugins")]
+    assert dests.count("./myapp/plugins/flat.py") == 1
+    assert "myapp.plugins.flat" in app.vfs.client_modules
     assert "/myapp/stores" in paths
 
 

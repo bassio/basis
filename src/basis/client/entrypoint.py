@@ -27,15 +27,15 @@ print(f"[Basis] Zero-Config Entrypoint started (mode: {'SSR' if is_ssr else 'CSR
 
 # ── Data plane: every store exists before any component module is imported ──
 
-# 1. Framework control-plane stores ($plugins, $regions). Framework
-#    infrastructure boots before app/userland stores so components can bind to
-#    them reactively from the first render (hydrated from #basis-initial-state).
+# 1. Framework control-plane store ($plugins). Framework infrastructure boots
+#    before app/userland stores so components can bind to it reactively from
+#    the first render (hydrated from #basis-initial-state). The $regions store
+#    is provided by the official regions plugin and is ensured lazily by the
+#    <ui-region> component.
 try:
     from basis.shared.plugin_registry import ensure_plugin_registry
-    from basis.shared.region import ensure_region_registry
 
     ensure_plugin_registry()
-    ensure_region_registry()
 except Exception as e:
     print(f"[Basis] Error initializing framework stores: {e}")
 
