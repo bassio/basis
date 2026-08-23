@@ -347,14 +347,27 @@ class BaseComponent(ReactiveObject):
         # handler name is not a state field, and leaking one into __fields__
         # created dead StateNodes plus stale bound-method snapshots on HMR.
         if hasattr(binding, 'update') and hasattr(binding, 'fields'):
-            for field in binding.fields:
+            fields = list(binding.fields)
+            for field in fields:
                 if field not in self.__fields__:
                     self.__fields__.append(field)
 
-            # DAG integration: Register as an EffectNode, owned by this
-            # component's reactive scope (teardown via _scope.destroy()).
-            effect_name = f"effect_{id(binding)}"
-            self._scope.add_effect(self._dag, effect_name, binding.update, binding.fields)
+            if fields:
+                # DAG integration: Register as an EffectNode, owned by this
+                # component's reactive scope (teardown via _scope.destroy()).
+                effect_name = f"effect_{id(binding)}"
+                self._scope.add_effect(self._dag, effect_name, binding.update, fields)
+            else:
+                # The fields are the binding's complete set of runtime
+                # dependencies (names, $store/*, #comp/* — every way the
+                # expression language can reach mutable state).  An EMPTY set
+                # therefore means the expression is a constant: it reads only
+                # literals + pure builtins, nothing can ever mark it stale, and
+                # no DAG effect will drive it.  It is still an expression that
+                # must produce its value — evaluate it once at mount so the
+                # rendered DOM attribute (and any child prop-sync) reflects the
+                # evaluated Python value.
+                binding.update()
 
     def remove_binding(self, binding):
         # Lifecycle: teardown (detach listeners, unmount children).

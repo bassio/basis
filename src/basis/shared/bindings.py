@@ -33,6 +33,7 @@ from basis.shared.expr import (
     _report_binding_error,
     desugar_expression,
     extract_dependencies,
+    is_expression,
     ffi,
     safe_eval,
     safe_format,
@@ -924,21 +925,22 @@ class ChildBinding(NodeBinding):
         tag = blueprint.kwargs['tag']
         childcomponent_py = component_instance.__class__._registry[tag]
 
-        # Only attributes with NO template expressions flow through to the
-        # child's mount() as creation kwargs.  An attribute like
-        # heading="{sign_heading}" is a PARENT-scope binding: the parent's
-        # AttributeBinding (and EventBinding for on* attrs) owns the expression,
-        # evaluates it in the parent's scope and syncs the rendered value onto
-        # the child's prop.  Passing the raw "{...}" value as a creation kwarg
-        # would make the CHILD synthesise a SelfAttributeBinding and evaluate
-        # the parent's expression in the child's scope — NameError.  Static
-        # attrs (label="...", variant="primary") still flow through as plain
-        # instance attributes.
+        # Only STATIC LITERAL attributes (no ``{...}`` at all) flow through to
+        # the child's mount() as creation kwargs.  Any expression — reactive
+        # (heading="{sign_heading}") OR constant (first="{False}") — is a
+        # PARENT-scope binding: the parent's AttributeBinding (and EventBinding
+        # for on* attrs) owns it, evaluates it in the parent's scope and syncs
+        # the rendered value onto the child's prop.  Passing the raw "{...}"
+        # value as a creation kwarg would make the CHILD synthesise a
+        # SelfAttributeBinding and evaluate the parent's expression in the
+        # child's scope — NameError.  Constant expressions like ``"{False}"``
+        # are classified the same way (via ``is_expression``, not by whether
+        # they have reactive deps), so they never leak to the child as raw
+        # strings either.
         dom_child_node_attrs = {}
         for a in node.getAttributeNames():
             value = node.getAttribute(a)
-            fieldnames, _ = extract_dependencies(value or "", ALLOWED_BUILTINS)
-            if fieldnames:
+            if is_expression(value or ""):
                 continue
             dom_child_node_attrs[a] = value
 

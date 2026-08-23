@@ -448,6 +448,27 @@ def safe_format(template_str, context, allowed_builtins, ast_trees=None, *,
         return f"{ERROR_PREFIX}{template_str}]"
     return result
 
+def is_expression(value) -> bool:
+    """The canonical "is this a template expression?" label.
+
+    True when ``value`` contains one or more ``{...}`` fields — including
+    builtins/literals that resolve to NO reactive dependencies (e.g. ``"{False}"``,
+    ``"{5}"``, ``"{'x'}"``).  A plain string without braces is a static literal.
+
+    This is deliberately distinct from dependency extraction: an expression may
+    carry zero reactive deps (a constant) yet still be an expression that must
+    be evaluated once.  Callers that only need the boolean (e.g. classifying an
+    attribute as parent-owned vs static) should use this instead of inferring
+    "expression" from ``len(fieldnames)``.
+    """
+    if not isinstance(value, str):
+        return False
+    try:
+        return any(fname is not None for _, fname, _, _ in _FORMATTER.parse(value))
+    except ValueError:
+        return False
+
+
 def extract_dependencies(template_str, allowed_builtins=ALLOWED_BUILTINS):
     """
     Extracts dependencies from a template string and returns a tuple:
@@ -476,6 +497,13 @@ def extract_dependencies(template_str, allowed_builtins=ALLOWED_BUILTINS):
             tree = ast.parse(desugared, mode='eval')
             trees[fname] = tree
 
+            # (prefix, name) already referenced via S['x'].attr / C['x'].attr.
+            # ``ast.walk`` yields the outer Attribute before its inner Subscript,
+            # so when we see both we suppress the redundant bare ``$x``/``#x`` —
+            # otherwise ``{$store.attr}`` reports two deps and breaks single-dep
+            # consumers (e.g. EventBinding's len(fieldnames) == 1).
+            attr_refs = set()
+
             for node in ast.walk(tree):
                 if isinstance(node, ast.Name):
                     if node.id not in allowed_builtins and node.id not in ['BaseComponent'] and isinstance(getattr(node, 'ctx', None), ast.Load):
@@ -496,6 +524,7 @@ def extract_dependencies(template_str, allowed_builtins=ALLOWED_BUILTINS):
                         
                         if s_name:
                             prefix = '$' if node.value.value.attr == 'S' else '#'
+                            attr_refs.add((prefix, s_name))
                             deps.add(f"{prefix}{s_name}.{node.attr}")
                 
                 elif isinstance(node, ast.Subscript):
@@ -513,7 +542,8 @@ def extract_dependencies(template_str, allowed_builtins=ALLOWED_BUILTINS):
                         
                         if s_name:
                             prefix = '$' if node.value.attr == 'S' else '#'
-                            deps.add(f"{prefix}{s_name}")
+                            if (prefix, s_name) not in attr_refs:
+                                deps.add(f"{prefix}{s_name}")
 
         except SyntaxError:
             print(f"Error parsing expression: {desugared}")

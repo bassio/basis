@@ -15,6 +15,37 @@ class Toggle(Component):
         self.add_binding(SetterBinding(component_instance=self,
                                        node=self.__element__,
                                        field=field_to_update))
+        # Reflect the bound value onto the checkbox on first mount.
+        self._sync_checked()
+
+    def __setattr__(self, name, value):
+        super().__setattr__(name, value)
+        # Keep the checkbox in sync whenever the parent re-binds ``value``
+        # (e.g. the titlebar button flips theme.dark_mode → the toggle updates).
+        if name == "value":
+            self._sync_checked()
+
+    def _sync_checked(self):
+        """Set checkbox.checked from the bound ``value`` (checked == second).
+
+        Guarded so it is a no-op on the server (no client DOM) and before the
+        element exists during initialization.
+        """
+        element = getattr(self, "__element__", None)
+        query = getattr(element, "querySelector", None)
+        if query is None:
+            return
+        try:
+            checkbox = query(".toggle-checkbox")
+        except Exception:
+            checkbox = None
+        if checkbox is None:
+            return
+        if isinstance(self.value, bool):
+            checked = self.value
+        else:
+            checked = self.value not in ("", None) and str(self.value) == str(self.second)
+        checkbox.checked = bool(checked)
 
     def on_change(self, event):
 

@@ -44,6 +44,13 @@ class ThemeStore(Store):
         self.shadow_sm = "0 1px 2px 0 rgba(0, 0, 0, 0.05)"
         self.shadow_md = "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)"
 
+    def toggle_dark_mode(self, event=None):
+        """Flip between light and dark mode.
+
+        Bound directly as a click handler (e.g. ``onclick="{$theme.toggle_dark_mode}"``).
+        """
+        self.dark_mode = not self.dark_mode
+
 
 class ThemeProvider(Component):
     """
@@ -88,7 +95,11 @@ class ThemeProvider(Component):
         ]
 
         joined_rules = "; ".join(rules)
-        return ":root { color-scheme: light dark; " + joined_rules + "}"
+        # ``dark_mode`` decides which side of every light-dark() token wins. With
+        # ``color-scheme: light dark`` (auto) the OS preference would override the
+        # store, making the toggle a no-op — so pick a deterministic scheme here.
+        scheme = "dark" if t.dark_mode else "light"
+        return f":root {{ color-scheme: {scheme}; {joined_rules}}}"
 
 
     def template(self):
