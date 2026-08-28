@@ -16,18 +16,18 @@ must resolve to the **same** dotted name:
 
 ```mermaid
 flowchart LR
-    A["Server / FastAPI<br/>(SSR, server actions)"] -->|"sys.path → src/ on path"| N["jotter.components.statusbar"]
+    A["Server / FastAPI<br/>(SSR, server actions)"] -->|"sys.path → src/ on path"| N["my_app.components.statusbar"]
     B["Browser / PyScript<br/>(pyscript.json VFS name)"] -->|"mount_path + relative path"| N
     C["IDE / Pylance / linters<br/>(interpreter extraPaths)"] -->|"filesystem package path"| N
 ```
 
-For `src/jotter/components/statusbar.py`:
+For `src/my_app/components/statusbar.py`:
 
-- **Server** imports it as `jotter.components.statusbar` (because `src/` is on the
-  Python path and `jotter` is a package).
+- **Server** imports it as `my_app.components.statusbar` (because `src/` is on the
+  Python path and `my_app` is a package).
 - **Client** imports it as the **VFS name** that Basis derives from the component
   mount path + the file's path inside the mount.
-- **IDE** resolves `jotter.components.statusbar` against the interpreter path.
+- **IDE** resolves `my_app.components.statusbar` against the interpreter path.
 
 The framework only stays coherent when all three agree. If the client VFS name
 differs from the filesystem name, then either the browser can't find the module,
@@ -45,17 +45,17 @@ The VFS name is derived from the **mount path**. So the rule becomes concrete:
 > **A component directory's mount path MUST reproduce its filesystem package
 > path.**
 
-That is why Jotter's components live in `src/jotter/components/` and are mounted
-at `/jotter/components/` — the mount path *is* the package path written with
-slashes instead of dots, so the VFS name `jotter.components.statusbar` is
+That is why an app's components live in `src/my_app/components/` and are mounted
+at `/my_app/components/` — the mount path *is* the package path written with
+slashes instead of dots, so the VFS name `my_app.components.statusbar` is
 identical to the filesystem name.
 
 Components reference each other by those filesystem names today:
 
 ```python
 # app_container.py
-from jotter.components.titlebar import TitleBar
-from jotter.components.statusbar import StatusBar
+from my_app.components.titlebar import TitleBar
+from my_app.components.statusbar import StatusBar
 ```
 
 This works on the server, in the browser, and in the IDE *because* the mount
@@ -81,8 +81,8 @@ The mount path is **derived from the package path**, never hard-coded, so the
 invariant holds by construction:
 
 ```
-src/jotter/components/   →  package "jotter.components"   →  mount "/jotter/components/"
-src/jotter/stores/       →  package "jotter.stores"       →  mount "/jotter/stores/"
+src/my_app/components/   →  package "my_app.components"   →  mount "/my_app/components/"
+src/my_app/stores/       →  package "my_app.stores"       →  mount "/my_app/stores/"
 ```
 
 ### The `__init__.py` requirement
@@ -136,7 +136,7 @@ from `#basis-initial-state`.
 
 ```python
 from basis.shared.page import Page
-from jotter.components.app_container import AppContainer
+from my_app.components.app_container import AppContainer
 
 class HomePage(Page):
     root_component = AppContainer
@@ -173,7 +173,7 @@ loud warning:
 
 ```
 ⚠️  Isomorphism violation: VFS module 'components.statusbar' maps to server
-    module 'jotter.components.statusbar'. Component mount paths must reproduce
+    module 'my_app.components.statusbar'. Component mount paths must reproduce
     the filesystem package path so client VFS, server and IDEs resolve the same
     import names.
 ```
@@ -215,7 +215,7 @@ the `src/` layout that `basis init` generates.
 ## 8. What NOT to do
 
 - **Don't** mount a directory at a path that doesn't match its package path
-  (e.g. `include_components_dir("/components", "src/jotter/components")`). The
+  (e.g. `include_components_dir("/components", "src/my_app/components")`). The
   guard will warn, and imports will break in at least one environment.
 - **Don't** rely on import-rewriting at serve time to bridge two namespaces.
   Code on disk that doesn't match the code executed is exactly the 

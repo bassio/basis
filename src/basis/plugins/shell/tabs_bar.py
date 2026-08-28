@@ -1,4 +1,4 @@
-"""The ``TabsBar`` — a horizontal tab strip (jotter's workspace tabs).
+"""The ``TabsBar`` — a horizontal tab strip (the classic IDE tab strip).
 
 A chrome strip *skeleton*: a fixed-height bar whose ``<slot>`` hosts the actual
 interactive tabs. Tab behavior (selection, close, drag, add) is a generic ui

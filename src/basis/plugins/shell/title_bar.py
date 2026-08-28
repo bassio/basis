@@ -1,4 +1,4 @@
-"""The ``TitleBar`` — the top bar of the shell (jotter's title-bar)."""
+"""The ``TitleBar`` — the top bar of the shell (the classic IDE title bar)."""
 from basis.shared.component import Component
 
 

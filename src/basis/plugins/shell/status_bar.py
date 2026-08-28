@@ -1,4 +1,4 @@
-"""The ``StatusBar`` — the bottom bar of the shell (jotter's status-bar)."""
+"""The ``StatusBar`` — the bottom bar of the shell (the classic IDE status bar)."""
 from basis.shared.component import Component
 
 

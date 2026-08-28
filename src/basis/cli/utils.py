@@ -29,7 +29,7 @@ def find_basis_app(app_path: str | None = None, cwd: Path | None = None) -> tupl
     -------
     tuple[str, Path]
         ``(import_path, project_dir)`` — the ``import_path`` is suitable for
-        ``uvicorn`` (e.g. ``"jotter:app"``), and ``project_dir`` is the
+        ``uvicorn`` (e.g. ``"myapp:app"``), and ``project_dir`` is the
         directory containing the package.
 
     Raises

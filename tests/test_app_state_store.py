@@ -72,11 +72,11 @@ def test_project_override_full_app_access():
             }
 
     app = Basis()
-    app.state.app_name = "jotter"
+    app.state.app_name = "myapp"
     store = Status("status_store")
     try:
         attach_app_to_store(store, app)
-        assert store.app_name == "jotter"
+        assert store.app_name == "myapp"
         assert store.plugin_count == 0
     finally:
         _cleanup("status_store")

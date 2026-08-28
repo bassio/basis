@@ -278,8 +278,8 @@ def test_item_binding_renders_per_item():
 
 def test_custom_element_loop_stays_before_trailing_sibling():
     """REGRESSION (2026-08-17, browser): custom-element loop children must stay
-    INSIDE the loop block, BEFORE any trailing sibling (e.g. the Jotter
-    ComponentShowcase / the status-bar dismiss button). Anchoring on the
+    INSIDE the loop block, BEFORE any trailing sibling (e.g. a component
+    showcase / a dismiss button). Anchoring on the
     child's inner __element__ (instead of the mounted <custom-element> wrapper)
     used to append every item after the first AFTER the trailing sibling."""
     class Entry(Component):

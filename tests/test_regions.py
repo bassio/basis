@@ -209,18 +209,18 @@ def test_region_store_add_local_replaces_in_place_does_not_reorder():
     store = RegionStore("regions")
     store.__dict__["items"] = {
         "workspace-center": [
-            {"cls_path": "jotter.plugins.regions_demo.RegionDemoBanner", "props": {}, "order": None},
-            {"cls_path": "jotter.plugins.heroes.TeamExplorer", "props": {}, "order": None},
+            {"cls_path": "myapp.plugins.regions_demo.RegionDemoBanner", "props": {}, "order": None},
+            {"cls_path": "myapp.plugins.heroes.TeamExplorer", "props": {}, "order": None},
         ]
     }
 
     # Simulate the lazy import of regions_demo happening while the region
     # mounts its contributions (the banner gets re-registered mid-flight).
-    store.add_local("workspace-center", "jotter.plugins.regions_demo.RegionDemoBanner", props={"p": 1})
+    store.add_local("workspace-center", "myapp.plugins.regions_demo.RegionDemoBanner", props={"p": 1})
 
     assert [it["cls_path"] for it in store.items_for("workspace-center")] == [
-        "jotter.plugins.regions_demo.RegionDemoBanner",
-        "jotter.plugins.heroes.TeamExplorer",
+        "myapp.plugins.regions_demo.RegionDemoBanner",
+        "myapp.plugins.heroes.TeamExplorer",
     ]
     # The replaced entry keeps its position AND its updated props.
     assert store.items_for("workspace-center")[0]["props"] == {"p": 1}

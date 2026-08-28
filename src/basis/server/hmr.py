@@ -63,7 +63,7 @@ class HMRMixin:
         component that owns it (same derivation as the VFS manifest —
         ``basis.server.vfs.VFSRegistry``):
 
-        * ``.py`` files map to their own module (``jotter.components.statusbar``).
+        * ``.py`` files map to their own module (``myapp.components.statusbar``).
         * ``.css`` / ``.html`` companion files map to the module that loads them
           (package ``titlebar/__init__.py`` -> ``titlebar/titlebar.css``, or a
           flat ``my_comp.py`` -> ``my_comp.css``).

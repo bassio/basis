@@ -93,7 +93,7 @@ if app._start_hmr_watcher:
   "type": "hmr",
   "file": "titlebar/titlebar.css",        // path relative to the component dir
   "ext": "css",
-  "module": "jotter.components.titlebar", // owning component's import name
+  "module": "myapp.components.titlebar", // owning component's import name
   "content": ".titlebar { height: 48px; }"
 }
 ```
@@ -122,13 +122,13 @@ Every broadcast carries the **authoritative import module name** of the componen
 ```text
 mount_parts + subdir + module_stem      (a trailing "__init__" is dropped)
 
-e.g. mount "/jotter/components/" + "statusbar.py"
-   -> ["jotter", "components", "statusbar"] -> "jotter.components.statusbar"
+e.g. mount "/myapp/components/" + "statusbar.py"
+   -> ["myapp", "components", "statusbar"] -> "myapp.components.statusbar"
 ```
 
 This covers every watched file:
 
-- `.py` files map to their own module (e.g. `jotter.components.statusbar`).
+- `.py` files map to their own module (e.g. `myapp.components.statusbar`).
 - `.css` / `.html` **companion files** map to the module that loads them: a package `titlebar/__init__.py` owns `titlebar/titlebar.css` and `titlebar/titlebar.html`; a flat `my_comp.py` owns `my_comp.css` and `my_comp.html`.
 
 The browser uses this value to find the registered component class by `__module__`, so a file is always attached to the right component even when its filename doesn't resemble the class name (e.g. `titlebar.css` → class `TitleBar`).
@@ -192,7 +192,7 @@ The deepest path, because a module's behavior lives in its code object:
 1. **Resolve the module** by the server-provided name.
    - Not in `sys.modules` → skip (applies on the next full reload).
    - Loaded from `.pyc`/`.pyo` (PYC mode) → skip with a notice; compiled bytecode can't be live-reloaded.
-2. **Write the new source to the Pyodide VFS** at the module's real path (`module.__file__`, e.g. `/home/pyodide/jotter/components/statusbar.py`).
+2. **Write the new source to the Pyodide VFS** at the module's real path (`module.__file__`, e.g. `/home/pyodide/myapp/components/statusbar.py`).
 3. **`importlib.invalidate_caches()`**, so a fresh import re-reads the file instead of a cached directory listing.
 4. **Evict** the module (and any `module.*` submodules) from `sys.modules`.
 5. **Re-import** with `importlib.import_module(module)`. On failure, the old module reference is restored so the app keeps working.
@@ -271,7 +271,7 @@ $ basis dev --reload       # full process restarts instead
 
 Intentional details worth knowing when extending or debugging HMR:
 
-- **Module names come from the server, not the filename.** The client module namespace (`jotter.components.statusbar`) differs from the file path relative to its mount, and filenames don't reliably encode class names (`titlebar.css` → `TitleBar`). `_build_hmr_file_map()` resolves both `.py` files and their `.css`/`.html` companions to the owning module.
+- **Module names come from the server, not the filename.** The client module namespace (`myapp.components.statusbar`) differs from the file path relative to its mount, and filenames don't reliably encode class names (`titlebar.css` → `TitleBar`). `_build_hmr_file_map()` resolves both `.py` files and their `.css`/`.html` companions to the owning module.
 - **Only `.py` writes to the VFS.** CSS and HTML already exist in the browser as in-memory objects (class `style` / `__templatestr__`, blueprints, and mounted `<style>` / DOM nodes), so they're mutated directly. Python must be re-executed from fresh source, which is why it goes through the VFS + re-import.
 - **Binding blueprints are replaced, never extended.** Re-analysis clears `__binding_blueprints__` first, so repeated HTML updates don't stack duplicate bindings.
 - **Subclass identity is preserved.** `hot_swap_template` keeps the instance's class and refreshes only the inherited template, so component subclasses defined in other modules survive reloads.

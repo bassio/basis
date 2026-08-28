@@ -143,9 +143,9 @@ def discover_local_plugins(app_dir: Path, plugins_dir: str = "plugins") -> list[
         return plugins
 
     # Try to determine the canonical Python package path for the plugins dir.
-    # E.g. if app_dir is .../src/jotter and plugins_dir is "plugins",
-    # then the package path is "jotter.plugins" and a file heroes.py within
-    # would be importable as "jotter.plugins.heroes".
+    # E.g. if app_dir is .../src/myapp and plugins_dir is "plugins",
+    # then the package path is "myapp.plugins" and a file heroes.py within
+    # would be importable as "myapp.plugins.heroes".
     canonical_pkg = _resolve_canonical_package(plugins_path)
 
     for item in sorted(plugins_path.iterdir()):
@@ -162,7 +162,7 @@ def discover_local_plugins(app_dir: Path, plugins_dir: str = "plugins") -> list[
             continue
 
         try:
-            # Determine the canonical import path (e.g. "jotter.plugins.heroes")
+            # Determine the canonical import path (e.g. "myapp.plugins.heroes")
             if canonical_pkg:
                 canonical_name = f"{canonical_pkg}.{module_name}"
             else:
@@ -514,7 +514,7 @@ class PluginMixin:
         if cached is not None:
             return cached
 
-        # plugin name -> canonical package prefix it owns (e.g. "jotter.plugins").
+        # plugin name -> canonical package prefix it owns (e.g. "myapp.plugins").
         plugin_packages: dict[str, str] = {}
         for name, reg in self._plugin_registrations.items():
             if reg.disposed:

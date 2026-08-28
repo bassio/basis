@@ -271,9 +271,9 @@ def test_remove_plugin_refuses_when_imported_by_consumer(tmp_path):
     """A plugin a client module imports directly is essential — disable/remove
     refuses (returns False) unless force=True.
 
-    Mirrors the Jotter case: the page component imports ``jotter.plugins``, so
-    disabling that plugin would prune it from the client VFS and break the next
-    page load (render but never hydrate).
+    Mirrors the real-world case: the page component imports the plugin's
+    package, so disabling that plugin would prune it from the client VFS and
+    break the next page load (render but never hydrate).
     """
     app = Basis()
     app.bootstrap()
@@ -709,7 +709,7 @@ def test_plugin_manager_toggle_dispatches_disable_then_enable():
 
 
 def test_ssr_direct_page_render_attaches_app_to_registry_swept_store():
-    """Regression: Jotter's /ssr calls render_page_ssr(request, Page) with NO
+    """Regression: a hand-rolled /ssr route calls render_page_ssr(request, Page) with NO
     global_stores, so the plugins store enters via the registry sweep — it must
     still get the app attached + projection refreshed (the store-only-in-_get_all_stores
     attach missed this path → SSR serialized/rendered empty items)."""

@@ -1,4 +1,4 @@
-"""The ``ActivityBar`` — the vertical icon rail (jotter's activity-bar).
+"""The ``ActivityBar`` — the vertical icon rail (the classic IDE activity bar).
 
 A bare skeleton: a fixed-width vertical rail with top and bottom icon groups
 (named slots ``top`` / ``bottom``), laid out on a column ``Stack`` with

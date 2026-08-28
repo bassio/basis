@@ -36,8 +36,8 @@ def mount_to_module_name(mount_path: str, rel_path: Path) -> str | None:
     """Translate *rel_path* (relative to the mounted dir) into its dotted client
     import module name.
 
-    The mount path becomes the import prefix (``/jotter/components`` →
-    ``jotter.components``) and the file's stem the tail, with ``__init__``
+    The mount path becomes the import prefix (``/myapp/components`` →
+    ``myapp.components``) and the file's stem the tail, with ``__init__``
     popping the package segment. Returns ``None`` when there is nothing to
     translate (e.g. a bare ``__init__.py`` at the mount root).
     """

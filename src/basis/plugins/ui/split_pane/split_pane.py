@@ -1,8 +1,8 @@
 """DEPRECATION (planned): ``SplitPane`` is superseded by the shell's
 ``Stack`` + ``Splitter`` primitives (``basis.plugins.shell``) — the shell
 ``Splitter`` is the generalized, self-contained drag-resize divider. Kept for
-now because jotter still composes with it; it will be removed after jotter
-migrates to the shell primitives.
+now because existing apps still compose with it; it will be removed once they
+migrate to the shell primitives.
 """
 from basis.shared.component import Component, IS_CLIENT
 

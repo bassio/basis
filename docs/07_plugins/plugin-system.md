@@ -150,7 +150,7 @@ For a store-bound action, pass the store as the first argument — its
 `store_name` is sent so the returned `new_state` is applied back to that store:
 
 ```python
-from jotter.plugins.heroes import plugin
+from myapp.plugins.heroes import plugin
 result = await plugin.generate_random_hero()
 ```
 

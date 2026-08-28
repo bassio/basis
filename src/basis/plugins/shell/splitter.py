@@ -30,7 +30,7 @@ inner box before resizing.
 
 This is the canonical resize primitive: ``basis.plugins.ui.split_pane``
 (``SplitPane`` / ``SplitPaneItem`` / ``SplitHandle``) is slated for deprecation
-in favour of ``Stack`` + ``Splitter`` once jotter migrates (ROADMAP-SHELL.md §5).
+in favour of ``Stack`` + ``Splitter`` once existing apps migrate (ROADMAP-SHELL.md §5).
 """
 from basis.shared.component import Component, IS_CLIENT
 

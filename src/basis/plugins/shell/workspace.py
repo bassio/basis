@@ -1,4 +1,4 @@
-"""The ``Workspace`` — the middle band of the shell (jotter's workspace area).
+"""The ``Workspace`` — the middle band of the shell (the classic IDE workspace area).
 
 A row ``Stack``: ``ActivityBar`` / optional left sidebar / splitter / flex main
 container / splitter / optional right sidebar. Activity-bar and sidebar widths

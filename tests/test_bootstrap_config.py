@@ -112,7 +112,7 @@ def test_manifest_page_stores_per_route():
 
 
 def test_hand_rolled_route_self_registers_page_for_manifest(tmp_path):
-    """A bare @app.get() route (the jotter pattern) must still get a page-aware
+    """A bare @app.get() route (the hand-rolled-route pattern) must still get a page-aware
     manifest: the shell appends ?url= from the request and self-registers the
     route→page mapping so the endpoint can resolve the page.
 

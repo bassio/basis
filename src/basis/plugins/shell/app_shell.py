@@ -1,4 +1,4 @@
-"""The ``AppShell`` — the whole app frame (jotter's app-container).
+"""The ``AppShell`` — the whole app frame (the classic IDE shell).
 
 A full-height column Stack: ``TitleBar`` / ``Workspace`` / ``StatusBar``. The
 workspace knobs are passed through as snake_case props so the frame can be

@@ -1,10 +1,10 @@
-"""The ``Sidebar`` — a fixed-width left/right panel (jotter's sidebar).
+"""The ``Sidebar`` — a fixed-width left/right panel (the classic IDE sidebar).
 
 A *single* component for both sides: the ``side`` prop picks left vs right (and
 the default border edge), so there is no separate ``SidebarLeft``/``SidebarRight``
 duplication. It is a slot-based skeleton — the app fills its ``<slot>``.
 
-Collapsible (jotter's ``ui-sidebar`` behavior): ``collapsed`` (Python bool)
+Collapsible (the classic IDE sidebar behavior): ``collapsed`` (Python bool)
 renders ``data-state="collapsed"`` and CSS collapses the width — to a thin icon
 rail when ``collapsible="icon"``, or to nothing (offcanvas) otherwise. Collapse
 is store-free: any button can flip ``data-state`` at runtime, or
@@ -90,7 +90,7 @@ class Sidebar(Component):
 class SidebarTrigger(Component):
     """A button that toggles a sidebar's collapsed state (store-free).
 
-    Mirrors jotter's ``ui-sidebar-trigger``: it flips ``data-state`` on the
+    Mirrors the conventional sidebar trigger: it flips ``data-state`` on the
     target sidebar via ``document.querySelector`` — no store, no component
     wiring. ``target`` is a CSS selector, e.g. ``target="#sidebarRight"``.
     """
