@@ -1,0 +1,37 @@
+"""
+The app's left/right sidebars — app-owned chrome (generated).
+
+Keep the shell tags (`shell-sidebar-left` / `shell-sidebar-right`) and replace
+them in the registry, so the frame's `<shell-sidebar-*>` renders these app
+versions. The `template()` below is a copy of the shell's — edit it here
+(panel chrome, collapse behavior) without touching the framework. Inherited
+props, the `state_attr`/`border_side` computeds and `style()` come from the
+shell's `Sidebar`; override them here when needed.
+"""
+from basis.plugins.shell.sidebar import SidebarLeft, SidebarRight
+
+
+class MySidebarLeft(SidebarLeft):
+    width = "{{ sidebar_left_width }}"
+
+    def template(self):
+        """
+        <div class="shell-sidebar" style="--sidebar-expanded: {width}; --sidebar-icon: {icon_width}; flex: 0 0 var(--sidebar-width);" data-state="{state_attr}" data-collapsible="{collapsible}" data-border="{border_side}" data-side="{side}">
+            <shell-stack direction="{direction}" gap="{gap}" align="{align}" size="1 1 auto">
+                <slot></slot>
+            </shell-stack>
+        </div>
+        """
+
+
+class MySidebarRight(SidebarRight):
+    width = "{{ sidebar_right_width }}"
+
+    def template(self):
+        """
+        <div class="shell-sidebar" style="--sidebar-expanded: {width}; --sidebar-icon: {icon_width}; flex: 0 0 var(--sidebar-width);" data-state="{state_attr}" data-collapsible="{collapsible}" data-border="{border_side}" data-side="{side}">
+            <shell-stack direction="{direction}" gap="{gap}" align="{align}" size="1 1 auto">
+                <slot></slot>
+            </shell-stack>
+        </div>
+        """

@@ -1,0 +1,24 @@
+"""
+The app's activity bar — app-owned chrome (generated).
+
+Keeps the shell tag (`shell-activity-bar`) and replaces it in the registry, so
+the frame's `<shell-activity-bar>` renders this app version. The `template()`
+below is a copy of the shell's — edit it here (icons, top/bottom groups)
+without touching the framework. Inherited props and `style()` come from the
+shell's `ActivityBar`; override them here when needed.
+"""
+from basis.plugins.shell.activity_bar import ActivityBar
+
+
+class MyActivityBar(ActivityBar):
+    width = "{{ activitybar_width }}"
+
+    def template(self):
+        """
+        <div class="shell-activity-bar" style="flex: 0 0 {width};" data-border="{border}">
+            <shell-stack direction="{direction}" align="{align}" justify="space-between" gap="{gap}" size="1 1 auto">
+                <div class="shell-activity-top"><slot name="top"></slot></div>
+                <div class="shell-activity-bottom"><slot name="bottom"></slot></div>
+            </shell-stack>
+        </div>
+        """

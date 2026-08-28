@@ -140,8 +140,8 @@ def test_regions_serialized_into_csr_initial_state_default_all():
 
     @app.get("/csr")
     async def csr(request: Request):
-        page_instance = MyPage.load()
-        return HTMLResponse(page_instance.render_full_page(request=request))
+        from basis.server.responses import PageResponse
+        return await PageResponse.from_page(MyPage, request, render_mode="csr")
 
     client = TestClient(app)
     resp = client.get("/csr")

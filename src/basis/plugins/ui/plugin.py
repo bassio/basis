@@ -8,11 +8,14 @@ third-party plugin — so apps can also opt out of the component library by
 excluding the ``ui`` plugin.
 
 Component families live directly under the plugin package (one directory per
-family, e.g. ``button/``); ``theme.py`` provides ``ThemeStore`` /
-``ThemeProvider``. The plugin itself carries no HTTP routes and no boot-time
-store wiring: components are imported by app code (which registers their
-custom elements), and the ``$theme`` store is a module-scope instance in the
-conventional ``stores/`` layout — both unchanged from the pre-plugin behaviour.
+family, e.g. ``button/``). Theming is no longer part of this plugin — the
+token schema, ``ThemeStore`` and ``<ui-theme-provider>`` moved to the official
+``basis.plugins.theme`` plugin (ROADMAP-THEMING.md), which this plugin depends
+on (``requires=["theme"]``). The plugin itself carries no HTTP routes and no
+boot-time store wiring: components are imported by app code (which registers
+their custom elements), and the ``$theme`` store is wired by the theme plugin
+(plus the app's own conventional ``stores/`` layout) — unchanged from the
+pre-migration behaviour.
 """
 
 from pathlib import Path
@@ -26,8 +29,8 @@ class UiPlugin(BasisPlugin):
     ``on_register`` is intentionally a no-op: the plugin exists to *serve* the
     component files (so the client VFS can import ``basis.plugins.ui.*``) and
     to appear in the plugin registry like any other plugin. Components are
-    imported by app code, and the theme store is wired by the app's own
-    stores/ auto-discovery — both identical to the pre-plugin behaviour.
+    imported by app code, and the ``$theme`` store is wired by the theme
+    plugin + the app's own stores/ auto-discovery.
     """
 
     def on_register(self, app) -> None:
@@ -42,4 +45,5 @@ plugin = UiPlugin(
     static_mount="/basis/plugins/ui",
     name="ui",
     tags=None,
+    requires=["theme"],
 )

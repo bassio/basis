@@ -3,7 +3,7 @@
 This is the **look-and-feel** guide. Basis components are real web components that render in **light DOM** by default, which means you style them with the same CSS you already know — no build step, no CSS-in-JS, no shadow-DOM restrictions. Every built-in `basis.plugins.ui` component is designed to be re-skinned, and most customization is a few lines of CSS.
 
 > [!TIP]
-> Here you'll find the *styling* techniques: [design tokens](#1-design-tokens-theming-with-css-variables), [plain CSS overrides](#2-override-with-plain-css), [host styling](#3-style-the-host-element-inline), and [encapsulation](#4-encapsulation-with-scoped). To change a component's *structure or behavior* instead — new props, new template, new logic — see [Extending & Customizing Components](extending-components.md).
+> Here you'll find the *styling* techniques: [design tokens](#1-design-tokens-theming-with-css-variables), [plain CSS overrides](#2-override-with-plain-css), [host styling](#3-style-the-host-element-inline), [encapsulation](#4-encapsulation-with-scoped), [dynamic styles](#6-dynamic-styles), and [additive styles with `@extra_style`](#7-additive-styles-with-extra_style). To change a component's *structure or behavior* instead — new props, new template, new logic — see [Extending & Customizing Components](extending-components.md).
 
 ---
 
@@ -84,7 +84,7 @@ Set a variable inline on the tag — the standard Custom Element idiom:
 For **runtime** theming — light/dark mode, a user-selected accent color — use the reactive [`ThemeStore`](ui-components.md#themestore-basisuitheme). It holds the same tokens as reactive state, and a `<ui-theme-provider>` injects them as CSS variables:
 
 ```python
-from basis.plugins.ui.theme import ThemeStore, ThemeProvider
+from basis.plugins.theme import ThemeStore, ThemeProvider
 
 theme = ThemeStore()            # registered as "theme" → reachable as $theme
 theme.dark_mode = True          # flips every light-dark() token
@@ -123,7 +123,8 @@ Because a component's `<style>` is injected early and your stylesheet comes late
 
 - A `<style>` block inside a component template (rendered with that component).
 - A `.css` companion file for a multi-file component (see [Defining Components](defining-components.md)).
-- The page shell — subclass `Page` and add a `<link rel="stylesheet">` or `<style>` to the `<head>` (see [The Page Component](page-component.md)).
+- **`Page.stylesheets`** — set a tuple of stylesheet URLs on your `Page` subclass and Basis links them at the **end of `<body>`**, after the SSR root where component `<style>` elements are injected, so they win the cascade at equal specificity. This is the framework-native override layer (generated apps link `static/app.css` this way; see [The Page Component](page-component.md)).
+- The page shell — subclass `Page` and append a `<link rel="stylesheet">` or `<style>` to the document tree (see [The Page Component](page-component.md)).
 - Any plain `.css` file you serve alongside your app.
 
 ### Specificity & order: why an override might not "stick"
@@ -205,6 +206,115 @@ If you need isolation but still want theming to work, prefer `@scoped` (section 
 
 ---
 
+## 6. Dynamic styles
+
+Basis styles are ordinary CSS, but you can still make them *dynamic* — driven by component state or stores. There are three idioms, in order of preference.
+
+### 6.1 Reactive values: CSS variables set from the template
+
+The idiomatic way to make a value dynamic is to bind a CSS custom property in the **template** and read it with `var()` in the CSS. The template already interpolates `{expr}` reactively, so the value updates live with zero extra machinery — and the CSS text stays 100% static (copy-paste friendly):
+
+```python
+class Hero(Component):
+    accent = "#7c5cff"
+    spacing = 8
+
+    def template(self):
+        """
+        <div class="hero" style="--accent: {accent}; --pad: {spacing}px;">
+            <h1>Hello</h1>
+        </div>
+        """
+
+    def style(self):
+        """
+        .hero { background: var(--accent); padding: var(--pad); }
+        """
+```
+
+`var()` values are ordinary CSS custom properties: they cascade, update when the bound `{expr}` changes, and compose with [design tokens](#1-design-tokens-theming-with-css-variables). This is the pattern the shell itself uses (`--sidebar-expanded: {width}`).
+
+### 6.2 Computed stylesheet text (`text-content`)
+
+When you need to generate *whole rules* dynamically, compute the CSS string in Python and inject it through a `<style text-content="{...}">` binding. This is how the built-in `ThemeProvider` works:
+
+```python
+class ThemeProvider(Component):
+    @computed(dependencies=["$theme"])
+    def tokens_css(self):
+        t = self.S["theme"]
+        rules = [f"--accent-color: {t.accent_color}", f"--bg-primary: {t.bg_primary}"]
+        scheme = "dark" if t.dark_mode else "light"
+        return f":root {{ color-scheme: {scheme}; {'; '.join(rules)} }}"
+
+    def template(self):
+        """
+        <style text-content="{tokens_css}"></style>
+        """
+```
+
+Build the rules line-by-line with f-strings (each line has no CSS braces), then wrap the block once with `{{ }}` — Python's f-string escape for a literal brace. The computed's declared dependencies make the stylesheet re-render when they change.
+
+### 6.3 `{expr}` fields directly inside `style()`
+
+For small, per-component values, `style()` (and `@extra_style`, below) support the same pythonic `{expr}` fields as `template()`. A **CSS-aware formatter** only treats a `{...}` group as a field when its inner text is a *valid Basis expression*; CSS structural braces (`selector { ... }`) are never expressions, so they pass through untouched:
+
+```python
+class Pill(Component):
+    hue = "220deg"
+
+    def style(self):
+        """
+        .pill { background: hsl({hue} 80% 50%); }
+        .pill:hover { background: hsl({hue} 90% 60%); }
+        """
+```
+
+The evaluation context is the component *class*: bare names resolve to class attributes, and `$store.x` / `#id.x` resolve through the store/component registries:
+
+```python
+    def style(self):
+        """
+        .card { border: 1px solid {$theme.border_color}; }
+        """
+```
+
+Rules of thumb:
+
+- **Static CSS is unchanged** — a plain stylesheet passes through byte-for-byte.
+- **A failed field keeps the raw `{expr}`** rather than dropping the stylesheet.
+- **Escaped braces** `{{ }}` render a single literal brace — use this only for the rare CSS value whose text would otherwise parse as a Python expression (e.g. `content: "{{x}}"`).
+- **Fields are evaluated at mount time** (server and client alike). For *reactive* values that must re-render when state changes, use idiom [6.1](#61-reactive-values-css-variables-set-from-the-template) or [6.2](#62-computed-stylesheet-text-text-content), which hook into the binding engine directly.
+
+---
+
+## 7. Additive styles with `@extra_style`
+
+A subclass that overrides `style()` **replaces** the inherited stylesheet — you must copy the parent's whole CSS to change one rule. When you want to *add* rules on top of a parent component without copying it, mark a method with `@extra_style`:
+
+```python
+from basis.shared.component import Component, extra_style
+from basis.plugins.shell.title_bar import TitleBar
+
+class MyTitleBar(TitleBar):
+    @extra_style
+    def brand(self):
+        """
+        shell-title-bar { background: linear-gradient(90deg, var(--accent-color), var(--bg-secondary)); }
+        .app-title { letter-spacing: 0.04em; }
+        """
+```
+
+Each `@extra_style` block is injected as its **own `<style>` element after the component's main stylesheet**, so at equal specificity it wins — no `!important`, no copying `style()`. The same conventions apply as `style()`:
+
+- **docstring, classmethod, or plain string**;
+- **`{expr}` dynamic fields** ([§6.3](#63-expr-fields-directly-inside-style));
+- **`@scoped`** combines to keep the block encapsulated (`@scoped` + `@extra_style`).
+
+Extra blocks are inherited by subclasses and live-updated by HMR, and they flow through the same light-DOM injection as the main stylesheet, so they work identically in SSR and hydration.
+
+---
+
 ## FAQ
 
 **Why doesn't `style="background-color: red"` change my button's look?**
@@ -213,7 +323,7 @@ Because `style` targets the host `<ui-button>`, while the visible button is the 
 
 **Can I add a global stylesheet to my app?**
 
-Yes. Subclass `Page` and add a `<link>` or `<style>` to the `<head>` (see [The Page Component](page-component.md)), or put your CSS in a `.css` companion file / `<style>` block inside a component template.
+Yes — the cleanest way is `Page.stylesheets` (a tuple of URLs Basis links at the end of `<body>`, after the component styles, so they win the cascade). You can also subclass `Page` and append a `<link>` or `<style>` to the document tree, or put your CSS in a `.css` companion file / `<style>` block inside a component template. Generated apps link `static/app.css` via `Page.stylesheets` for exactly this.
 
 **Do the `basis.plugins.ui` components have hard-coded colors?**
 

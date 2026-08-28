@@ -30,7 +30,7 @@ logger.setLevel(logging.DEBUG)
 # the built-in component suite apps import from basis.plugins.ui).
 # remove_plugin / disable_plugin refuse to unload these unless force=True — the
 # plugin manager must not be able to break a page that depends on them.
-FRAMEWORK_PLUGIN_NAMES = ("regions", "ui")
+FRAMEWORK_PLUGIN_NAMES = ("regions", "ui", "theme")
 
 
 @dataclass
@@ -592,8 +592,9 @@ class PluginMixin:
         then fail to import the plugin on the next load).
 
         Framework-essential plugins (``FRAMEWORK_PLUGIN_NAMES`` — currently
-        ``regions``) are always refused unless ``force=True``: they provide core
-        primitives (``<ui-region>`` / ``$regions``) that a page may depend on.
+        ``regions``, ``ui``, ``theme``) are always refused unless ``force=True``:
+        they provide core primitives (``<ui-region>`` / ``$regions``, the
+        component suite, the ``$theme`` tokens) that a page may depend on.
 
         Returns ``True`` if a plugin was unmounted, ``False`` if it was not
         registered (or already unmounted, or refused as imported).

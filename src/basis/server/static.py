@@ -30,9 +30,12 @@ class BasisStaticFiles(StaticFiles):
     A specialized StaticFiles handler that strips @server_action bodies 
     from .py files before serving them to the client.
     """
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, synthetic=None, **kwargs):
         super().__init__(*args, **kwargs)
         self._cache: dict[str, tuple[float, str]] = {} # path -> (mtime, content)
+        #: mount-relative path -> in-memory generated source (headless components).
+        #: Served only while no real file exists at that path — a real ``.py`` wins.
+        self._synthetic = synthetic if synthetic is not None else {}
 
     def get_transformed_py_source(self, full_path: str) -> str:
         with open(full_path, "r", encoding="utf-8") as f:
@@ -41,6 +44,13 @@ class BasisStaticFiles(StaticFiles):
             return transformed
 
     async def get_response(self, path: str, scope: Scope) -> Response:
+        # Synthetic headless modules: serve the generated source only while no
+        # real file exists at that path (a real ``.py`` always wins).
+        if path in self._synthetic:
+            full_path, _ = self.lookup_path(path)
+            if not (full_path and os.path.isfile(full_path)):
+                return Response(self._synthetic[path], media_type="text/x-python")
+
         # Get the standard response first
         response = await super().get_response(path, scope)
         
@@ -85,6 +95,22 @@ class BasisStaticFilesPyc(BasisStaticFiles):
     async def get_response(self, path: str, scope: Scope) -> Response:
         if path.endswith(".pyc"):
             py_path = path[:-1]  # strip trailing 'c' -> '.py'
+            # Synthetic headless module in pyc mode: compile the generated source
+            # in-memory (mirrors the real-file path below) while no real ``.py``
+            # exists at that path.
+            if py_path in self._synthetic:
+                full_path, _ = self.lookup_path(py_path)
+                if not (full_path and os.path.isfile(full_path)):
+                    try:
+                        pyc_bytes = compile_to_pyc_bytes(
+                            self._synthetic[py_path], filename=py_path
+                        )
+                    except Exception:
+                        pass
+                    else:
+                        return Response(
+                            pyc_bytes, media_type="application/x-bytecode.python"
+                        )
             full_path, _ = self.lookup_path(py_path)
 
             if full_path and os.path.isfile(full_path):

@@ -16,8 +16,9 @@ import typer
 from rich.console import Console
 
 from basis.cli.commands import dev as dev_cmd
-from basis.cli.commands import init_cmd
+import basis.cli.commands.init as init_cmd
 from basis.cli.commands import plugin as plugin_cmd
+from basis.cli.commands import theme as theme_cmd
 
 console = Console()
 
@@ -32,6 +33,7 @@ app = typer.Typer(
 app.command(name="dev", help="Start the development server with HMR.")(dev_cmd.dev)
 app.command(name="init", help="Scaffold a new Basis project.")(init_cmd.init)
 app.add_typer(plugin_cmd.plugin_app, name="plugin", help="Manage Basis plugins.")
+app.add_typer(theme_cmd.theme_app, name="theme", help="Manage Basis themes.")
 
 
 def version_callback(value: bool):

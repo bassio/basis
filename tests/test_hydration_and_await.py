@@ -59,7 +59,7 @@ def mock_environment():
 
 from basis.shared.store import Store, ModelStore
 from basis.shared.store_provider import StoreProvider, ModelStoreProvider
-from basis.server.ssr import _serialize_initial_state
+from basis.server.render import _serialize_initial_state
 from basis.shared.basis_await import BasisAwait
 
 def test_ssr_serialization_and_client_hydration(mock_environment):

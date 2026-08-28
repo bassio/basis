@@ -706,7 +706,7 @@ def test_ssr_no_errors_means_no_basis_errors_key(monkeypatch):
 
 
 def test_serialize_initial_state_includes_errors():
-    from basis.server.ssr import _serialize_initial_state
+    from basis.server.render import _serialize_initial_state
     from basis.shared.errors import ErrorCollector, BindingError
 
     collector = ErrorCollector()

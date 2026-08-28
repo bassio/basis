@@ -143,6 +143,9 @@ The subclass inherits `Button`'s template, props, and methods, and only replaces
 > [!NOTE]
 > **Tags are lowercase and hyphenated.** Custom elements must contain a hyphen. If a subclass keeps its parent's tag (by not setting `__tag__`), it *replaces* the parent in the component registry — every `<ui-button>` then resolves to your subclass. That's a useful "this app's button is now *my* button" pattern, but if you want a sibling variant, always give the subclass its own `__tag__`.
 
+> [!TIP]
+> Overriding `style()` **replaces** the inherited stylesheet — you'd have to copy the parent's whole CSS to change one rule. To *add* rules on top of a parent without copying it, mark a method with `@extra_style` (injected as its own `<style>` after the main one, so it wins at equal specificity). See [Additive styles](styling-components.md#7-additive-styles-with-extra_style) in the styling guide.
+
 ### 3b. Override the template
 
 To change structure (not just styling), override `template()` — or the class docstring — exactly like you would when defining a component:

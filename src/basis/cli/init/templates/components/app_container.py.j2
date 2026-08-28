@@ -1,0 +1,324 @@
+"""
+The app's root component — the shell frame (generated).
+
+Composes the Basis shell plugin's parts into a frame matching the answers given
+to `basis init`. Edit freely: this is app-owned code. The chrome part files
+(components/titlebar.py, ...) replace the shell tags below, so the frame's
+`<shell-*>` tags render the app's versions.
+"""
+from basis.shared.component import Component
+
+{# Register the app's chrome subclasses (they replace the shell tags) and the
+   region component when the demo plugin needs it. #}
+{% if is_app and titlebar %}
+from {{ slug }}.components.titlebar import MyTitleBar  # noqa: F401
+{% endif %}
+{% if is_app and statusbar %}
+from {{ slug }}.components.statusbar import MyStatusBar  # noqa: F401
+{% endif %}
+{% if is_app and activitybar %}
+from {{ slug }}.components.activitybar import MyActivityBar  # noqa: F401
+{% endif %}
+{% if is_app and (sidebar_left or sidebar_right) %}
+from {{ slug }}.components.sidebar import MySidebarLeft, MySidebarRight  # noqa: F401
+{% endif %}
+{% if example_plugin %}
+import basis.plugins.regions.region  # noqa: F401  # registers <ui-region>
+{% endif %}
+{# The frame always uses these theme/UI-provided custom elements, so import the
+   modules that register them regardless of the store/plugin options. #}
+import basis.plugins.theme  # noqa: F401  # registers <ui-theme-provider>
+import basis.plugins.ui.toast.toast  # noqa: F401  # registers <ui-toast-container>
+{% if is_site %}
+{# The site frame composes the shell's built-in <shell-site>/<shell-header>/
+   <shell-main>/<shell-footer> directly (no app chrome subclasses), so import
+   the module that registers them. #}
+import basis.plugins.shell.site  # noqa: F401  # registers <shell-site> & friends
+{% endif %}
+
+
+class AppContainer(Component):
+    """Root component — the app shell frame (generated). Edit freely."""
+
+    app_title = "{{ project_title }}"
+{% if is_app %}
+    titlebar_height = "{{ titlebar_height }}"
+    statusbar_height = "{{ statusbar_height }}"
+    activitybar_width = "{{ activitybar_width }}"
+    sidebar_left_width = "{{ sidebar_left_width }}"
+    sidebar_right_width = "{{ sidebar_right_width }}"
+    sidebar_left_collapsible = "{{ sidebar_left_collapsible }}"
+{% endif %}
+{% if is_site %}
+    sticky_header = {{ sticky_header }}
+{% endif %}
+{% if demo %}
+    count = 0
+{% endif %}
+
+{% if demo %}
+    def increment(self, event=None):
+        """Demo — reactive counter."""
+        self.count += 1
+{% endif %}
+
+{% if demo and example_store %}
+    async def add_item(self, event=None):
+        """Demo — call the store's canonical-path server action (full-stack RPC)."""
+        from {{ slug }}.stores.app_state import app_state
+        await app_state.add_item(f"item {len(app_state.items) + 1}")
+
+    def toggle_theme(self, event=None):
+        """Demo — flip the theme (design tokens)."""
+        theme_store = self.S.get("theme")
+        if theme_store is not None:
+            theme_store.dark_mode = not theme_store.dark_mode
+{% endif %}
+
+    def style(self):
+        """
+{% if is_app %}
+        /* Fixed-viewport workbench shell: the app fills 100vh and never scrolls
+           at the page level. `.app-container` is a flex column so the outer
+           <shell-stack> (flex: 1 1 auto) stretches to 100vh and pins the
+           status bar to the bottom edge (a block container would leave the
+           status bar floating after the content). */
+        body { margin: 0; overflow: hidden; }
+        .app-container {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            height: 100vh;
+            overflow: hidden;
+        }
+{% else %}
+        /* Document-flow site shell: normal page scroll; header/main/footer in
+           a min-height column so the footer sits at the bottom of short pages. */
+        body { margin: 0; }
+        .app-container {
+            width: 100%;
+            min-height: 100vh;
+        }
+{% endif %}
+
+        /* Skeleton chrome — the app's owned pixels, token-styled. */
+        .app-title {
+            font-weight: 650;
+            letter-spacing: -0.01em;
+        }
+        .app-action {
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 1.05rem;
+            line-height: 1;
+            cursor: pointer;
+            padding: 0.3rem 0.5rem;
+            border-radius: var(--radius-sm);
+            transition: color 0.15s ease, background-color 0.15s ease;
+        }
+        .app-action:hover { color: var(--text-primary); background: var(--hover-bg); }
+        .status-item { color: var(--text-muted); }
+        .activity-icon { color: var(--accent-color); }
+
+{% if demo %}
+        /* --- demo: the generated starter (delete me) --- */
+        .demo-hero {
+            max-width: 40rem;
+            margin: 0 auto;
+            padding: 3rem 2rem 1.5rem;
+        }
+        .demo-hero h1 { margin: 0 0 0.4rem; font-size: 1.9rem; }
+        .demo-subtitle { margin: 0 0 1.75rem; color: var(--text-secondary); }
+        .demo-subtitle code {
+            font-family: var(--font-mono);
+            font-size: 0.9em;
+            background: var(--bg-tertiary);
+            padding: 0.15em 0.4em;
+            border-radius: var(--radius-sm);
+        }
+        .demo-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-soft);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-sm);
+        }
+        .demo-counter {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1.5rem;
+            padding: 1.25rem 1.5rem;
+        }
+        .demo-counter-value {
+            font-size: 2.4rem;
+            font-weight: 700;
+            line-height: 1;
+            color: var(--accent-color);
+            font-variant-numeric: tabular-nums;
+        }
+        .demo-list { max-width: 40rem; margin: 1rem auto 3rem; padding: 0 2rem; }
+        .demo-card-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            padding: 0.85rem 1.25rem;
+            border-bottom: 1px solid var(--border-soft);
+            font-weight: 550;
+        }
+        .demo-card ul { margin: 0; padding: 0; list-style: none; }
+        .demo-card li {
+            padding: 0.65rem 1.25rem;
+            color: var(--text-primary);
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .demo-card li:last-child { border-bottom: none; }
+        .demo-btn {
+            font: inherit;
+            font-weight: 550;
+            color: var(--text-primary);
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 0.45rem 0.95rem;
+            cursor: pointer;
+            transition: background-color 0.15s ease, border-color 0.15s ease;
+        }
+        .demo-btn:hover { background: var(--hover-bg); border-color: var(--border-hover); }
+        .demo-btn--accent {
+            background: var(--accent-color);
+            border-color: var(--accent-color);
+            color: var(--accent-text);
+        }
+        .demo-btn--accent:hover { background: var(--accent-color); filter: brightness(1.05); }
+        .panel {
+            margin: 0.75rem;
+            padding: 1rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-soft);
+            border-radius: var(--radius-md);
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+{% endif %}
+        """
+
+    def template(self):
+        """
+{% if is_app %}
+        <div class="app-container">
+            <shell-stack direction="column" size="1 1 auto">
+{% if titlebar %}
+                <shell-title-bar height="{titlebar_height}">
+                    <span class="app-title">{app_title}</span>
+{% if demo and example_store %}
+                    <span class="app-actions">
+                        <button class="app-action" onclick="{toggle_theme}" title="Toggle theme">◐</button>
+                    </span>
+{% endif %}
+                </shell-title-bar>
+{% endif %}
+                <shell-stack direction="row" size="1 1 auto">
+{% if activitybar %}
+                    <shell-activity-bar width="{activitybar_width}">
+                        <span slot="top" class="activity-icon">◆</span>
+                    </shell-activity-bar>
+{% endif %}
+{% if sidebar_left %}
+                    <shell-sidebar-left width="{sidebar_left_width}" collapsible="{sidebar_left_collapsible}">
+{% if demo %}
+                        <div class="panel"><p>Left panel</p></div>
+{% endif %}
+                    </shell-sidebar-left>
+                    <shell-splitter direction="horizontal"></shell-splitter>
+{% endif %}
+                    <shell-main-container>
+{% if demo %}
+                        <div class="demo-hero">
+                            <h1>{app_title}</h1>
+                            <p class="demo-subtitle">A reactive Basis starter — edit <code>components/app_container.py</code>.</p>
+                            <div class="demo-card demo-counter">
+                                <span class="demo-counter-value">{count}</span>
+                                <button class="demo-btn demo-btn--accent" onclick="{increment}">Increment</button>
+                            </div>
+                        </div>
+{% if demo and example_store %}
+                        <div class="demo-list">
+                            <div class="demo-card">
+                                <div class="demo-card-head">
+                                    <span>Items</span>
+                                    <button class="demo-btn" onclick="{add_item}">Add item</button>
+                                </div>
+                                <ul>
+                                    <li for="item" in="{$app_state.items}">{item}</li>
+                                </ul>
+                            </div>
+                        </div>
+{% endif %}
+{% endif %}
+{% if example_plugin %}
+                        <ui-region name="workspace-center"></ui-region>
+{% endif %}
+                    </shell-main-container>
+{% if sidebar_right %}
+                    <shell-splitter direction="horizontal"></shell-splitter>
+                    <shell-sidebar-right width="{sidebar_right_width}"></shell-sidebar-right>
+{% endif %}
+                </shell-stack>
+{% if statusbar %}
+                <shell-status-bar height="{statusbar_height}">
+                    <span class="status-item">Ready</span>
+                </shell-status-bar>
+{% endif %}
+            </shell-stack>
+            <ui-toast-container></ui-toast-container>
+            <ui-theme-provider></ui-theme-provider>
+        </div>
+{% else %}
+        <div class="app-container">
+            <shell-site>
+{% if header %}
+                <shell-header sticky="{sticky_header}">
+                    <span class="app-title">{app_title}</span>
+                </shell-header>
+{% endif %}
+                <shell-main>
+{% if demo %}
+                    <div class="demo-hero">
+                        <h1>{app_title}</h1>
+                        <p class="demo-subtitle">A reactive Basis starter — edit <code>components/app_container.py</code>.</p>
+                        <div class="demo-card demo-counter">
+                            <span class="demo-counter-value">{count}</span>
+                            <button class="demo-btn demo-btn--accent" onclick="{increment}">Increment</button>
+                        </div>
+                    </div>
+{% if demo and example_store %}
+                    <div class="demo-list">
+                        <div class="demo-card">
+                            <div class="demo-card-head">
+                                <span>Items</span>
+                                <button class="demo-btn" onclick="{add_item}">Add item</button>
+                            </div>
+                            <ul>
+                                <li for="item" in="{$app_state.items}">{item}</li>
+                            </ul>
+                        </div>
+                    </div>
+{% endif %}
+{% endif %}
+{% if example_plugin %}
+                    <ui-region name="workspace-center"></ui-region>
+{% endif %}
+                </shell-main>
+{% if footer %}
+                <shell-footer>
+                    <span>© {{ project_title }}</span>
+                </shell-footer>
+{% endif %}
+            </shell-site>
+            <ui-toast-container></ui-toast-container>
+            <ui-theme-provider></ui-theme-provider>
+        </div>
+{% endif %}
+        """

@@ -79,6 +79,10 @@ class ModelRegistryMixin:
         return decorator
 
 class BasisPlugin(ModelRegistryMixin):
+    #: Contribution classification (mirrors the server class): ``"plugin"``
+    #: or ``"theme"`` — the partition key between the plugin and theme managers.
+    kind: str = "plugin"
+
     def __init__(
         self,
         *,

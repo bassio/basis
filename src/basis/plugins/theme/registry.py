@@ -1,0 +1,53 @@
+"""The ``$themes`` catalog store — the theme registry (ROADMAP-THEMING §6.5.3).
+
+An :class:`~basis.shared.app_state.AppStateStore` whose ``items`` projection is
+the *theme* slice of the shared contribution registry (``kind == "theme"``) —
+the sibling of ``$plugins``. ``$themes`` says what themes are available (and
+their state); ``$theme`` says what's applied and how it looks.
+"""
+
+from basis.shared.actions import server_action
+from basis.shared.app_state import AppStateStore
+from basis.shared.plugin_registry import _registry_listing
+
+
+class ThemeRegistryStore(AppStateStore):
+    """Reactive, app-global theme catalog (registered under the name ``themes``).
+
+    Same shape as the ``$plugins`` registry store: an ``items`` projection of
+    the shared registry, SSR-serialized, client-reactive. The only differences
+    are the ``kind == "theme"`` filter and the theme metadata block each entry
+    carries (ROADMAP-THEMING §6.5.2).
+    """
+
+    def __init__(self, name: str = "themes"):
+        super().__init__(name)
+        # Never clobber the SSR-hydrated items (see the store-subclass footgun).
+        if not getattr(self, "_hydrated_from_ssr", False):
+            self.__dict__["items"] = {}
+
+    def project(self, app) -> dict:
+        """Project the app's *theme* registrations as the store's ``items``."""
+        return {"items": _registry_listing(app, kinds=("theme",))}
+
+    @server_action
+    async def disable(self, name: str) -> dict:
+        """Unmount a theme plugin (the app falls back to the default on the
+        next render). Same revertible machinery as ``$plugins.disable``."""
+        app = self._require_app()
+        changed = await app.disable_plugin(name)
+        return {"ok": changed}
+
+    @server_action
+    async def enable(self, name: str) -> dict:
+        """Re-mount a previously disabled theme plugin."""
+        app = self._require_app()
+        changed = await app.enable_plugin(name)
+        return {"ok": changed}
+
+
+def ensure_theme_registry() -> ThemeRegistryStore:
+    """Return the ``$themes`` store, creating it if absent (client entrypoints)."""
+    from basis.shared.store import ensure_store
+
+    return ensure_store("themes", ThemeRegistryStore)

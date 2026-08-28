@@ -1,3 +1,9 @@
+"""DEPRECATION (planned): ``SplitHandle`` (``ui-split-handle``) is superseded
+by the shell ``Splitter`` (``basis.plugins.shell.splitter``) — the same thin
+divider plus the drag interaction in one self-contained element. Kept for now
+because jotter still uses it; will be removed after jotter migrates to the
+shell primitives.
+"""
 from basis.shared.component import Component
 
 class SplitHandle(Component):

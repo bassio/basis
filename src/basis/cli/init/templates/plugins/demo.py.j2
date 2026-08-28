@@ -1,0 +1,35 @@
+"""
+A demo plugin (generated) — contributes a view into the ``workspace-center``
+region, proving the regions + revertible-plugin story. Delete this file (or
+answer "no" to the example-plugin question) to drop it.
+"""
+from pathlib import Path
+
+from basis.server.plugin import BasisPlugin
+from basis.shared.component import Component
+
+
+class DemoView(Component):
+    """A view contributed into the workspace-center region."""
+
+    __tag__ = "{{ slug }}-demo-view"
+
+    def template(self):
+        """
+        <div class="demo-view">
+            <h3>Demo plugin view</h3>
+            <p>Contributed by plugins/demo.py via the regions plugin.</p>
+        </div>
+        """
+
+
+plugin = BasisPlugin(
+    prefix="",
+    static_dir=Path(__file__).parent,
+    static_mount="/{{ slug }}/plugins",
+    name="demo",
+)
+
+# Declare the contribution; `include_plugin` flushes it into the app registry
+# (and records it on the PluginRegistration for revertible disable/remove).
+plugin.add_to_region("workspace-center", DemoView)

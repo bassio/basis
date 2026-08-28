@@ -31,8 +31,8 @@ deterministic *text ordinal* stamped on the parent element (``data-basis-text``
 = comma-separated 0-based ordinals of its reactive text children, computed over
 the *normalized* children).  See ``stamp_text_ordinals`` / ``text_ordinal``.
 
-This module is the single source of truth for both SSR renderers
-(``server/ssr.py`` and ``shared/page.py``) and the client.
+This module is the single source of truth for both render engines
+(``server/render.py`` and ``shared/page.py``) and the client.
 """
 
 from __future__ import annotations

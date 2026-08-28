@@ -71,8 +71,9 @@ At bootstrap, Basis:
    see [Importing Components & the Isomorphism Principle](../04_components/importing-components.md).
 2. **Imports** every `.py` module, so the module-scope instances register their
    persistent **blueprints** (name → class + constructor config).
-3. Emits the module list to the client (`#basis-store-imports`), which imports
-   them on boot so the same instances exist in the browser and hydrate from
+3. Serves the module list to the client under `basis.bootstrap.store_modules`
+   in the per-page `/pyscript.json` manifest, which the entrypoint imports on
+   boot so the same instances exist in the browser and hydrate from
    `#basis-initial-state`.
 
 Then a `Page` can reference stores **by name**, or leave `stores` empty to

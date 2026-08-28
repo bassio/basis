@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from basis.server.app import Basis
 from basis.shared.page import _synthesize_page
-from basis.server.ssr import _get_all_stores, _serialize_initial_state
+from basis.server.render import _get_all_stores, _serialize_initial_state
 from basis.shared.store import Store
 from basis.shared.component import Component
 
@@ -115,9 +115,10 @@ def test_serialize_initial_state_includes_subclass_constructor_state():
 
 
 # ---------------------------------------------------------------------------
-# Page.load(ssr=True) page-store reconstruction
+# Page.load page-store reconstruction
 # ---------------------------------------------------------------------------
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_page_load_reconstructs_entrypoint_store_subclass():
     from basis.shared.page import Page
 
@@ -127,13 +128,14 @@ def test_page_load_reconstructs_entrypoint_store_subclass():
         stores = ["ssr_entry"]
 
     Store._registry.clear()
-    EntryPage.load(ssr=True, request=None)
+    EntryPage.load()
 
     store = Store._registry.get("ssr_entry")
     assert isinstance(store, CounterStore)
     assert store.count == 0
 
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_page_load_reconstructs_entrypoint_store_with_constructor_args():
     """
     Regression: the old `store.__class__(name)` reconstruction only passed the
@@ -148,7 +150,7 @@ def test_page_load_reconstructs_entrypoint_store_with_constructor_args():
         stores = ["ssr_arg_entry"]
 
     Store._registry.clear()
-    ArgPage.load(ssr=True, request=None)
+    ArgPage.load()
 
     store = Store._registry.get("ssr_arg_entry")
     assert isinstance(store, ArgStore)

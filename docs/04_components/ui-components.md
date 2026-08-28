@@ -427,19 +427,36 @@ A recursive file/folder explorer.
 
 ---
 
-## ThemeStore (`basis.plugins.ui.theme`)
+## ThemeStore (`basis.plugins.theme`)
 
-`ThemeStore` is a reactive `Store` of CSS design tokens, registered by default under the name `"theme"` (so it's reachable as `$theme` in templates):
+`ThemeStore` is a reactive `Store` of CSS design tokens, registered by default
+under the name `"theme"` (so it's reachable as `$theme` in templates):
 
 ```python
-from basis.plugins.ui.theme import ThemeStore
+from basis.plugins.theme import ThemeStore
 
 theme = ThemeStore()          # registers the store as "theme"
 theme.dark_mode = True
 theme.accent_color = "light-dark(#6E5FD8, #9384F5)"
 ```
 
-It exposes `dark_mode` plus design-token attributes — `bg_primary`, `bg_secondary`, `bg_tertiary`, `text_primary`, `text_secondary`, `text_muted`, `accent_color`, `accent_bg`, `accent_text`, `border_color` — expressed with CSS `light-dark()` values so the UI suite adapts to both light and dark mode automatically.
+It exposes `dark_mode` plus design-token attributes — `bg_primary`, `bg_secondary`, `bg_tertiary`, `text_primary`, `text_secondary`, `text_muted`, `accent_color`, `accent_bg`, `accent_text`, `border_color`, `border_hover`, `scrollbar_thumb` — expressed with CSS `light-dark()` values so the UI suite adapts to both light and dark mode automatically.
+
+Theming is provided by the official **`basis.plugins.theme`** plugin — the token schema (`ThemeDefinition`/`ThemeTokens`), `ThemeStore`, and `<ui-theme-provider>` (which injects the tokens as CSS variables on `:root` and stamps `data-theme` / `data-theme-mode` on the document root). The `ui` and `shell` plugins depend on it.
+
+### The `$theme` control plane (P3)
+
+`$theme` also tracks the **active theme** and persists user prefs, so a reload keeps the choice (no FOUC — the SSR/CSR first paint reads the `basis_theme` cookie):
+
+```python
+theme.active_theme = "basis"          # currently applied theme id
+# server actions (authoritative new_state + cookie):
+await theme.set_theme("basis")        # resolve + apply a theme by id
+await theme.set_mode("dark")          # "light" | "dark"
+await theme.set_accent("#e63946")     # accent override layered on the theme
+```
+
+The **installed themes** live on the sibling **`$themes`** catalog store (a `kind`-filtered slice of the shared registry — see [Theme Manager](#24-theme-manager-ui-theme-picker)).
 
 ---
 
@@ -459,6 +476,27 @@ Use it in a template as `<ui-plugin-manager></ui-plugin-manager>`. It reads `$pl
 reactively (no component state of its own). Disabled plugins stay listed with `state: "disabled"`
 so they can be re-enabled. The `$plugins` store is framework-provided (created at bootstrap,
 hydrated into `#basis-initial-state`), so no wiring is needed.
+
+---
+
+## 24. Theme Manager (`<ui-theme-picker>`)
+
+A live theme manager bound to the `$themes` catalog store. It lists every installed theme
+(name, modes, version, state) and provides an **Apply** button that calls `$theme.set_theme(id)`, plus a
+header button that flips the mode via `$theme.set_mode(...)`. The choice persists through the
+`basis_theme` cookie.
+
+```python
+from basis.plugins.ui.theme_picker import ThemePicker
+```
+
+Use it in a template as `<ui-theme-picker></ui-theme-picker>`. It reads `$themes.items`
+reactively (no component state of its own).
+
+`<ui-theme-picker>` and `<ui-plugin-manager>` share a common base — [`RegistryManager`](https://github.com/bassio/basis) —
+rendering reactive rows over a `$registry.items` projection (one row chrome, one action dispatch;
+the faces differ only by a `kind` filter and their row action). Themes are `BasisPlugin` subclasses
+with `kind="theme"`, so they never appear in the plugin manager (ROADMAP-THEMING.md §6.5).
 
 ---
 

@@ -83,7 +83,9 @@ class BaseComponent(ReactiveObject):
     def __file__(cls):
         try:
             return Path(inspect.getfile(cls))
-        except OSError:
+        except (OSError, TypeError):
+            # Dynamic classes (e.g. headless components, from_template) have no
+            # real source file; fall back to cwd.
             return Path.cwd()
 
     @classmethod
@@ -114,47 +116,106 @@ class BaseComponent(ReactiveObject):
         return templatestr
     
     @classmethod
-    def _get_style_string(cls):
-        style_content = ""
-        if hasattr(cls, 'style'):
-            val = getattr(cls, 'style')
-            if isinstance(val, str):
-                style_content = val
-            elif isinstance(inspect.getattr_static(cls, 'style', None), classmethod):
-                if val.__doc__ is not None and val.__doc__.strip():
-                    style_content = val.__doc__
-                else:
-                    style_content = val()
-            elif inspect.isfunction(val):
-                if val.__doc__ is not None:
-                    style_content = val.__doc__
-        
-        # Check if the style needs to be scoped
-        is_scoped = False
+    def _style_from_value(cls, name: str) -> str:
+        """Extract the CSS string from a style attribute/method ``name``.
+
+        ``name`` is ``"style"`` or an ``@extra_style`` method name. Supports a
+        plain string, a classmethod (called, or its docstring), or a function
+        (its docstring) — the same conventions as ``template()``.
+        """
+        val = getattr(cls, name, None)
+        if val is None:
+            return ""
+        if isinstance(val, str):
+            return val
+        static_val = inspect.getattr_static(cls, name, None)
+        if isinstance(static_val, classmethod):
+            doc = getattr(val, "__doc__", None)
+            if doc is not None and doc.strip():
+                return doc
+            return val()
+        if inspect.isfunction(val):
+            doc = getattr(val, "__doc__", None)
+            if doc is not None:
+                return doc
+        return ""
+
+    @classmethod
+    def _style_is_scoped(cls, name: str) -> bool:
+        """True when the style attribute/method ``name`` is marked ``@scoped``."""
         try:
-            desc = inspect.getattr_static(cls, 'style', None)
-            if getattr(desc, '__scoped__', False):
-                is_scoped = True
+            desc = inspect.getattr_static(cls, name, None)
+            if getattr(desc, "__scoped__", False):
+                return True
         except AttributeError:
             pass
-            
-        if not is_scoped:
-            try:
-                val = getattr(cls, 'style', None)
-                if val is not None:
-                    if inspect.ismethod(val):
-                        val = val.__func__
-                    if getattr(val, '__scoped__', False):
-                        is_scoped = True
-            except AttributeError:
-                pass
+        try:
+            val = getattr(cls, name, None)
+            if val is not None:
+                if inspect.ismethod(val):
+                    val = val.__func__
+                if getattr(val, "__scoped__", False):
+                    return True
+        except AttributeError:
+            pass
+        return False
 
-        if is_scoped and style_content:
-            tag = getattr(cls, '__tag__', cls.__name__)
+    @classmethod
+    def _format_style_css(cls, css: str) -> str:
+        """Interpolate ``{expr}`` fields in a component's CSS (CSS-aware formatter).
+
+        The evaluation context is the component *class*: bare names resolve to
+        class attributes and ``$store.x`` / ``#id.x`` resolve through the
+        store/component registries. Static CSS (no fields) passes through
+        unchanged, and a failed field keeps the raw ``{expr}`` rather than
+        dropping the stylesheet.
+        """
+        if not isinstance(css, str) or "{" not in css:
+            return css
+        try:
+            from basis.shared.expr import format_css_style, ALLOWED_BUILTINS
+
+            return format_css_style(css, cls, ALLOWED_BUILTINS)
+        except Exception:
+            return css
+
+    @classmethod
+    def _get_style_string(cls):
+        style_content = cls._style_from_value("style") if hasattr(cls, "style") else ""
+
+        if style_content and cls._style_is_scoped("style"):
+            tag = getattr(cls, "__tag__", cls.__name__)
             style_content = f"@scope ({tag}) {{\n{style_content}\n}}"
-        
-        return style_content
 
+        return cls._format_style_css(style_content)
+
+    @classmethod
+    def _get_extra_style_names(cls):
+        """The ``@extra_style`` method names for this class (MRO order)."""
+        return list(getattr(cls, "__extra_style_names__", ()) or ())
+
+    @classmethod
+    def _get_extra_styles(cls):
+        """Yield ``(name, css)`` for every ``@extra_style`` block (MRO order).
+
+        These are ADDITIVE style blocks — injected as their own ``<style>``
+        elements after the component's main stylesheet so a subclass can
+        restyle a parent without copying its whole ``style()``. Each block is
+        ``@scope``-wrapped when the method is also marked ``@scoped``.
+        """
+        tag = getattr(cls, "__tag__", cls.__name__)
+        for name in cls._get_extra_style_names():
+            css = cls._style_from_value(name)
+            if not css:
+                continue
+            if cls._style_is_scoped(name):
+                css = f"@scope ({tag}) {{\n{css}\n}}"
+            yield name, cls._format_style_css(css)
+
+    @classmethod
+    def _get_extra_style_strings(cls):
+        """The CSS strings of every ``@extra_style`` block (MRO order)."""
+        return [css for _name, css in cls._get_extra_styles()]
 
     @classmethod
     def _set_style_string(cls):
@@ -196,6 +257,19 @@ class BaseComponent(ReactiveObject):
         setattr(cls, "__templatestr__", templatestr)
 
         cls._set_style_string()
+
+        # Collect @extra_style methods: inherited names (via the MRO) plus any
+        # defined on this class, in definition order (parent extras first). The
+        # decorated value may be a plain function or a classmethod/staticmethod
+        # (whose __func__ carries the marker).
+        extra_names = list(getattr(cls, "__extra_style_names__", ()) or ())
+        for _name, value in cls.__dict__.items():
+            marked = getattr(value, "__extra_style__", False) or (
+                getattr(getattr(value, "__func__", None), "__extra_style__", False)
+            )
+            if marked and _name not in extra_names:
+                extra_names.append(_name)
+        setattr(cls, "__extra_style_names__", extra_names)
 
         setattr(cls, "__binding_blueprints__", [])
 
@@ -1016,6 +1090,22 @@ class BaseComponent(ReactiveObject):
                         cls._style_elements.setdefault(c.__name__, []).append(style_elem)
                     except Exception:
                         pass
+
+            # Additive @extra_style blocks — their own <style> elements, APPENDED
+            # (not prepended) so they land after the main stylesheet and win the
+            # cascade at equal specificity without copying the whole style().
+            for extra_name, extra_css in c._get_extra_styles():
+                extra_elem = cls._create_element("style")
+                extra_elem.setAttribute("data-component-class", c.__name__)
+                extra_elem.setAttribute("data-extra-style", extra_name)
+                extra_elem.textContent = extra_css
+                container.appendChild(extra_elem)
+                # Track for HMR alongside the main style element (the data-extra-style
+                # attribute distinguishes them).
+                try:
+                    cls._style_elements.setdefault(c.__name__, []).append(extra_elem)
+                except Exception:
+                    pass
 
         return new_instance
 

@@ -1,0 +1,23 @@
+"""
+The app's title bar — app-owned chrome (generated).
+
+Keeps the shell tag (`shell-title-bar`) and replaces it in the registry, so the
+frame's `<shell-title-bar>` renders this app version. The `template()` below is
+a copy of the shell's — edit it here to restyle the bar without touching the
+framework. Inherited props (`direction`, `gap`, `align`, `justify`, `border`)
+and `style()` come from the shell's `TitleBar`; override them here when needed.
+"""
+from basis.plugins.shell.title_bar import TitleBar
+
+
+class MyTitleBar(TitleBar):
+    height = "{{ titlebar_height }}"
+
+    def template(self):
+        """
+        <div class="shell-title-bar" style="flex: 0 0 {height};" data-border="{border}">
+            <shell-stack direction="{direction}" gap="{gap}" align="{align}" justify="{justify}" size="1 1 auto">
+                <slot></slot>
+            </shell-stack>
+        </div>
+        """

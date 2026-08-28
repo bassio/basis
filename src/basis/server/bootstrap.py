@@ -14,8 +14,7 @@ from pathlib import Path
 from starlette.routing import Mount
 
 from basis.server.plugins import _resolve_canonical_package
-from basis.server.static import BasisStaticFiles
-from basis.server.vfs import pyscript_json
+
 
 logger = logging.getLogger('uvicorn.error')
 logger.setLevel(logging.DEBUG)
@@ -63,6 +62,46 @@ def _discover_conventional_dirs(
             continue
         found.append({"name": name, "subdir": subdir, "dir": path, "pkg": pkg})
     return found
+
+
+def page_bootstrap(app, page_cls=None) -> dict:
+    """Per-page ``basis.bootstrap`` manifest section.
+
+    Computes the bootstrap injected into ``/pyscript.json`` under
+    ``basis.bootstrap`` (read by the client via ``pyscript.config``): the
+    app-global ``store_modules`` / ``headless_modules`` plus, when ``?url=<route>``
+    resolves to *page_cls*, the page-specific ``page_stores`` / ``entrypoint``.
+
+    Consumed only by ``basis.server.vfs.pyscript_json`` (which imports it
+    lazily). ``_page_store_names`` is imported lazily too — a top-level import of
+    ``basis.shared.page`` here would re-enter ``basis.server.app`` mid-import
+    (shared.page -> shared.component -> server.app) and fail.
+    """
+    from basis.shared.page import _page_store_names
+
+    bootstrap: dict = {}
+
+    store_modules = getattr(app, "_discovered_store_modules", [])
+    if store_modules:
+        bootstrap["store_modules"] = list(store_modules)
+
+    headless_modules = getattr(getattr(app, "vfs", None), "headless_modules", [])
+    if headless_modules:
+        bootstrap["headless_modules"] = list(headless_modules)
+
+    if page_cls is not None:
+        declared_stores = getattr(page_cls, "stores", None)
+        if declared_stores:
+            page_store_names = _page_store_names(declared_stores)
+            if page_store_names:
+                bootstrap["page_stores"] = page_store_names
+
+        if not getattr(page_cls, "__synthesized__", False):
+            module_file = app.vfs.component_module_name(page_cls)
+            if module_file and module_file != "basis.shared.page":
+                bootstrap["entrypoint"] = {page_cls.__name__: module_file}
+
+    return bootstrap
 
 
 class BootstrapMixin:
@@ -136,12 +175,16 @@ class BootstrapMixin:
         )
 
     def include_offline_pyscript(self, mount_path: str = "/pyscript"):
+        from basis.server.static import BasisStaticFiles
+
         if self._has_route(name="pyscript") or self._has_route(path=mount_path):
             return
         pyscript_mount = Mount(mount_path, BasisStaticFiles(packages=[("basis", "static/pyscript")]), name="pyscript")
         self.routes.append(pyscript_mount)
 
     def include_pyscript_json(self, mount_path: str = "/pyscript.json"):
+        from basis.server.vfs import pyscript_json
+
         if self._has_route(path=mount_path):
             return
         self.add_route(mount_path, pyscript_json, methods=['get'])
@@ -196,9 +239,10 @@ class BootstrapMixin:
         Import every module in the discovered ``stores/`` directory so its
         module-scope store instances register their persistent blueprints.
 
-        Returns the dotted module names, which are also emitted to the client
-        (``#basis-store-imports``) so PyScript imports the same modules, creates
-        the same instances and hydrates them from ``#basis-initial-state``.
+        Returns the dotted module names, which the per-page manifest serves to
+        the client under ``basis.bootstrap.store_modules`` so PyScript imports
+        the same modules, creates the same instances and hydrates them from
+        ``#basis-initial-state``.
         """
         stores_cfg = self._discovered_dirs.get("stores")
         if not stores_cfg:

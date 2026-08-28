@@ -1,0 +1,49 @@
+/* {{ project_name }} — app-level stylesheet (generated).
+
+   Served at /static/app.css and linked by the generated HomePage (via
+   Page.stylesheets) at the END of <body>, so it loads AFTER the framework's
+   component <style> elements and wins the cascade at equal specificity — the
+   "your CSS comes later" rule.
+
+   Restyle the whole app from here without touching the shell components.
+   See docs/04_components/styling-components.md for the full guide.
+*/
+
+/* Base document look — the default theme's first impression. The shell
+   components paint their own surfaces; these rules set the page-level
+   typography, body background, and the interaction details (selection, focus,
+   scrollbars) that make a fresh `basis init` app feel finished. */
+body {
+    font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+    color: var(--text-primary);
+    background-color: var(--bg-primary);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+    background: var(--accent-bg);
+    color: var(--accent-text);
+}
+
+:focus-visible {
+    outline: 2px solid var(--accent-color);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+}
+
+/* Theme-aware scrollbars (--scrollbar-thumb token). */
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 4px;
+}
+
+h1, h2, h3 { font-weight: 650; letter-spacing: -0.02em; }
+
+/* --- Your overrides go below. Examples (uncomment to try):
+   :root { --accent-color: #e63946; --radius-md: 0.75rem; }
+   .demo-hero h1 { font-size: 3rem; }
+   .app-title { letter-spacing: 0.02em; }
+*/

@@ -42,6 +42,11 @@ def plugin_list(
     """
     from basis.server.app import discover_local_plugins, discover_installed_plugins
 
+    def _plugins_only(plugins):
+        # Themes (kind == "theme") are managed under `basis theme` — the same
+        # split as the plugin manager vs. the theme manager (ROADMAP-THEMING).
+        return [p for p in plugins if getattr(p, "kind", "plugin") == "plugin"]
+
     project_dir = resolve_project_dir()
     import_path, _ = find_basis_app(app_path, cwd=project_dir)
 
@@ -52,14 +57,14 @@ def plugin_list(
     src_dir = project_dir / "src"
     package_dir = src_dir / module_name.replace(".", "/")
     if package_dir.is_dir():
-        local_plugins = discover_local_plugins(package_dir, "plugins")
+        local_plugins = _plugins_only(discover_local_plugins(package_dir, "plugins"))
     elif (project_dir / module_name.replace(".", "/")).is_dir():
-        local_plugins = discover_local_plugins(
-            project_dir / module_name.replace(".", "/"), "plugins"
+        local_plugins = _plugins_only(
+            discover_local_plugins(project_dir / module_name.replace(".", "/"), "plugins")
         )
 
-    # Discover installed plugins
-    installed_plugins = discover_installed_plugins()
+    # Discover installed plugins (plugins only — themes live under basis theme)
+    installed_plugins = _plugins_only(discover_installed_plugins())
 
     if not local_plugins and not installed_plugins:
         console.print("\n[dim]No plugins discovered.[/]\n")

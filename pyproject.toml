@@ -8,6 +8,7 @@ requires-python = ">=3.14"
 dependencies = [
     "beautifulsoup4>=4.14.3",
     "fastapi[standard]>=0.127.0",
+    "jinja2>=3.1.5",
     "typer>=0.20.0",
     "rich>=13.0.0",
 ]
@@ -23,6 +24,7 @@ basis = "basis.cli.main:app"
 [project.entry-points."basis.plugins"]
 regions = "basis.plugins.regions.plugin:plugin"
 ui = "basis.plugins.ui.plugin:plugin"
+shell = "basis.plugins.shell.plugin:plugin"
 
 [project.optional-dependencies]
 db = [

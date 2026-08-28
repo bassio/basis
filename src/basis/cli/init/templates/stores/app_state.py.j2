@@ -1,0 +1,50 @@
+"""
+The app's example store (generated) — demonstrates the stores convention.
+
+A module-scope instance (`app_state`) registers the store's blueprint so
+`Page.stores` can resolve it by name (or default to all stores), SSR serializes
+it into `#basis-initial-state`, and the client hydrates it from the same.
+"""
+from basis.shared.store import Store
+from basis.shared.actions import server_action
+from basis.plugins.theme import ThemeStore
+
+
+class AppState(Store):
+    """Global app state. Reactive instance state is declared in ``__init__``."""
+
+    def __init__(self, name: str):
+        super().__init__(name)
+        # Never clobber the list that Store.__init__ just hydrated from
+        # #basis-initial-state (that would desync client vs SSR trees).
+        if not getattr(self, "_hydrated_from_ssr", False):
+            self.items = ["hello", "basis"]
+
+    @server_action
+    def add_item(self, name: str) -> str:
+        """Canonical-path server action — appends to ``items`` (full-stack RPC)."""
+        if not isinstance(getattr(self, "items", None), list):
+            self.items = []
+        self.items.append(name)
+        return f"added {name}"
+
+
+class AppTheme(ThemeStore):
+    """The app's theme store — seeds the `basis init` answer (dark/light).
+
+    The default is applied in ``__init__`` (guarded against SSR hydration) so
+    the seed survives the per-request store rebuild: SSR reconstructs stores
+    from their class blueprints, so a plain module-scope assignment would be
+    lost. Toggle at runtime via ``theme.dark_mode``.
+    """
+
+    def __init__(self, name="theme"):
+        super().__init__(name)
+        if not getattr(self, "_hydrated_from_ssr", False):
+            self.dark_mode = {{ "True" if theme_seed == "dark" else "False" }}
+
+
+# Module-scope instances — the stores auto-discovery convention. Registering
+# the theme store here guarantees `$theme` is available to <ui-theme-provider>.
+app_state = AppState("app_state")
+theme = AppTheme("theme")

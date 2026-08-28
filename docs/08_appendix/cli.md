@@ -12,9 +12,11 @@ basis [OPTIONS] COMMAND [ARGS]...
 
 | Command | Description |
 | :--- | :--- |
-| `basis dev` | Start the development server with auto-detection, auto-reload, and plugin scanning. |
-| `basis init <name>` | Scaffold a new Basis project. |
+| `basis dev` | Start the development server with auto-detection, live HMR, and plugin scanning. |
+| `basis init [name]` | Interactive app-shell wizard: scaffold a loadable workbench (`app`) or website (`site`) project. |
 | `basis plugin list` | List all discovered local and installed plugins. |
+| `basis theme list` | List installed theme packages (`kind == "theme"`). |
+| `basis theme apply <id>` | Resolve + validate a theme by id (loud errors on a broken manifest). |
 
 To check the CLI version:
 ```bash
@@ -32,7 +34,11 @@ basis dev [APP_PATH] [FLAGS]
 ```
 
 ### Automatic App Detection
-If `APP_PATH` is omitted, `basis dev` automatically scans your current directory for common Basis application entry points (`app.py:app`, `main.py:app`, etc.).
+If `APP_PATH` is omitted, `basis dev` auto-detects the app in this order:
+
+1. `pyproject.toml` project name → `src/<name>/__init__.py` containing a module-level `app = Basis()` — the exact layout `basis init` generates.
+2. Any `src/<package>/__init__.py` containing a module-level `Basis()` instance.
+3. A root `app.py` / `main.py` (or a root `__init__.py`) containing `app = Basis()`.
 
 ### Command Flags
 
@@ -40,7 +46,8 @@ If `APP_PATH` is omitted, `basis dev` automatically scans your current directory
 | :--- | :--- | :--- | :--- |
 | `--host` | `-h` | `127.0.0.1` | Bind host address. |
 | `--port` | `-p` | `8000` | Bind port number. |
-| `--reload / --no-reload` | | `True` | Automatically reload on file changes. |
+| `--hmr / --no-hmr` | | `True` | **Live client-side HMR** (default): watch component files (`.py`/`.html`/`.css`) and hot-swap them in the browser over a WebSocket — no page refresh, no state loss. |
+| `--reload / --no-reload` | | `False` | Full-process restart on any file change (uvicorn `--reload`). Mutually exclusive with HMR — use while editing server-only code outside component directories. |
 | `--pyc` | | `False` | Enable **PYC Compilation Mode** (serves pre-compiled bytecode to PyScript client VFS). |
 
 ### Example Usage
@@ -64,19 +71,137 @@ When launched, `basis dev` displays a formatted console output:
 
 ---
 
-## 2. `basis init` — Project Scaffolding
+## 2. `basis init` — Interactive App-Shell Wizard
 
-Scaffold a new Basis project structure:
+`basis init` is a cookiecutter-style interactive wizard (create-react-app for
+Basis). It asks a short series of questions — project name → shell paradigm →
+top-level stack → extras — then generates a **loadable app shell** (workbench
+`app` or website `site`) that runs on `basis dev --hmr` out of the box, with an
+SSR page registered at `/`.
 
 ```bash
-basis init my-awesome-app
+basis init [PROJECT_NAME] [FLAGS]
 ```
 
-This creates a clean workspace pre-configured with:
-- Standard `app.py` entrypoint.
-- `components/` directory for single/multi-file UI components.
-- `plugins/` directory for auto-discovered plugins.
-- `pyproject.toml` or dependency setup.
+### Interactive flow
+
+Run it with no arguments (or just a project name) and answer the prompts:
+
+```text
+$ basis init
+
+  0 · Project
+   · Project / package name:   my-app
+
+  A · Shell paradigm
+   · Shell paradigm:           app (workbench) / site (website)
+
+  B · Top-level Stack
+   · Include a Titlebar?       y
+   · Include a Statusbar?      y
+   · Include an ActivityBar?   y
+   · Include a Left Sidebar?   y
+   · ...
+
+  C · Extras
+   · Theme seed:               dark
+   · Generate demo content?    y
+   · Generate an example store?  y
+   · Generate an example plugin? y
+
+  Create project 'my-app' in /path/to/cwd?  [y/n]  y
+```
+
+Each answer group renders a live "current plan" panel; the wizard only asks
+questions that apply to the chosen paradigm (`site` hides the workbench chrome
+questions and vice-versa). Ctrl-C aborts without writing anything.
+
+### Command Flags
+
+| Flag | Short | Description |
+| :--- | :--- | :--- |
+| `PROJECT_NAME` | | Project name. If omitted, the wizard asks (default: the current directory name). |
+| `--dir` | `-d` | Parent directory to create the project in (default: current directory). |
+| `--shell` | | Shell paradigm: `app` (fixed-viewport workbench) or `site` (document-flow website). |
+| `--theme` | | Theme seed: `dark` or `light`. |
+| `--sidebar-left-collapsible` | | Left sidebar collapse mode: `none` \| `icon` \| `offcanvas`. |
+| `--titlebar/--no-titlebar` | | Include a Titlebar (app). |
+| `--statusbar/--no-statusbar` | | Include a Statusbar (app). |
+| `--activitybar/--no-activitybar` | | Include an ActivityBar (app). |
+| `--sidebar-left/--no-sidebar-left` | | Include a Left Sidebar (app). |
+| `--sidebar-right/--no-sidebar-right` | | Include a Right Sidebar (app). |
+| `--header/--no-header` | | Include a Header / nav (site). |
+| `--footer/--no-footer` | | Include a Footer (site). |
+| `--sticky-header/--no-sticky-header` | | Make the header sticky (site). |
+| `--demo/--no-demo` | | Generate demo content (reactive counter + sample list). |
+| `--store/--no-store` | | Generate an example store (`stores/app_state.py`). |
+| `--plugin/--no-plugin` | | Generate an example plugin (`plugins/demo.py`). |
+| `--yes` | `-y` | Non-interactive: build the project from defaults plus any flags given (a minimal loadable skeleton). |
+| `--config` | | Path to a JSON answers file to replay (non-interactive). |
+| `--list` | | Print the wizard's question tree and exit. |
+
+Provided flags pre-fill the wizard and skip those questions; unset flags fall
+back to the wizard defaults. In `--yes` / `--config` mode flags become hard
+values.
+
+### Non-interactive generation
+
+```bash
+# Minimal loadable skeleton (defaults, no prompts):
+basis init my-app --yes
+
+# A site with no footer, no demo, no store/plugin:
+basis init my-site --shell site --no-footer --no-demo --no-store --no-plugin
+
+# Replay a saved answers file (an explicit flag overrides the file):
+basis init --config answers.json --shell app
+
+# Preview the wizard's questions:
+basis init --list
+```
+
+### Generated structure
+
+```text
+my-app/
+├── pyproject.toml              # name, requires-python >=3.14, basis-framework, hatchling
+├── .gitignore
+├── README.md
+└── src/
+    └── my_app/
+        ├── __init__.py         # app = Basis(); app.bootstrap(); app.serve("/")(HomePage)
+        ├── components/
+        │   ├── __init__.py
+        │   ├── page.py             # HomePage(Page): root_component, stores default-all
+        │   ├── app_container.py    # the shell frame (app or site) + demo blocks
+        │   ├── titlebar.py         # MyTitleBar(TitleBar)      (app)
+        │   ├── statusbar.py        # MyStatusBar(StatusBar)    (app)
+        │   ├── activitybar.py      # MyActivityBar(ActivityBar) (app)
+        │   └── sidebar.py          # MySidebarLeft / MySidebarRight (app)
+        ├── stores/
+        │   ├── __init__.py
+        │   └── app_state.py        # AppState(Store) + module-scope instances (when --store)
+        ├── plugins/
+        │   ├── __init__.py
+        │   └── demo.py             # DemoView added to workspace-center (when --plugin)
+        └── static/
+            └── app.css             # override layer, linked via HomePage.stylesheets
+```
+
+The generated app is a normal Basis project — install deps, then dev-serve:
+
+```bash
+cd my-app
+uv sync
+basis dev            # auto-detects my_app:app, serves /, live HMR on
+```
+
+- **SSR page at `/`** — `components/page.py` registers `HomePage`, an SSR page, at the root route.
+- **Demo (default on)** — a reactive counter (`count`), a store-backed list
+  (`app_state.add_item` via a canonical-path server action), and a theme toggle
+  that flips the design tokens.
+- **Example plugin (default on)** — `plugins/demo.py` registers `DemoView` into
+  the `workspace-center` region, proving the regions/plugin story end to end.
 
 ---
 
@@ -93,3 +218,38 @@ basis plugin list
 This scans:
 1. **Local Plugins**: Python modules/packages inside the `plugins/` directory exposing a module-level `plugin` variable.
 2. **Installed Plugins**: Third-party packages registered via the `basis.plugins` entry point in `pyproject.toml`.
+
+Themes (`kind == "theme"`) are excluded from `basis plugin list` — they live under
+`basis theme` (the plugin/theme split from ROADMAP-THEMING §6.5).
+
+---
+
+## 4. `basis theme` — Theme Management
+
+Inspect and validate theme packages — `Theme(BasisPlugin)` instances
+(`kind == "theme"`) discovered through the standard `basis.plugins` entry
+points, the same catalog the theme manager renders from `$themes`.
+
+### List Installed Themes
+
+```bash
+basis theme list
+```
+
+Shows each installed theme's id, display name, plugin, version and modes. The
+in-tree themes are `basis` (the built-in default) and `ambient` (the dogfood).
+
+### Resolve + Validate a Theme
+
+```bash
+basis theme apply ambient
+```
+
+Resolves the theme by id (installed themes or the built-in `basis`), validates
+its manifest, and prints the resolved metadata. A broken theme package fails
+**loudly** (clear `ValueError`), so a bad community theme is caught here — not at
+3am in a browser.
+
+At runtime the theme is applied per-user via the theme manager
+(`<ui-theme-picker>`) and persists through the `basis_theme` cookie. A per-app
+default-theme seed from the CLI is a later phase.

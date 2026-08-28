@@ -204,7 +204,7 @@ def test_mutate_serializes_concurrent_mutations():
 
 
 def test_ssr_attach_and_serialize_projection():
-    from basis.server.ssr import _get_all_stores, _serialize_initial_state
+    from basis.server.render import _get_all_stores, _serialize_initial_state
 
     app = Basis()
     app.state.version = "1.2.3"
@@ -273,7 +273,7 @@ def test_app_state_store_registered_via_app_include_store():
     """Registration via the existing ``app.include_store(name)``: the app-global
     SSR path collects the AppStateStore by blueprint, app-attaches it, and
     serializes the server projection."""
-    from basis.server.ssr import _get_all_stores, _serialize_initial_state
+    from basis.server.render import _get_all_stores, _serialize_initial_state
 
     app = Basis()
     app.state.version = "3.0"

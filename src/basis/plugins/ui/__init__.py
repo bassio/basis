@@ -6,8 +6,10 @@ entry point so it uses the same discovery/lifecycle path as any third-party
 plugin.
 
 Component families live directly under the plugin package (each family a
-package with its own ``__init__.py``, e.g. ``basis.plugins.ui.button``), and
-``basis.plugins.ui.theme`` holds ``ThemeStore`` / ``ThemeProvider``.
+package with its own ``__init__.py``, e.g. ``basis.plugins.ui.button``).
+Theming lives in the separate official ``basis.plugins.theme`` plugin
+(``ThemeStore`` / ``ThemeProvider`` / token schema) — this plugin depends on it
+(``requires=["theme"]``).
 
 Importing this package binds the canonical ``plugin`` instance (entry-point
 convention) but does NOT import the component families: like the former

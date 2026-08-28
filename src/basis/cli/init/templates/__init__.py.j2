@@ -1,0 +1,31 @@
+"""
+{{ project_name }} — a Basis web application.
+"""
+
+from pathlib import Path
+
+from basis.server.app import Basis
+from {{ slug }}.components.page import HomePage
+
+app = Basis()
+
+# Bootstrap the framework. Conventional subdirectories (components/, stores/,
+# plugins/) are auto-discovered: components/ and stores/ are mounted at
+# package-derived paths (/{{ slug }}/components/, /{{ slug }}/stores/) so the
+# client VFS namespace equals the filesystem import namespace (isomorphism),
+# and stores/ modules are imported so their module-scope instances register.
+app.bootstrap()
+
+# Serve the app's static/ directory (stylesheets, images, ...) at /static/.
+# The generated HomePage links static/app.css from there (Page.stylesheets).
+app.include_components_dir(
+    "/static",
+    str(Path(__file__).parent / "static"),
+    name="app_static",
+)
+
+# Serve the app shell — an SSR page at "/" (components/page.py owns the
+# Page + root component; the URL is a route argument, so the same Page could
+# be served at several paths via further app.serve(...) calls). `basis dev`
+# auto-detects this app via src/{{ slug }}/__init__.py.
+app.serve("/")(HomePage)

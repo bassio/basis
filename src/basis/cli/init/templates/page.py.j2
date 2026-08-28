@@ -1,0 +1,20 @@
+"""
+The app's Page — the shell for the "/" route (generated).
+
+Lives under components/ so it's covered by the /{{ slug }}/components/ VFS mount:
+the client imports this module (via the manifest's basis.bootstrap.entrypoint),
+reads root_component, and hydrates it against the SSR tree.
+"""
+from basis.shared.page import Page
+from {{ slug }}.components.app_container import AppContainer
+
+
+class HomePage(Page):
+    title = "{{ project_title }}"
+    root_component = AppContainer
+    # Override stylesheet — linked at the END of <body> (after the component
+    # <style> elements) so it wins the cascade at equal specificity. Edit
+    # static/app.css to restyle the app without touching the shell components.
+    stylesheets = ("/static/app.css",)
+    # stores: unset → default-all (module-scope instances in stores/ plus the
+    # framework's $router / $theme / $plugins / $regions hydrate automatically).

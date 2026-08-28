@@ -1,3 +1,9 @@
+"""DEPRECATION (planned): ``SplitPaneItem`` (``ui-pane``) is superseded by the
+shell model where any ``Stack`` child (shell part or plain element) is a pane,
+sized inline via ``flex: 0 0 {size}`` instead of enumerated CSS attribute
+selectors. Kept for now because jotter still uses it; will be removed after
+jotter migrates to the shell primitives.
+"""
 from basis.shared.component import Component
 
 class SplitPaneItem(Component):

@@ -1,7 +1,43 @@
 import json
+import warnings
+
 from basis.shared.component import Component
 from basis.shared.element import Element, DocumentType
 from basis.shared.store import Store, attach_app_to_store, FRAMEWORK_STORE_NAMES
+
+#: True while the framework's render pipeline (``render_page`` /
+#: ``PageResponse.from_page``) runs, so ``Page.load()`` / ``Page.render()`` do
+#: not warn on their internal calls.
+_render_pipeline_active = False
+
+
+def _set_render_pipeline(active: bool) -> None:
+    """Internal: mark whether we're inside the framework's render pipeline."""
+    global _render_pipeline_active
+    _render_pipeline_active = active
+
+
+def page_aware_config_url(base_url: str, request) -> str:
+    """Append ``?url=<route>`` to the framework's own ``pyscript.json`` config URL.
+
+    The per-page manifest endpoint resolves the route to this page and injects
+    its bootstrap under ``basis.bootstrap`` (see
+    :func:`basis.server.bootstrap.page_bootstrap`). A fully custom
+    ``pyscript_json_url`` (or one that already carries a query string) is
+    returned unchanged.
+    """
+    url = getattr(request, "url", None)
+    if (
+        request is not None
+        and url is not None
+        and base_url
+        and "?" not in base_url
+        and base_url.rstrip("/").endswith("/pyscript.json")
+    ):
+        from urllib.parse import quote
+
+        return f"{base_url}?url={quote(url.path)}"
+    return base_url
 
 
 def _page_store_names(stores) -> list[str]:
@@ -37,20 +73,33 @@ class Page(Component):
     render_mode: str = "csr"
     root_component = None
     stores = []
+    # Stylesheet URLs appended to the END of <body> — i.e. AFTER the SSR root
+    # where the framework injects component <style> elements — so they land
+    # later in the document and win the cascade at equal specificity (the
+    # "your CSS comes later" rule). This is the framework-native home for a
+    # user override stylesheet (e.g. a generated ``static/app.css``).
+    stylesheets: tuple[str, ...] = ()
 
     @classmethod
-    def load(cls, ssr=False, request=None):
-        if ssr:
-            # Instantiate fresh versions of the page stores for this request if
-            # not already present. ``stores`` is a list of store *names*; an
-            # empty list means "all auto-discovered stores" (the persistent
-            # blueprint registry).
-            store_refs = getattr(cls, "stores", None) or Store.all_names()
-            for name in _page_store_names(store_refs):
-                if name not in Store._registry:
-                    store_instance = Store.resolve(name)
-                    if name == "router" and request and hasattr(request, "url"):
-                        store_instance.current_path = request.url.path
+    def load(cls, request=None):
+        if not _render_pipeline_active:
+            warnings.warn(
+                "Page.load() is deprecated for direct use — serve pages via "
+                "PageResponse.from_page() (or render_page()).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        # Instantiate the page's stores — its explicit ``stores`` subset, or all
+        # auto-discovered stores when empty — so they exist before the server
+        # renders and serialize cleanly into the initial state. Runs for both SSR
+        # and CSR (the server constructs the stores in either mode; only the old
+        # code gated this to SSR). Registry-guarded and idempotent.
+        store_refs = getattr(cls, "stores", None) or Store.all_names()
+        for name in _page_store_names(store_refs):
+            if name not in Store._registry:
+                store_instance = Store.resolve(name)
+                if name == "router" and request is not None and hasattr(request, "url"):
+                    store_instance.current_path = request.url.path
 
         container = Element("html", {}, list())
         
@@ -104,7 +153,38 @@ class Page(Component):
 </html>
 """
 
-    def _prepare_full_page(self, request, initial_state_json=None):
+    def render(self, request, initial_state_json=None):
+        """Assemble the full HTML document (shell + initial state + head/body).
+
+        This is the single server-side page-render funnel — both the SSR and CSR
+        engines end in this method. It is internal: serve pages via
+        ``PageResponse.from_page()`` / ``render_page()``. Calling it (or
+        ``Page.load()``) directly is the legacy pattern and is deprecated.
+        """
+        if not _render_pipeline_active:
+            warnings.warn(
+                "Page.render() (and Page.load()) are deprecated for direct use — "
+                "serve pages via PageResponse.from_page() (or render_page()).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        # Page-aware PyScript config: the per-page manifest is served at
+        # ?url=<route> (the endpoint injects this page's bootstrap under
+        # basis.bootstrap). Computed here because render() always has the request
+        # — covering SSR, CSR, and hand-rolled routes that call Page.load()
+        # without one. The assignment re-renders the config attribute (verified)
+        # and page_aware_config_url is idempotent.
+        self.pyscript_json_url = page_aware_config_url(self.pyscript_json_url, request)
+
+        # Self-register the route → page mapping so /pyscript.json?url=<route>
+        # resolves this page even when it was served via a hand-rolled route
+        # (e.g. a bare @app.get("/") that renders the shell directly). Real HTTP
+        # requests always carry .url; fake/test requests may not.
+        url = getattr(request, "url", None)
+        pages = getattr(request.app, "_pages", None)
+        if pages is not None and url is not None:
+            pages.setdefault(url.path, self.__class__)
 
         # Page-level store names: the page's explicit store subset, or empty
         # (default-all). Framework control-plane stores always hydrate.
@@ -125,28 +205,26 @@ class Page(Component):
                 # recompute or the initial state serializes empty (the client
                 # then hydrates a stale/empty view).
                 attach_app_to_store(instance, request.app)
+                # Request-pref hook: a store may opt in by defining
+                # ``apply_request(request)`` (e.g. ``$theme`` reads its
+                # ``basis_theme`` cookie) so the CSR initial state is themed.
+                apply_request = getattr(instance, "apply_request", None)
+                if callable(apply_request):
+                    try:
+                        apply_request(request)
+                    except Exception:
+                        pass
                 initial_state[name] = instance.serialize()
             if initial_state:
                 initial_state_json = json.dumps(initial_state)
 
         self.initial_state_json = initial_state_json
 
-        # 1. Collect modules to import on the client side
-        entrypoint_imports = {}
-
-        # Synthesized pages (built by @app.page) are server-side shell config only
-        # — the client boots from the component file and cannot import a class
-        # that was created at runtime, so don't emit it here.
-        if not getattr(self.__class__, "__synthesized__", False):
-            # Server-side SSR path only: resolve the page class to its client VFS
-            # import module via the app's live VFS registry (this branch never
-            # runs under PyScript, so reaching into request.app is safe).
-            page_module_file = request.app.vfs.component_module_name(self.__class__)
-
-            if page_module_file and page_module_file != "basis.shared.page":
-                entrypoint_imports[self.__class__.__name__] = page_module_file
-
-        # 2. Locate <head> once; append client-configuration nodes.
+        # 2. Locate <head> once; append client-configuration nodes. The client
+        # pre-mount plan (stores/headless/entrypoint/page stores) no longer lives
+        # in the DOM — it is served per-page via /pyscript.json?url=<route> under
+        # ``basis.bootstrap`` and read from ``pyscript.config`` (see
+        # basis/server/bootstrap.py::page_bootstrap + client/entrypoint.py).
         head_node = None
         for node in self.__element__.descendants:
             if hasattr(node, "tagName") and node.tagName.lower() == "head":
@@ -154,39 +232,7 @@ class Page(Component):
                 break
 
         if head_node:
-            from basis.shared.element import Element, ElementString
-
-            # 2a. Append the imports JSON configuration script in the <head>
-            if entrypoint_imports:
-                json_str = json.dumps(entrypoint_imports)
-                imports_script = Element("script", {
-                    "id": "basis-entrypoint-imports",
-                    "type": "application/json"
-                }, [ElementString(json_str)])
-
-                head_node.appendChild(imports_script)
-
-            # 2aa. Append the auto-discovered store module imports. The client
-            # must import these modules so their module-scope store instances
-            # exist and hydrate from #basis-initial-state.
-            store_modules = getattr(request.app, "_discovered_store_modules", [])
-            if store_modules:
-                store_imports_script = Element("script", {
-                    "id": "basis-store-imports",
-                    "type": "application/json",
-                }, [ElementString(json.dumps(store_modules))])
-                head_node.appendChild(store_imports_script)
-
-            # 2b. Page-level store names (the page's explicit store subset).
-            # The client resolves these by name BEFORE importing components, so
-            # every store exists before the view plane mounts. Default-all pages
-            # emit nothing — their stores all come from #basis-store-imports and
-            # the framework control-plane stores.
-            if page_store_names:
-                head_node.appendChild(Element("script", {
-                    "id": "basis-page-stores",
-                    "type": "application/json",
-                }, [ElementString(json.dumps(page_store_names))]))
+            from basis.shared.element import Element
 
             # 2c. Dev-mode marker read by client tooling (e.g. the error
             # overlay).  Mirrors the HMR dev affordance: `basis dev --hmr`
@@ -196,13 +242,23 @@ class Page(Component):
                     Element("meta", {"name": "basis-mode", "content": "dev"}, [])
                 )
 
-        return self
+        # 3. Declared stylesheets go at the END of <body> (after the SSR root),
+        # so they load after the framework's component <style> elements and win
+        # at equal specificity. Served for both SSR and CSR (this shell is
+        # emitted in either mode).
+        stylesheets = getattr(self.__class__, "stylesheets", ()) or ()
+        if stylesheets:
+            body_node = None
+            for node in self.__element__.descendants:
+                if hasattr(node, "tagName") and node.tagName.lower() == "body":
+                    body_node = node
+                    break
+            if body_node is not None:
+                for href in stylesheets:
+                    body_node.appendChild(
+                        Element("link", {"rel": "stylesheet", "href": href}, [])
+                    )
 
-    def render_full_page(self, request, initial_state_json=None):
-        """
-        Assembles the full HTML document with doctype.
-        """
-        self._prepare_full_page(request, initial_state_json)
         return self.doctype.__html__() + "\n" + self.__element__.outerHTML
 
 
@@ -220,8 +276,8 @@ def _synthesize_page(
     Used by ``@app.page`` to turn a root
     Component into a page without the developer writing a ``Page`` subclass. The
     synthesized class is server-side shell config only; it is marked
-    ``__synthesized__`` so the client (which boots from the component file) never
-    tries to import it via ``#basis-entrypoint-imports``.
+    ``__synthesized__`` so the per-page manifest never emits it as the client
+    ``entrypoint`` (the client boots from the component file instead).
 
     Because of that client boot path, page-level ``stores`` cannot reach the
     browser here — a shell that declares its own ``root_component`` or ``stores``

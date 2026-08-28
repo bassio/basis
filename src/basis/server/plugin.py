@@ -45,6 +45,12 @@ def _resolve_plugin_name(name: str | None, prefix: str) -> str:
 
 
 class BasisPlugin(ModelRegistryMixin):
+    #: Contribution classification — ``"plugin"`` (default) or ``"theme"``.
+    #: A generic partition key (ROADMAP-THEMING.md §6.5.1): the plugin/theme
+    #: managers are the same registry under different kind filters, and themes
+    #: never appear in the plugin manager. Core never interprets the value.
+    kind: str = "plugin"
+
     """
     A self-contained, route-aware bundle that can be registered into a Basis
     app via ``app.include_plugin(plugin)`` or auto-discovered from the

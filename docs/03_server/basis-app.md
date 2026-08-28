@@ -73,7 +73,7 @@ The simplest way to expose a root component as a page. Decorating your root comp
 - Registers a GET route at `path` (default `/`) that server-renders the decorated component.
 - Serves the component's code **isomorphically**: if the component already lives inside a discovered `components/` package, it is served from that package-derived mount (no automatic `/` mount, so the VFS name equals the filesystem name); only a bare single-file app falls back to mounting its directory at `/`. See [Importing Components & the Isomorphism Principle](../04_components/importing-components.md).
 
-`@app.page` decorates a **root component** (a `Component` subclass) — never a `Page`. It is the "quick and dirty" path: **page-level `stores` are not supported here** (the client boots from the component file, so it cannot hydrate page stores). To declare page stores, write a `Page` subclass and register it with `@app.include_page(path)` or `app.include_page(path, page_cls=MyPage)`.
+`@app.page` decorates a **root component** (a `Component` subclass) — never a `Page`. It is the "quick and dirty" path: **page-level `stores` are not supported here** (the client boots from the component file, so it cannot hydrate page stores). To declare page stores, write a `Page` subclass and serve it with `@app.serve(path)` or `app.include_page(path, page_cls=MyPage)`.
 
 > [!NOTE]
 > `@app.page` configures PyScript to load from the **online** CDN (`https://pyscript.net/releases/2026.3.1`) by default. Pass `pyscript_src="/pyscript"` to use the offline bundle that `bootstrap()` mounts instead. See [The Page Component](../04_components/page-component.md) for details.
@@ -83,6 +83,34 @@ The simplest way to expose a root component as a page. Decorating your root comp
 class MyApp(Component):
     ...
 ```
+
+---
+
+### `@app.serve(path="/", *, render_mode=None)`
+
+The FastAPI-shaped way to expose a **Page** at a URL. The URL is a route argument — not a property of the Page class — so the same Page can be served at several paths, each with its own `render_mode`:
+
+```python
+@app.serve("/")
+class HomePage(Page):
+    root_component = AppContainer
+
+# same recipe, another URL, client-rendered this time
+app.serve("/lite", render_mode="csr")(HomePage)
+```
+
+`@app.serve` works as a decorator on a Page subclass (the complete recipe) or on a root `Component` (auto-wrapped in a default Page shell — the `@app.page` quickstart), and imperatively (`app.serve("/")(HomePage)`), which is how `basis init` scaffolds the app shell. Returns the decorated class.
+
+`render_mode` selects how the route serves the page:
+
+- `"ssr"` (default) — server-renders the page (and its root component), then hydrates it in the browser.
+- `"csr"` — sends the client-rendered shell plus the serialized initial state; the unified client entrypoint mounts the page from scratch.
+
+Resolution order: explicit `render_mode=` argument → an explicit `Page.render_mode` class override → `"ssr"`. (The base `Page.render_mode = "csr"` default only applies to the deprecated direct `Page.load()` / `Page.render()` path; see below.)
+
+The response is built by `PageResponse` — an `HTMLResponse` subclass you can also return from a hand-rolled FastAPI endpoint: `return await PageResponse.from_page(HomePage, request)`. See [The Page Component](../04_components/page-component.md).
+
+**Canonical serving path.** Every page is served through `PageResponse.from_page` → `render_page` → `Page.render` (the single funnel that assembles the page HTML, per-page PyScript config, initial state and stylesheets). `render_page` resolves `render_mode` and dispatches to the private SSR/CSR engines. `@app.serve`, `@app.page` and `app.include_page` are the blessed route decorators over it. Direct `Page.load()` + `Page.render()` are deprecated.
 
 ---
 
@@ -128,9 +156,9 @@ app.include_components_dir(
 
 ---
 
-### `app.include_page(path, *, page_cls=MyPage)`
+### `app.include_page(path, *, page_cls=MyPage, render_mode=None)`
 
-Registers a GET route that server-renders a `Page`. The Page is a complete recipe — `root_component`, `stores`, `title`, and PyScript config all live on the class. Usable as a method or as a decorator on a Page subclass:
+Registers a GET route that serves a `Page` at `path`. The Page is a complete recipe — `root_component`, `stores`, `title`, and PyScript config all live on the class. Usable as a method or as a decorator on a Page subclass:
 
 ```python
 app.include_page("/admin", page_cls=MyAdminPage)
@@ -141,6 +169,8 @@ class AdminPage(Page):
     root_component = Admin
     stores = ["app_state", "router"]   # store names, instantiated in stores/
 ```
+
+`render_mode` selects SSR (default) or CSR serving, exactly as `@app.serve`. `@app.serve` is the more concise spelling for the common case; `include_page` is the imperative form (e.g. from plugins or composition roots).
 
 ---
 

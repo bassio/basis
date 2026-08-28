@@ -109,3 +109,57 @@ class TodoList(Component):
 
 > [!TIP]
 > Once you can define a component, learn how to customize and extend it — including the built-in `basis.plugins.ui` suite — in [Styling Components](styling-components.md) (look & feel) and [Extending & Customizing Components](extending-components.md) (structure & behavior).
+
+---
+
+## Headless components (markup first, logic later)
+
+A **headless component** is a multi-file component where the `.html` template (±
+`.css` style) exist but the `.py` logic file has **not been written yet**. Basis
+detects these at mount time and promotes them into real, reactive `Component`
+subclasses — so you can start a UI from markup alone and add the `.py` later
+with zero churn. This is great for agile/progressive development and for
+presentational components whose only inputs are props, store bindings, and
+slots.
+
+```text
+components/
+└── todo_list.html   ← template only (no todo_list.py yet)
+└── todo_list.css    ← optional stylesheet
+```
+
+Usage is identical to a normal component:
+
+```html
+<todo-list title="Hello"></todo-list>
+```
+
+The generated class is named after the file stem (`todo_list.html` → class
+`TodoList`) and tagged `todo-list` (kebab-case of the stem), and it is fully
+reactive — bindings (`{expr}`, `for/in`, `$store.x`, `onclick`, …) work exactly
+as in a hand-written component.
+
+### Graduating to a full component
+
+When you're ready to add logic, create `todo_list.py` with a class of the **same
+name and tag** — nothing else changes:
+
+```python
+from basis.shared.component import Component
+
+class TodoList(Component):
+    """<div class="todo-wrapper">…</div>"""  # or keep using todo_list.html
+    __tag__ = "todo-list"
+
+    def add_todo(self, event):
+        pass
+```
+
+The `.html`/`.css` automatically become the class's companions again, the
+synthetic module is dropped from the manifest, and the real module takes over at
+the same import name. No renames, no migration.
+
+> **Notes**
+> - Headless files live **flat** in the components package root (`components/todo_list.html`), so the synthetic module keeps the same import name a future `todo_list.py` would have. Nested headless files aren't promoted (v1).
+> - Avoid the reserved `ui-` prefix for component tags (framework UI plugin).
+> - HMR works for headless components: edit the `.html`/`.css` and live instances re-render immediately; a later page load is served fresh.

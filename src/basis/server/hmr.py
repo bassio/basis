@@ -91,6 +91,17 @@ class HMRMixin:
                     if asset.exists():
                         asset_owners[str(asset.absolute())] = module_name
 
+            # Headless assets: a .html/.css with no .py owner belongs to its
+            # synthetic headless module (mirrors VFSRegistry promotion), so HMR
+            # edits hot-swap the right class (matched by __module__).
+            for rel_py in getattr(self.vfs, "synthetic_files", {}):
+                module_name = mount_to_module_name(m.path, Path(rel_py))
+                if module_name is None:
+                    continue
+                for asset in companion_assets(watch_dir / rel_py):
+                    if asset.exists():
+                        asset_owners[str(asset.absolute())] = module_name
+
             for f in itertools.chain(watch_dir.rglob("*.py"), watch_dir.rglob("*.html"), watch_dir.rglob("*.css")):
                 # Never watch compiled bytecode or stray caches
                 if "__pycache__" in f.parts or f.suffix == ".pyc":
@@ -150,6 +161,16 @@ class HMRMixin:
                                 "module": meta.get("module"),
                                 "content": content,
                             })
+                            # Headless component edit: regenerate the served
+                            # synthetic source so the next hard-refresh (and SSR
+                            # first-paint) is fresh — mirror of the pyc mtime cache.
+                            if meta.get("ext") in ("html", "css"):
+                                mod = meta.get("module")
+                                if mod:
+                                    syn = getattr(self.vfs, "synthetic_modules", {})
+                                    if mod in syn:
+                                        _mount, rel_py = syn[mod]
+                                        self.vfs.regenerate_headless_source(_mount, rel_py)
                         mtimes[f] = mtime
             except Exception as e:  # never let the watcher die
                 logger.warning("HMR: watcher error: %s", e)

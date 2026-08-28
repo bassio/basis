@@ -138,11 +138,39 @@ def make_action_handler(app):
         func = _registry_action(path, vfs_map)
         store = _resolve_rpc_store(payload.get("store_name"))
         attach_app_to_store(store, app)
+        # Request-pref hook: a store may opt in by defining
+        # ``apply_request(request)`` (e.g. ``$theme`` reads its ``basis_theme``
+        # cookie) so the server-side store reflects the persisted prefs BEFORE
+        # a server action runs. Mirrors the SSR/CSR initial-state generation
+        # (page.py / render.py). Without this, ``set_theme``/``set_mode`` run
+        # on a server store that has neither the persisted prefs applied nor a
+        # clean per-request reset (RPC is exempt from the registry clear), so
+        # the action's ``new_state`` clobbers the OTHER preference on the
+        # client — e.g. applying a theme while in dark mode reverts to light.
+        apply_request = getattr(store, "apply_request", None)
+        if callable(apply_request):
+            try:
+                apply_request(request)
+            except Exception:
+                pass
         try:
             result = await _run_action(
                 func, store, payload.get("args", []), payload.get("kwargs", {})
             )
-            return _rpc_response(result, store)
+            response = _rpc_response(result, store)
+            # Request-pref persistence hook: a store may opt in by defining
+            # ``persist_prefs()`` → ``(cookie_name, cookie_value) | None`` (e.g.
+            # ``$theme`` writes the ``basis_theme`` cookie so reloads stay
+            # themed). Core stays generic — it never interprets the values.
+            persist = getattr(store, "persist_prefs", None)
+            if callable(persist):
+                pref = persist()
+                if pref is not None:
+                    cookie_name, cookie_value = pref
+                    response.set_cookie(
+                        cookie_name, cookie_value, path="/", samesite="lax"
+                    )
+            return response
         except Exception as e:
             _log_rpc_error(path, e)
             raise HTTPException(status_code=500, detail=str(e))

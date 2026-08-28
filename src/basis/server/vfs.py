@@ -14,6 +14,7 @@ import inspect
 import itertools
 import logging
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 from fastapi import Request
@@ -92,6 +93,12 @@ class VFSRegistry:
         self._dirs: dict[str, tuple[int, Path]] = {}
         #: normalized mount -> client module names it contributed (surgical removal).
         self._dir_modules: dict[str, set[str]] = {}
+        #: Synthetic headless module source: mount-relative ``.py`` path -> source.
+        self.synthetic_files: dict[str, str] = {}
+        #: Synthetic headless module name -> (normalized mount, ``.py`` rel path).
+        self.synthetic_modules: dict[str, tuple[str, str]] = {}
+        #: Dotted module names of promoted headless components (client pre-import).
+        self.headless_modules: list[str] = []
         #: Monotonic COMPONENTS_DIR index counter (indices are never reused).
         self._next_index = 1
 
@@ -145,6 +152,7 @@ class VFSRegistry:
             "plugin_registry.py",
             "serialization.py",
             "app_state.py",
+            "cookie_store.py",
         ]:
             stem = Path(f_name).stem
             target = stem + py_ext
@@ -221,6 +229,10 @@ class VFSRegistry:
                     self.vfs_to_server_module[vfs_module_path] = ".".join(server_parts)
                     break
 
+        # Headless components: bare ``*.html`` (± ``*.css``) with no owning ``.py``
+        # are promoted to reactive Component subclasses (see HEADLESS-COMPONENTS-PLAN).
+        self._register_headless_components(clean_mount, directory, cdir_n_label, added_modules)
+
         return index
 
     def remove_component_route(self, mount_path: str) -> bool:
@@ -242,6 +254,161 @@ class VFSRegistry:
             self.vfs_to_server_module.pop(module_name, None)
             if module_name in self.client_modules:
                 self.client_modules.remove(module_name)
+
+        # 3. Synthetic headless modules served by this mount.
+        for module_name, (owner_mount, rel_py) in list(self.synthetic_modules.items()):
+            if owner_mount == clean_mount:
+                self.synthetic_files.pop(rel_py, None)
+                del self.synthetic_modules[module_name]
+                if module_name in self.headless_modules:
+                    self.headless_modules.remove(module_name)
+
+        return True
+
+    def _register_headless_components(
+        self,
+        clean_mount: str,
+        directory: Path,
+        cdir_n_label: str,
+        added_modules: set[str],
+    ) -> None:
+        """Detect headless ``*.html`` (no owning ``.py``) and promote them.
+
+        Flat-only in v1: only ``*.html`` at the mount root are promoted, so the
+        synthetic module keeps the flat ``{pkg}.{stem}`` import name that matches
+        where a future ``{stem}.py`` would live. Nested ownerless ``.html`` files
+        are left as ordinary assets with a debug note.
+
+        Each promotion: builds + registers the server-side headless class,
+        serves a synthetic client module from the static handler (pyc-style),
+        and advertises it in the manifest under the module name a future real
+        ``.py`` would use — so graduation is a pure manifest swap.
+        """
+        from basis.server.headless import (
+            build_headless_module_source,
+            create_headless_component,
+            headless_identity,
+        )
+
+        owned: dict[Path, set[str]] = defaultdict(set)
+        for py in itertools.chain(directory.glob("*.py"), directory.glob("**/*.py")):
+            if "__pycache__" in py.parts:
+                continue
+            owned[py.parent].add(py.parent.name if py.name == "__init__.py" else py.stem)
+
+        mount_pkg = ".".join(p for p in clean_mount.split("/") if p)
+
+        for html in directory.glob("*.html"):  # flat-only (v1)
+            stem = html.stem
+            if stem.startswith("_"):
+                continue
+            if stem in owned.get(directory, ()):
+                continue  # owned by a real .py
+            css = html.with_suffix(".css")
+            cls_name, tag, module_name = headless_identity(mount_pkg, stem)
+
+            try:
+                template = html.read_text(encoding="utf-8")
+                style = css.read_text(encoding="utf-8") if css.exists() else ""
+            except OSError:
+                logger.warning(f"⚠️  Headless component '{html.name}' unreadable; skipping")
+                continue
+
+            cls = create_headless_component(cls_name, tag, template, style, module_name)
+            if cls is None:
+                logger.warning(
+                    f"⚠️  Skipping headless component '{html.name}': tag '{tag}' is "
+                    f"already owned by a real component, or the template is empty."
+                )
+                continue
+
+            # Serve the synthetic module from the static handler (pyc-style) and
+            # advertise it in the manifest under the module a future .py would use.
+            rel_py = Path(f"{stem}.py")
+            rel_vfs = rel_py.with_name(stem + self.py_ext)  # .py or .pyc
+            component_file = cdir_n_label + "/" + rel_vfs.as_posix()
+            self.files[component_file] = vfs_relative_url(clean_mount, rel_vfs)
+
+            if module_name not in self.client_modules:
+                self.client_modules.append(module_name)
+            added_modules.add(module_name)
+            if module_name not in self.headless_modules:
+                self.headless_modules.append(module_name)
+
+            source = build_headless_module_source(cls_name, tag, template, style)
+            self.synthetic_files[rel_py.as_posix()] = source
+            self.synthetic_modules[module_name] = (clean_mount, rel_py.as_posix())
+
+            # List the real .html/.css so they are fetchable / visible in the
+            # manifest (mirrors how .py companions are listed).
+            for asset in (html, css):
+                if asset.exists():
+                    rel_asset = asset.relative_to(directory)
+                    self.files[cdir_n_label + "/" + rel_asset.as_posix()] = \
+                        vfs_relative_url(clean_mount, rel_asset)
+
+            logger.info(
+                f"🧩 Headless component: '{html.name}' → <{tag}> "
+                f"(class {cls_name}, module {module_name}). "
+                f"Add {stem}.py to graduate."
+            )
+
+        # Debug-note nested ownerless .html (not promoted in v1 — flat-only).
+        for html in directory.glob("**/*.html"):
+            if html.parent == directory:
+                continue
+            if html.stem.startswith("_") or "__pycache__" in html.parts:
+                continue
+            if html.stem in owned.get(html.parent, ()):
+                continue
+            logger.debug(
+                f"Headless component in a subfolder is not promoted yet "
+                f"(v1 is flat-only): {html.relative_to(directory)}"
+            )
+
+    def regenerate_headless_source(self, mount_path: str, rel_py: str) -> bool:
+        """Re-read a headless component's ``.html``/``.css`` and regenerate its
+        served synthetic module (keeps hard-refreshes fresh after dev edits).
+
+        Also refreshes the live server-side class so the next SSR first-paint
+        reflects the edit. Returns True when the source was regenerated.
+        """
+        from basis.server.headless import (
+            build_headless_module_source,
+            headless_identity,
+            refresh_headless_class,
+        )
+        from basis.shared.base_component import BaseComponent
+
+        clean_mount = normalize_mount(mount_path)
+        entry = self._dirs.get(clean_mount)
+        if entry is None:
+            return False
+        _, directory = entry
+        rel_py_path = Path(rel_py)
+        html = directory / rel_py_path.with_suffix(".html")
+        if not html.exists():
+            return False
+        css = html.with_suffix(".css")
+        stem = rel_py_path.stem
+        mount_pkg = ".".join(p for p in clean_mount.split("/") if p)
+        cls_name, tag, module_name = headless_identity(mount_pkg, stem)
+
+        try:
+            template = html.read_text(encoding="utf-8")
+            style = css.read_text(encoding="utf-8") if css.exists() else ""
+        except OSError:
+            return False
+
+        # 1. Served source (next page load is fresh).
+        self.synthetic_files[rel_py_path.as_posix()] = build_headless_module_source(
+            cls_name, tag, template, style
+        )
+
+        # 2. Live server-side class (next SSR first-paint is fresh).
+        cls = BaseComponent._registry.get(tag)
+        if cls is not None and getattr(cls, "__headless__", False):
+            refresh_headless_class(cls, template, style)
 
         return True
 
@@ -293,8 +460,14 @@ class VFSRegistry:
                     f"and IDEs resolve the same import names."
                 )
 
-    def render_manifest(self, base_url: str) -> dict:
-        """Render the ``/pyscript.json`` payload for *base_url* (``{DOMAIN}`` → URL)."""
+    def render_manifest(self, base_url: str, bootstrap: dict | None = None) -> dict:
+        """Render the ``/pyscript.json`` payload for *base_url* (``{DOMAIN}`` → URL).
+
+        *bootstrap* is the per-page ``basis.bootstrap`` section computed by
+        :func:`basis.server.bootstrap.page_bootstrap` (``None`` for a bare
+        fetch). The ``basis.bootstrap`` key is always present (possibly empty) so
+        the client can rely on it.
+        """
         files = {"{DOMAIN}": base_url}
         for k, v in self.files.items():
             files[k.replace("{DOMAIN}", base_url)] = v
@@ -302,11 +475,25 @@ class VFSRegistry:
             "files": files,
             "interpreter": "pyscript/pyodide/pyodide.mjs",
             "client_modules": self.client_modules,
+            "basis": {"bootstrap": bootstrap or {}},
         }
 
 
 async def pyscript_json(request: Request):
-    """Serve ``/pyscript.json`` from the app's live VFS registry."""
+    """Serve ``/pyscript.json`` from the app's live VFS registry.
+
+    Page-aware: ``?url=<route>`` selects a registered page whose page-specific
+    bootstrap (``entrypoint``, ``page_stores``) is injected under
+    ``basis.bootstrap`` alongside the app-global ``store_modules`` /
+    ``headless_modules``. Bare fetches (no ``?url=``) get app-global only.
+    """
+    from basis.server.bootstrap import page_bootstrap
+
     base_url = str(request.base_url).removesuffix("/")
-    return JSONResponse(request.app.vfs.render_manifest(base_url))
+    page_cls = None
+    url = request.query_params.get("url")
+    if url is not None:
+        page_cls = request.app._pages.get(url)
+    bootstrap = page_bootstrap(request.app, page_cls)
+    return JSONResponse(request.app.vfs.render_manifest(base_url, bootstrap=bootstrap))
 

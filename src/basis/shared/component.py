@@ -17,6 +17,15 @@ if IS_CLIENT:
             component.mount_app_ssr()
             return component
 
+        def serve(self, *args, **kwargs):
+            # Client-side: ``@app.serve`` on a root Component (the single-file
+            # quickstart) behaves exactly like ``@app.page`` — the component file
+            # is the boot module, so mounting it hydrates the SSR tree. Page
+            # subclasses never reach this shim (the client boots from the page
+            # module via the manifest's basis.bootstrap.entrypoint, not from app.py).
+            component = args[0] if args else kwargs.get("page_cls")
+            return self.page(component, **kwargs)
+
         # Deprecated alias (pre-terminology-cleanup name).
         entrypoint = page
 
@@ -117,5 +126,30 @@ def scoped(func):
     return func
 
 
-__all__ = ['Component', 'IS_CLIENT', 'IS_SERVER', 'Basis', 'client', 'include_store', 'include_model', 'py_event', 'scoped']
+def extra_style(func):
+    """
+    Decorator marking a method as an *additional* (additive) style block.
+
+    Unlike ``style()`` — which a subclass overrides to REPLACE the inherited
+    stylesheet — an ``@extra_style`` block is injected as its own ``<style>``
+    element *after* the component's main stylesheet, so a subclass can restyle
+    a parent component without copying the parent's whole ``style()``::
+
+        class MyTitleBar(TitleBar):
+            @extra_style
+            def tweaks(self):
+                \"\"\"
+                shell-title-bar { background: var(--accent-color); }
+                \"\"\"
+
+    The same conventions as ``style()`` apply (docstring, classmethod, or a
+    plain string), it supports ``{expr}`` dynamic fields (see the styling
+    guide), and it may be combined with ``@scoped`` to keep the block
+    encapsulated.
+    """
+    func.__extra_style__ = True
+    return func
+
+
+__all__ = ['Component', 'IS_CLIENT', 'IS_SERVER', 'Basis', 'client', 'include_store', 'include_model', 'py_event', 'scoped', 'extra_style']
 

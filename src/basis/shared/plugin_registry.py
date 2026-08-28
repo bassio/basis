@@ -15,25 +15,64 @@ from basis.shared.actions import server_action
 from basis.shared.app_state import AppStateStore
 
 
-def _plugin_listing(app) -> dict:
-    """Build the plugin registry listing from an app's registrations.
+def _theme_metadata(plugin) -> dict | None:
+    """Metadata for a theme registration (``kind == "theme"``) for the catalog.
 
-    ``{name: {state, prefix, actions, requires}}`` over ``app._plugin_registrations``,
-    including disabled plugins (state ``"disabled"``) so a manager can offer
-    re-enable. Single source of truth shared by the ``$plugins`` store's
-    refresh, the ``GET /basis/api/plugins`` endpoint, and any tooling.
+    Reads common fields off ``plugin.definition`` generically, so the listing
+    helper in framework core stays theme-agnostic — a "theme" is just a plugin
+    that carries a ``definition`` manifest (ROADMAP-THEMING.md §6.5.2).
+    """
+    definition = getattr(plugin, "definition", None)
+    if definition is None:
+        return None
+    scheme = getattr(definition, "color_scheme", "auto") or "auto"
+    modes = ["light", "dark"] if scheme in ("auto", "system") else [scheme]
+    return {
+        "id": getattr(definition, "id", None),
+        "name": getattr(definition, "name", None),
+        "version": getattr(definition, "version", None),
+        "author": getattr(definition, "author", None),
+        "modes": modes,
+        "preview": getattr(definition, "preview", None),
+    }
+
+
+def _registry_listing(app, kinds: tuple[str, ...] | None = None) -> dict:
+    """Build the contribution registry listing from an app's registrations.
+
+    ``{name: {kind, state, prefix, actions, requires, …}}`` over
+    ``app._plugin_registrations``, optionally filtered by ``kinds``. Themes
+    (``kind == "theme"``) additionally carry a ``theme`` metadata block. The
+    single source of truth shared by the ``$plugins`` / ``$themes`` stores, the
+    projection endpoints, and any tooling (ROADMAP-THEMING.md §6.5.2).
     """
     registrations = getattr(app, "_plugin_registrations", {})
     snapshot = {}
     for pname, reg in registrations.items():
         plugin = reg.plugin
-        snapshot[pname] = {
+        if kinds is not None and plugin.kind not in kinds:
+            continue
+        entry = {
+            "kind": getattr(plugin, "kind", "plugin"),
             "state": "disabled" if reg.disposed else "enabled",
             "prefix": getattr(plugin, "prefix", ""),
             "actions": sorted(getattr(plugin, "actions", {}) or {}),
             "requires": list(getattr(plugin, "requires", []) or []),
         }
+        if entry["kind"] == "theme":
+            entry["theme"] = _theme_metadata(plugin)
+        snapshot[pname] = entry
     return snapshot
+
+
+def _plugin_listing(app) -> dict:
+    """The plugin-only listing (``kind == "plugin"``) — themes are excluded.
+
+    Backward-compatible wrapper over :func:`_registry_listing`: the ``$plugins``
+    store, the ``GET /basis/api/plugins`` endpoint, and tooling keep using this
+    name; themes live in the ``$themes`` catalog instead (ROADMAP-THEMING.md).
+    """
+    return _registry_listing(app, kinds=("plugin",))
 
 
 class PluginRegistryStore(AppStateStore):
@@ -82,7 +121,7 @@ def ensure_plugin_registry() -> PluginRegistryStore:
     Called by the client entrypoints so ``$plugins`` resolves on every page.
     On SSR pages the store hydrates from ``#basis-initial-state`` (the listing
     is already present); on CSR pages the page shell embeds the authoritative
-    listing the same way (see ``Page._prepare_full_page``). No client fetch is
+    listing the same way (see ``Page.render``). No client fetch is
     needed — ``refresh()`` exists for on-demand re-sync.
     """
     from basis.shared.store import ensure_store

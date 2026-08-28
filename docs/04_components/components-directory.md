@@ -78,3 +78,14 @@ A small HMR status badge appears in the bottom-right corner of the page during d
 > - HMR hot-swaps component files only. Framework-internal files (`basis/shared/*`, `basis/client/*`) and server-only code are not hot-swapped — use `basis dev --reload` (full process restart) while editing those.
 > - `basis dev --no-hmr` disables the live watcher; `basis dev --reload` switches to full-process reloads.
 > - PYC mode (`--pyc`) skips `.py` hot-swap (compiled bytecode can't be live-reloaded) and falls back to a full reload with a console notice.
+
+---
+
+## Headless components
+
+A bare `*.html` (± `*.css`) with **no** owning `.py` is promoted into a reactive
+component at mount time — see [Defining Components](defining-components.md). The
+synthetic module is served in-memory by the static handler (the same pattern
+pyc-mode uses to serve virtual bytecode), listed in `/pyscript.json` under the
+module name a future `.py` would use, and pre-imported on the client. HMR and
+pyc mode work for headless components like any other.

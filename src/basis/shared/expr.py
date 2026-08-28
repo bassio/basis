@@ -52,6 +52,140 @@ else:
 # Module-level singleton — Formatter is stateless, no need to re-instantiate
 _FORMATTER = Formatter()
 
+
+# ── CSS-aware formatting ───────────────────────────────────────────────────
+# CSS uses ``{`` / ``}`` for structural blocks (``selector { prop: value }``),
+# which a plain ``string.Formatter`` would misread as fields. The
+# :class:`CSSAwareFormatter` below only treats a ``{...}`` group as an
+# interpolation field when its inner text is a *valid Basis expression*; every
+# other brace group (any real CSS block) passes through as literal text. This
+# lets a component's ``style()`` use the same pythonic ``{expr}`` fields as its
+# ``template()`` without escaping every CSS brace. ``{{`` / ``}}`` force literal
+# braces (the explicit escape for the rare CSS value whose text parses as an
+# expression but should stay literal).
+
+_FIELD_MARKER_RE = re.compile(r"\x00FIELD:(\d+)\x00")
+
+
+def _is_css_field(inner: str) -> bool:
+    """True when ``inner`` (the text between a ``{...}`` pair) is a valid Basis
+    expression — i.e. it should interpolate rather than be treated as a CSS
+    structural block."""
+    text = inner.strip()
+    if not text:
+        return False
+    try:
+        ast.parse(desugar_expression(text), mode="eval")
+        return True
+    except Exception:
+        return False
+
+
+def _css_match_close(s: str, start: int, n: int) -> int | None:
+    """Index of the ``}`` matching the ``{`` at ``start``.
+
+    Respects ``{{`` / ``}}`` escapes (literal braces) and nested brace groups;
+    returns None when the brace is unbalanced (then treated as literal).
+    """
+    depth = 1
+    j = start + 1
+    while j < n:
+        ch = s[j]
+        if ch == "{":
+            if j + 1 < n and s[j + 1] == "{":
+                j += 2
+                continue
+            depth += 1
+            j += 1
+            continue
+        if ch == "}":
+            if j + 1 < n and s[j + 1] == "}":
+                j += 2
+                continue
+            depth -= 1
+            if depth == 0:
+                return j
+            j += 1
+            continue
+        j += 1
+    return None
+
+
+def _css_mark_fields(s: str, fields: list[str]) -> str:
+    """Return ``s`` with every ``{expr}`` field replaced by a ``\x00FIELD:n\x00``
+    marker (recorded in ``fields``); CSS structural braces stay literal.
+
+    ``{{`` / ``}}`` are literal ``{`` / ``}``. A structural block's braces are
+    kept literal and its inner content is descended into, so a ``{expr}`` nested
+    inside (e.g. in an ``@media`` block) still interpolates.
+    """
+    out = []
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch == "{":
+            if i + 1 < n and s[i + 1] == "{":
+                out.append("{")
+                i += 2
+                continue
+            j = _css_match_close(s, i, n)
+            if j is None:
+                out.append("{")
+                i += 1
+                continue
+            inner = s[i + 1:j]
+            if _is_css_field(inner):
+                fields.append(inner)
+                out.append(f"\x00FIELD:{len(fields) - 1}\x00")
+                i = j + 1
+            else:
+                out.append("{")
+                out.append(_css_mark_fields(s[i + 1:j], fields))
+                out.append("}")
+                i = j + 1
+        elif ch == "}":
+            if i + 1 < n and s[i + 1] == "}":
+                out.append("}")
+                i += 2
+                continue
+            out.append("}")
+            i += 1
+            continue
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+class CSSAwareFormatter(Formatter):
+    """A ``string.Formatter`` for CSS text.
+
+    ``parse`` emits a field only for a ``{...}`` group whose inner text is a
+    valid Basis expression; CSS structural braces (``selector { ... }``) pass
+    through as literal text. ``{{`` / ``}}`` force literal braces.
+    """
+
+    def parse(self, format_string):
+        fields: list[str] = []
+        marked = _css_mark_fields(format_string, fields)
+        if not fields:
+            yield (format_string, None, None, None)
+            return
+        parts = _FIELD_MARKER_RE.split(marked)
+        literal = parts[0]
+        idx = 1
+        while idx < len(parts):
+            field_idx = int(parts[idx])
+            yield (literal, fields[field_idx], None, None)
+            literal = parts[idx + 1]
+            idx += 2
+        yield (literal, None, None, None)
+
+
+# Module-level singleton (Formatter is stateless).
+_CSS_FORMATTER = CSSAwareFormatter()
+
 # Module-level operator lookup dicts for _eval_ast (avoid rebuilding per-expression)
 _BINOP_MAP = {
     ast.Add: operator.add,
@@ -404,7 +538,7 @@ def safe_eval(expr_str, context, allowed_builtins, tree=None, *,
 
 def safe_format(template_str, context, allowed_builtins, ast_trees=None, *,
                 component=None, binding_type=None, template=None, template_line=None,
-                record=True, scope=None):
+                record=True, scope=None, formatter=None):
     """Interpolate ``{...}`` fields in ``template_str`` into a string — the one
     resolver for every text/attribute binding.
 
@@ -415,11 +549,15 @@ def safe_format(template_str, context, allowed_builtins, ast_trees=None, *,
     ``BaseComponent.S/C`` subscript path in ``_eval_ast``; ``None`` renders as
     "" and a failed field aborts the whole template to "" (never a partial
     string, never a raw ``[Error: ...]`` when a sink is registered).
+
+    ``formatter`` swaps the parser: pass :data:`_CSS_FORMATTER` to format CSS
+    text whose structural ``{...}`` blocks must pass through literally.
     """
     result = ""
     fname = None
+    parser = _FORMATTER if formatter is None else formatter
     try:
-        for literal_text, fname, format_spec, conversion in _FORMATTER.parse(template_str):
+        for literal_text, fname, format_spec, conversion in parser.parse(template_str):
             result += literal_text
             if fname is not None:
                 ast_tree = ast_trees.get(fname) if ast_trees else None
@@ -448,6 +586,44 @@ def safe_format(template_str, context, allowed_builtins, ast_trees=None, *,
         return f"{ERROR_PREFIX}{template_str}]"
     return result
 
+
+def format_css_style(css, context, allowed_builtins, *, component=None):
+    """Interpolate ``{expr}`` fields in a component's CSS text.
+
+    Uses :class:`CSSAwareFormatter`, so CSS structural braces pass through
+    untouched while ``{expr}`` (a valid Basis expression) interpolates against
+    ``context``. For a component style that context is the component *class*:
+    bare names resolve to class attributes and ``$store.x`` / ``#id.x`` resolve
+    through the store/component registries.
+
+    A field that fails to resolve leaves the raw ``{expr}`` in the output — one
+    bad reference must not silently drop an entire stylesheet. Static CSS (no
+    fields) is returned unchanged; ``{{`` / ``}}`` literal-brace escapes still
+    collapse to a single brace.
+    """
+    if not isinstance(css, str) or "{" not in css:
+        return css
+    fields: list[str] = []
+    marked = _css_mark_fields(css, fields)
+    if not fields:
+        # No interpolations — CSS braces passed through. Escaped literal braces
+        # ({{ }}) still collapse; otherwise the input is returned unchanged.
+        return marked if marked != css else css
+    # Pre-validate every field; on any failure keep the raw text.
+    try:
+        for fname in fields:
+            val = safe_eval(fname, context, allowed_builtins, record=False)
+            if val is EVAL_ERROR or val is SILENT_ERROR:
+                return css
+    except Exception:
+        return css
+    try:
+        result = safe_format(css, context, allowed_builtins,
+                             formatter=_CSS_FORMATTER, component=component)
+    except Exception:
+        return css
+    return result if result else css
+
 def is_expression(value) -> bool:
     """The canonical "is this a template expression?" label.
 
@@ -469,15 +645,16 @@ def is_expression(value) -> bool:
         return False
 
 
-def extract_dependencies(template_str, allowed_builtins=ALLOWED_BUILTINS):
+def extract_dependencies(template_str, allowed_builtins=ALLOWED_BUILTINS, formatter=None):
     """
     Extracts dependencies from a template string and returns a tuple:
     (list of dependencies, dictionary of desugared AST trees mapping fname -> tree).
     """
     deps = set()
     trees = {}
+    parser = _FORMATTER if formatter is None else formatter
     try:
-        parsed_template = list(_FORMATTER.parse(template_str))
+        parsed_template = list(parser.parse(template_str))
     except ValueError:
         # Handle cases where template_str is not a valid format string (e.g. CSS)
         return [], {}

@@ -1,0 +1,32 @@
+# {{ project_name }}
+
+A web application built with [Basis](https://github.com/bassio/basis) — the
+full-stack Python reactive web framework. Scaffolded by `basis init`.
+
+## Getting Started
+
+```bash
+# Install dependencies
+uv sync
+
+# Start the development server (live HMR on by default)
+basis dev
+```
+
+Open http://127.0.0.1:8000 — the shell renders an SSR page at `/` with a small
+reactive demo (counter + store list{% if example_plugin %} + a plugin-contributed
+region view{% endif %}).
+
+## Project Structure
+
+```
+src/{{ slug }}/
+├── __init__.py          # App setup: Basis() + bootstrap() + serve("/")(HomePage)
+├── components/          # UI components — the shell frame + chrome parts
+│   ├── page.py          # HomePage(Page) — the "/" route shell
+│   └── app_container.py # Root component (edit freely)
+├── stores/              # Global stores (auto-discovered) — incl. the theme seed
+├── plugins/             # Auto-discovered plugins
+└── static/
+    └── app.css          # App-wide override stylesheet (linked via HomePage)
+```

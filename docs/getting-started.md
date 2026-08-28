@@ -12,6 +12,26 @@ pip install fastapi uvicorn basis-framework
 
 *(Note: During beta, you can clone the repository and add it to your `PYTHONPATH`)*
 
+## Scaffold a project with `basis init`
+
+The fastest way to a running app shell is the interactive wizard:
+
+```bash
+basis init my-app
+```
+
+It asks a few questions (project name → workbench `app` or website `site` →
+top-level chrome parts → extras), then generates a loadable project with an SSR
+page at `/` and a small reactive demo. Run it non-interactively with `--yes`:
+
+```bash
+basis init my-app --yes
+cd my-app && uv sync && basis dev    # live HMR, open http://127.0.0.1:8000
+```
+
+See [CLI Tooling](08_appendix/cli.md) for all flags (`--shell`, `--config`,
+`--list`, per-part toggles, …).
+
 ## Your First App
 
 Let's break down the minimalist "Hello World" example.

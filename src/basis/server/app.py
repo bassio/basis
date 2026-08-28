@@ -9,7 +9,6 @@ from starlette.routing import Mount
 from basis.server.static import BasisStaticFiles, BasisStaticFilesPyc
 from basis.server.vfs import VFSRegistry
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
 
 from basis.server.db import DBAppMixin
 from basis.server.hmr import HMRManager, HMRMixin
@@ -58,6 +57,8 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
         self._component_routes = []
         self._component_dirs = []
         self._global_stores = []
+        #: Route path -> Page class, for the per-page manifest (?url= resolution).
+        self._pages = {}
         # Live PyScript VFS manifest — owned by this app, mutated as dirs mount.
         self.vfs = VFSRegistry(self.pyc_mode)
         self.vfs.add_framework_files()
@@ -178,7 +179,14 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
             return None
 
         static_cls = self._get_static_files_cls()
-        m = Mount(mount_path, static_cls(directory=dir_path), name=name)
+        # The mount shares the app's synthetic-file map so headless components
+        # (generated modules with no disk file) are served in-memory by the
+        # static handler, exactly like pyc-mode serves virtual bytecode.
+        m = Mount(
+            mount_path,
+            static_cls(directory=dir_path, synthetic=self.vfs.synthetic_files),
+            name=name,
+        )
 
         self.routes.append(m)
         self._component_routes.append(m)
@@ -191,14 +199,20 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
         path: str,
         *,
         page_cls=None,
+        render_mode: str | None = None,
         name: str | None = None,
     ):
         """
-        Register a GET route that server-renders a Page.
+        Register a GET route that serves a Page at ``path``.
 
-        The Page is a complete recipe — ``root_component``, ``stores``, ``title``
-        and PyScript config all live on the class. ``root_component`` may be
-        ``None`` for a static page (no reactive root).
+        The Page is a complete recipe — ``root_component``, ``stores``, ``title``,
+        ``render_mode`` and PyScript config all live on the class.
+        ``root_component`` may be ``None`` for a static page (no reactive root).
+
+        ``render_mode`` selects how this route serves the page: ``"ssr"``
+        (default) server-renders it; ``"csr"`` sends the client-rendered shell
+        plus the serialized initial state. When unset, an explicit
+        ``Page.render_mode`` class override is honored, else ``"ssr"``.
 
         Usable as a method (``app.include_page(path, page_cls=MyPage)``) or as a
         decorator on a Page subclass (``@app.include_page(path)``). Returns the
@@ -210,13 +224,18 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
             The URL path, e.g. "/" or "/admin".
         page_cls:
             The Page subclass to serve (required; carries root, stores, title).
+        render_mode:
+            How to serve the page ("ssr" or "csr"); overrides the page's own
+            ``render_mode`` class attribute.
         name:
             Optional route name.
         """
         # Decorator form: @app.include_page("/admin")
         if page_cls is None:
             def _register_page(cls):
-                return self.include_page(path=path, page_cls=cls, name=name)
+                return self.include_page(
+                    path=path, page_cls=cls, render_mode=render_mode, name=name
+                )
             return _register_page
 
         from basis.shared.page import Page
@@ -225,29 +244,67 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
             raise TypeError(
                 f"include_page(path={path!r}) requires a Page subclass, got "
                 f"{page_cls!r}. To expose a root Component as a page, use "
-                f"@app.page(path=...) instead."
+                f"@app.page(path=...) or @app.serve(path=...) instead."
             )
 
-        from basis.server.ssr import render_page_ssr
+        # Route → page registry: the per-page /pyscript.json manifest resolves
+        # ?url=<path> against this (see basis/server/bootstrap.py::page_bootstrap).
+        self._pages[path] = page_cls
 
-        async def _ssr_handler(request: Request):
+        from basis.server.responses import PageResponse
 
-            from basis.shared.context import base_url_var
+        async def _page_handler(request: Request):
+            return await PageResponse.from_page(
+                page_cls,
+                request,
+                render_mode=render_mode,
+                global_stores=self._global_stores,
+            )
 
-            # Set the base URL context for this request lifecycle
-            token = base_url_var.set(str(request.base_url))
-            try:
-                html = await render_page_ssr(
-                    request,
-                    page_cls,
-                    global_stores=self._global_stores,
-                )
-                return HTMLResponse(html)
-            finally:
-                base_url_var.reset(token)
-
-        self.add_route(path, _ssr_handler, methods=['GET'], name=name)
+        self.add_route(path, _page_handler, methods=['GET'], name=name)
         return page_cls
+
+    def serve(
+        self,
+        path: str = "/",
+        *,
+        render_mode: str | None = None,
+        name: str | None = None,
+    ):
+        """
+        Serve a Page — or a root Component (auto-wrapped in a default Page shell) —
+        at ``path`` (default ``"/"``).
+
+        ``@app.serve`` is the FastAPI-shaped way to expose a page: the URL is a
+        route argument, not a property of the Page class, so the same Page can be
+        served at several URLs (each with its own ``render_mode``). Usable as a
+        decorator (``@app.serve("/admin")``) or imperatively
+        (``app.serve("/")(HomePage)``). Returns the decorated class.
+
+        ``render_mode`` selects how the route serves the page: ``"ssr"``
+        (default) or ``"csr"``. See ``include_page`` for the resolution rule.
+
+        A Page subclass is used as the complete recipe; a root Component is
+        wrapped in a synthesized default shell (the ``@app.page`` quickstart —
+        page-level ``stores`` are not supported there).
+        """
+        def _decorate(page_cls):
+            from basis.shared.page import Page as PageBase
+
+            if isinstance(page_cls, type) and issubclass(page_cls, PageBase):
+                self.bootstrap()
+                return self.include_page(
+                    path, page_cls=page_cls, render_mode=render_mode, name=name
+                )
+
+            return self.page(
+                page_cls,
+                path=path,
+                render_mode=render_mode,
+                name=name,
+            )
+
+        return _decorate
 
     def page(
         self,
@@ -257,6 +314,7 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
         page_cls=None,
         title: str | None = None,
         pyscript_src: str = ONLINE_PYSCRIPT,
+        render_mode: str | None = None,
         name: str | None = None,
     ):
         """
@@ -281,6 +339,7 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
                 page_cls=page_cls,
                 title=title,
                 pyscript_src=pyscript_src,
+                render_mode=render_mode,
                 name=name,
             )
 
@@ -292,7 +351,7 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
                 f"{component_cls.__name__} is a Page, not a root component. "
                 "A Page is the document shell.\n"
                 f"  • To expose a root component: decorate a Component with @app.page(path=...)\n"
-                f"  • To register a Page: decorate it with @app.include_page(path) "
+                f"  • To register a Page: decorate it with @app.serve(path) "
                 f"or app.include_page(path, page_cls={component_cls.__name__})"
             )
 
@@ -329,8 +388,10 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
             pyscript_src=pyscript_src,
         )
 
-        # Register the SSR page for this component
-        self.include_page(path, page_cls=synthesized, name=name)
+        # Register the page for this component
+        self.include_page(
+            path, page_cls=synthesized, render_mode=render_mode, name=name
+        )
 
         if not covered_module:
             # Serve the application directory so PyScript can find the code.

@@ -473,8 +473,11 @@ def test_plugins_projection_endpoint_includes_disabled_plugins():
 
     registry = client.get("/basis/api/plugins").json()
     # The official regions plugin is auto-registered by bootstrap, so assert the
-    # svc entry exactly rather than the whole listing.
+    # svc entry exactly rather than the whole listing. Entries carry `kind`
+    # (plugin vs. theme — ROADMAP-THEMING §6.5.2); plugins-only listings never
+    # include kind == "theme".
     assert registry["svc"] == {
+        "kind": "plugin",
         "state": "enabled",
         "prefix": "/svc",
         "actions": ["do_thing"],
@@ -489,11 +492,11 @@ def test_plugins_projection_endpoint_includes_disabled_plugins():
 
 
 def test_csr_page_initial_state_serializes_plugin_registry_projection():
-    """CSR pages (render_full_page with no initial_state_json) must embed the
+    """CSR pages (render_page with no initial_state_json) must embed the
     plugins projection in #basis-initial-state — the client hydrates $plugins
     from it.
 
-    Regression: _prepare_full_page called Store.resolve('plugins') (a fresh
+    Regression: Page.render called Store.resolve('plugins') (a fresh
     instance with no owning app), so serialize() projected empty items and the
     CSR view showed "0 plugins" while SSR was fine.
     """
@@ -512,8 +515,8 @@ def test_csr_page_initial_state_serializes_plugin_registry_projection():
         title = "csr"
         root_component = Root
 
-    page_instance = CsrPage.load()
-    html = page_instance.render_full_page(request=SimpleNamespace(app=app))
+    from basis.server.render import render_page
+    html = asyncio.run(render_page(SimpleNamespace(app=app), CsrPage, render_mode="csr"))
     assert 'id="basis-initial-state"' in html
     state = json.loads(
         html.split('id="basis-initial-state"')[1].split(">", 1)[1].split("</script>")[0]
@@ -546,7 +549,7 @@ def test_plugin_listing_is_single_source_for_store_and_endpoint():
 
 
 def test_get_all_stores_attaches_app_to_app_bound_store():
-    from basis.server.ssr import _get_all_stores
+    from basis.server.render import _get_all_stores
     from basis.shared.plugin_registry import PluginRegistryStore
 
     app = Basis()
@@ -713,7 +716,7 @@ def test_ssr_direct_page_render_attaches_app_to_registry_swept_store():
     from fastapi import Request
     from fastapi.responses import HTMLResponse
     from basis.shared.component import Component
-    from basis.server.ssr import render_page_ssr
+    from basis.server.render import render_page
     from basis.shared.page import Page
     import basis.plugins.ui.plugin_manager.plugin_manager  # noqa: F401
 
@@ -731,10 +734,10 @@ def test_ssr_direct_page_render_attaches_app_to_registry_swept_store():
 
     @app.get("/direct_ssr")
     async def direct_ssr(request: Request):
-        html = await render_page_ssr(request, DemoPage)
+        html = await render_page(request, DemoPage)
         return HTMLResponse(html)
 
     html = TestClient(app).get("/direct_ssr").text
-    assert "ui-plugin-manager-row" in html
+    assert "ui-registry-manager-row" in html  # shared RegistryManager row chrome
     assert "chat" in html
     assert "Disable" in html

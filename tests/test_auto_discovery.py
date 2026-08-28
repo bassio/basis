@@ -223,7 +223,7 @@ def test_page_load_resolves_name_list():
     class P(Page):
         stores = ["name_list_store"]
 
-    P.load(ssr=True, request=None)
+    P.load()
     store = Store._registry.get("name_list_store")
     assert isinstance(store, CStore)
     assert store.v == 1
@@ -239,7 +239,7 @@ def test_page_load_defaults_to_all_stores():
     class P(Page):
         pass  # stores defaults to [] → "all auto-discovered"
 
-    P.load(ssr=True, request=None)
+    P.load()
     assert "dummy_all" in Store._registry
 
 
@@ -261,7 +261,7 @@ def test_page_load_rejects_instance_list():
         stores = [InstStore("inst_list", label="kept")]
 
     with pytest.raises(TypeError, match="must be store names"):
-        P.load(ssr=True, request=None)
+        P.load()
 
 
 # ---------------------------------------------------------------------------
