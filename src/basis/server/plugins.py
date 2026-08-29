@@ -127,6 +127,50 @@ def _resolve_canonical_package(path: Path) -> str | None:
     return ".".join(parts)
 
 
+def _plugin_origin_module(plugin) -> str | None:
+    """The dotted name of the module that constructed *plugin*.
+
+    Prefers the ``_origin_module`` recorded at discovery (the entry-point module
+    / local canonical name — authoritative). Falls back to scanning
+    ``sys.modules`` for a module whose dict references the instance (covers
+    plugins passed directly to ``include_plugin`` with no discovery, e.g.
+    inline-constructed instances). Returns ``None`` when nothing resolves.
+    """
+    recorded = getattr(plugin, "_origin_module", None)
+    if recorded:
+        return recorded
+    for mod_name, mod in list(sys.modules.items()):
+        if not getattr(mod, "__file__", None):
+            continue
+        try:
+            if any(getattr(mod, name, None) is plugin for name in vars(mod)):
+                return mod_name
+        except Exception:
+            continue
+    return None
+
+
+def _mount_covered_by_parent(mount_path: str, component_routes) -> bool:
+    """True when *mount_path* is a strict descendant of an existing mount.
+
+    A parent mount serves its whole subtree (e.g. the app's ``plugins/``
+    auto-discovery serves every local plugin package under ``/app/plugins``), so
+    re-mounting a package inside it would serve every file to the same VFS
+    destination twice — the "Duplicated destination" client error. Exact-path
+    matches are NOT flagged here (``include_components_dir`` already treats them
+    as idempotent no-ops).
+    """
+    target = mount_path.rstrip("/")
+    for route in component_routes:
+        path = getattr(route, "path", None)
+        if not path:
+            continue
+        parent = path.rstrip("/")
+        if parent and target.startswith(parent + "/"):
+            return True
+    return False
+
+
 def discover_local_plugins(app_dir: Path, plugins_dir: str = "plugins") -> list["BasisPlugin"]:
     """
     Scan the ``plugins/`` directory for BasisPlugin instances.
@@ -173,6 +217,8 @@ def discover_local_plugins(app_dir: Path, plugins_dir: str = "plugins") -> list[
                 mod = sys.modules[canonical_name]
                 plugin_obj = getattr(mod, "plugin", None)
                 if isinstance(plugin_obj, BasisPlugin):
+                    # Record the canonical module this local plugin lives in.
+                    plugin_obj.__dict__["_origin_module"] = canonical_name
                     plugins.append(plugin_obj)
                     logger.info(f"\U0001f50c Discovered local plugin: {plugin_obj.name} ({module_name})")
                 continue
@@ -197,6 +243,8 @@ def discover_local_plugins(app_dir: Path, plugins_dir: str = "plugins") -> list[
 
             plugin_obj = getattr(mod, "plugin", None)
             if isinstance(plugin_obj, BasisPlugin):
+                # Record the canonical module this local plugin lives in.
+                plugin_obj.__dict__["_origin_module"] = canonical_name
                 plugins.append(plugin_obj)
                 logger.info(f"\U0001f50c Discovered local plugin: {plugin_obj.name} ({module_name})")
             else:
@@ -244,6 +292,11 @@ def discover_installed_plugins(
             plugin_obj = ep.load()
             if isinstance(plugin_obj, BasisPlugin):
                 dist_name = getattr(ep.dist, "name", "unknown") if ep.dist else "unknown"
+                # Uniform convention: the plugin module exposes its instance as
+                # ``plugin``; the entry-point module is the authoritative
+                # construction module (no frame inspection). Record it so the
+                # catalogs / client can import it.
+                plugin_obj.__dict__["_origin_module"] = getattr(ep, "module", None)
                 plugins.append(plugin_obj)
                 logger.info(
                     f"\U0001f4e6 Loaded installed plugin: {plugin_obj.name} (from {dist_name})"
@@ -325,8 +378,8 @@ class PluginMixin:
 
         1. **Dedup check** — skip if already registered.
         2. **Routes** — mounts all HTTP endpoints declared on ``plugin.router``.
-        3. **Static files** — if ``plugin.static_dir`` is set and exists on
-           disk, serves that directory at ``plugin.static_mount``.
+        3. **Serving** — if ``plugin.serving_dir`` is set and exists on
+           disk, serves that directory at ``plugin.serving_mount``.
         4. **SSR page** — if the plugin has a ``root_component`` attribute.
         5. **Models** — merges the plugin's model set into the app.
         6. **Tracking** — appends to ``_plugins``.
@@ -372,26 +425,62 @@ class PluginMixin:
             lambda: self.include_router(plugin.router)
         ))
 
-        # 2. Serve static/component files so PyScript can load them.
-        if plugin.static_dir and plugin.static_dir.exists():
+        # 2. Serve the plugin's package so PyScript can import it (Option A):
+        #    a plugin/theme's client-code package is ALWAYS mounted into the
+        #    client VFS, so all its .py are importable client-side.
+        #      - ``serving_dir``/``serving_mount`` when declared — the plugin's
+        #        client-code package (the isomorphism guard keeps the mount ==
+        #        the package path);
+        #      - otherwise, the module's own package — this is what serves a
+        #        token-only theme (no static assets) like the in-tree
+        #        ``ambient`` theme, whose ``Theme`` module is its package.
+        #    Idempotent by mount path: a local plugin already covered by the
+        #    app's ``plugins/`` auto-discovery, or a theme whose module lives in
+        #    a package another plugin already mounted, is a no-op (nothing is
+        #    double-served, and ``component_mount`` stays ``None`` when the
+        #    mount predates this registration — so disabling it won't prune a
+        #    mount it didn't create).
+        if plugin.serving_dir and plugin.serving_dir.exists():
             reg.component_mount = self.include_components_dir(
-                plugin.static_mount,
-                str(plugin.static_dir),
+                plugin.serving_mount,
+                str(plugin.serving_dir),
                 name=plugin.name,
             )
-            # Isomorphism guard for plugin-served components: the static mount
+            # Isomorphism guard for plugin-served components: the serving mount
             # must reproduce the plugin dir's package path so VFS == filesystem.
-            pkg = _resolve_canonical_package(Path(plugin.static_dir).absolute())
-            if pkg is not None:
-                expected = "/" + pkg.replace(".", "/")
-                actual = (plugin.static_mount or "").rstrip("/")
+            static_pkg = _resolve_canonical_package(Path(plugin.serving_dir).absolute())
+            if static_pkg is not None:
+                expected = "/" + static_pkg.replace(".", "/")
+                actual = (plugin.serving_mount or "").rstrip("/")
                 if actual != expected:
                     logger.warning(
-                        f"⚠️  Plugin '{plugin.name}' static_mount '{actual}' does "
+                        f"⚠️  Plugin '{plugin.name}' serving_mount '{actual}' does "
                         f"not reproduce package path '{expected}' — client VFS "
                         f"names will not match the filesystem (isomorphism "
                         f"violation)."
                     )
+        else:
+            # No declared static assets — derive the package from the module
+            # that constructed the plugin (module-scope instance, e.g. a
+            # token-only theme's ``plugin = Theme(...)``) so its .py is still
+            # served. Fires only for a real package; an inline-constructed
+            # plugin with no owning module falls back to nothing. Skipped when
+            # a parent mount already serves the package (e.g. a local plugin
+            # under the app's ``plugins/`` auto-discovery) — re-mounting would
+            # duplicate every file's VFS destination.
+            origin = _plugin_origin_module(plugin)
+            if origin is not None:
+                mod = sys.modules.get(origin)
+                file = getattr(mod, "__file__", None) if mod is not None else None
+                if file:
+                    pkg_dir = Path(file).resolve().parent
+                    pkg = _resolve_canonical_package(pkg_dir)
+                    if pkg is not None:
+                        pkg_mount = "/" + pkg.replace(".", "/")
+                        if not _mount_covered_by_parent(pkg_mount, self._component_routes):
+                            reg.component_mount = self.include_components_dir(
+                                pkg_mount, str(pkg_dir), name=plugin.name,
+                            )
 
         # 3. Optional SSR page (synthesized from the plugin's root component).
         if hasattr(plugin, "root_component") and plugin.root_component:
@@ -631,7 +720,10 @@ class PluginMixin:
                 pass
 
         # 2. Component mount — lives in the app route list, _component_routes and
-        #    the app's live VFS registry (surgical manifest prune).
+        #    the app's live VFS registry (surgical manifest prune). Only prunes
+        #    a mount this registration actually created (``component_mount`` is
+        #    ``None`` when the package was already served by another mount, e.g.
+        #    the app's plugins/ auto-discovery).
         if reg.component_mount is not None:
             try:
                 self.routes.remove(reg.component_mount)

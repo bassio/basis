@@ -58,8 +58,8 @@ class BasisPlugin(ModelRegistryMixin):
 
     A plugin declares:
     - A URL prefix for its HTTP routes (``prefix``).
-    - An optional directory of Python/HTML/CSS component files to serve as
-      static assets so PyScript can import them (``static_dir`` / ``static_mount``).
+    - An optional directory of Python/HTML/CSS component files to serve to the
+      client so PyScript can import them (``serving_dir`` / ``serving_mount``).
     - An optional list of plugin names it depends on (``requires``).
     - Any number of REST endpoints via ``@plugin.get``, ``@plugin.post``, etc.
       (or directly via ``@plugin.router.get`` for full FastAPI expressiveness).
@@ -88,8 +88,8 @@ class BasisPlugin(ModelRegistryMixin):
 
         plugin = BasisPlugin(
             prefix="/chat",
-            static_dir=Path(__file__).parent,
-            static_mount="/chat",
+            serving_dir=Path(__file__).parent,
+            serving_mount="/chat",
         )
 
         @server_action
@@ -127,8 +127,8 @@ class BasisPlugin(ModelRegistryMixin):
         self,
         *,
         prefix: str,
-        static_dir: str | Path | None = None,
-        static_mount: str | None = None,
+        serving_dir: str | Path | None = None,
+        serving_mount: str | None = None,
         name: str | None = None,
         tags: list[str] | None = None,
         requires: list[str] | None = None,
@@ -140,12 +140,12 @@ class BasisPlugin(ModelRegistryMixin):
             URL prefix applied to all routes declared on this plugin's router
             (e.g. ``"/chat"``).  Leading slash is required; trailing slash is
             stripped automatically.
-        static_dir:
-            Filesystem path to the directory containing the plugin's component
-            files (.py, .html, .css).  When provided these files are served as
-            static assets so PyScript can fetch and execute them.
-        static_mount:
-            URL path at which ``static_dir`` is mounted.  Defaults to
+        serving_dir:
+            Filesystem path to the directory served to the client (its .py files
+            become client-importable modules; any css/fonts inside are served
+            too).  When provided the whole dir is mounted at ``serving_mount``.
+        serving_mount:
+            URL path at which ``serving_dir`` is mounted.  Defaults to
             ``prefix`` when not supplied.
         name:
             Optional human-readable identifier used when registering the static
@@ -159,8 +159,8 @@ class BasisPlugin(ModelRegistryMixin):
             dependencies for that.
         """
         self.prefix = prefix.rstrip("/")
-        self.static_dir = Path(static_dir) if static_dir else None
-        self.static_mount = static_mount or self.prefix
+        self.serving_dir = Path(serving_dir) if serving_dir else None
+        self.serving_mount = serving_mount or self.prefix
         self.name = _resolve_plugin_name(name, self.prefix)
         self.requires = requires or []
         self.models = set()
@@ -347,7 +347,7 @@ class BasisPlugin(ModelRegistryMixin):
     def __repr__(self) -> str:
         return (
             f"BasisPlugin(prefix={self.prefix!r}, "
-            f"static_mount={self.static_mount!r}, "
+            f"serving_mount={self.serving_mount!r}, "
             f"name={self.name!r})"
         )
 

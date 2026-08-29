@@ -15,28 +15,6 @@ from basis.shared.actions import server_action
 from basis.shared.app_state import AppStateStore
 
 
-def _theme_metadata(plugin) -> dict | None:
-    """Metadata for a theme registration (``kind == "theme"``) for the catalog.
-
-    Reads common fields off ``plugin.definition`` generically, so the listing
-    helper in framework core stays theme-agnostic — a "theme" is just a plugin
-    that carries a ``definition`` manifest (ROADMAP-THEMING.md §6.5.2).
-    """
-    definition = getattr(plugin, "definition", None)
-    if definition is None:
-        return None
-    scheme = getattr(definition, "color_scheme", "auto") or "auto"
-    modes = ["light", "dark"] if scheme in ("auto", "system") else [scheme]
-    return {
-        "id": getattr(definition, "id", None),
-        "name": getattr(definition, "name", None),
-        "version": getattr(definition, "version", None),
-        "author": getattr(definition, "author", None),
-        "modes": modes,
-        "preview": getattr(definition, "preview", None),
-    }
-
-
 def _registry_listing(app, kinds: tuple[str, ...] | None = None) -> dict:
     """Build the contribution registry listing from an app's registrations.
 
@@ -58,9 +36,19 @@ def _registry_listing(app, kinds: tuple[str, ...] | None = None) -> dict:
             "prefix": getattr(plugin, "prefix", ""),
             "actions": sorted(getattr(plugin, "actions", {}) or {}),
             "requires": list(getattr(plugin, "requires", []) or []),
+            # The module that constructed the plugin (recorded at discovery) —
+            # the client can import it to reach the plugin's live instance.
+            "module": getattr(plugin, "_origin_module", None),
         }
         if entry["kind"] == "theme":
-            entry["theme"] = _theme_metadata(plugin)
+            # Theme metadata is theme-plugin territory — theme is its own
+            # plugin, not a framework-core concern — so it is shaped in
+            # ``basis.plugins.theme.registry`` and imported lazily here (keeps
+            # framework core theme-agnostic at load time; works server + client
+            # because the theme plugin's modules are client-served too).
+            from basis.plugins.theme.registry import theme_metadata
+
+            entry["theme"] = theme_metadata(plugin)
         snapshot[pname] = entry
     return snapshot
 

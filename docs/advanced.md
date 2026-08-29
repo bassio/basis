@@ -27,6 +27,10 @@ Deep dives into how Basis works under the hood, and how to get the most out of t
 
 - **[Plugin System & Architecture](07_plugins/plugin-system.md)** — The `BasisPlugin` contract, local `plugins/` directory auto-discovery, package entry points, route prefixing, and plugin-scoped server actions.
 
+## JavaScript Interop
+
+- **[Wrapping JS Libraries with `@js_component`](04_components/js-components.md)** — The escape hatch: wrap any JS library (CodeMirror, charts, maps) as a reactive Basis component with a Python API — vendored JS, SSR-safe placeholders, and per-page module preloading.
+
 ---
 
 *Part of the **Advanced Guide** track. See also [Tutorial](tutorial.md), [Concepts](concepts.md), and [API Reference](reference.md).*

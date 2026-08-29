@@ -26,8 +26,8 @@ class ShellPlugin(BasisPlugin):
 
 plugin = ShellPlugin(
     prefix="",
-    static_dir=Path(__file__).parent,
-    static_mount="/basis/plugins/shell",
+    serving_dir=Path(__file__).parent,
+    serving_mount="/basis/plugins/shell",
     name="shell",
     tags=None,
     requires=["theme"],

@@ -58,6 +58,21 @@ class CookieStore(Store):
             if f in data:
                 setattr(self, f, data[f])
 
+    def _flush_cookie(self) -> None:
+        """Client-side only: write the cookie directly from the browser so a
+        preference change persists with no server round trip. No-op on the
+        server (the RPC response persists via :meth:`persist_prefs` instead).
+        The wire value matches what ``persist_prefs`` would send, so the
+        server's :meth:`apply_request` reads it back unchanged on the next
+        request (keeps SSR/CSR first paint no-FOUC)."""
+        if not IS_CLIENT or not self.cookie_name:
+            return
+        try:
+            from pyscript import document
+            document.cookie = f"{self.cookie_name}={json.dumps(self._payload())}; path=/"
+        except Exception:
+            pass
+
     # ── framework hooks (core calls these generically — see rpc/ssr/page) ──
 
     def persist_prefs(self):

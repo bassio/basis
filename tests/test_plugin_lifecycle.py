@@ -211,7 +211,7 @@ def test_disable_plugin_alias_and_enable_missing_returns_false():
     assert any(p.name == "svc" for p in app._plugins)
 
 
-def test_remove_plugin_unmounts_static_dir_and_prunes_vfs(tmp_path):
+def test_remove_plugin_unmounts_serving_dir_and_prunes_vfs(tmp_path):
     app = Basis()
     app.bootstrap()
     comp_dir = tmp_path / "components"
@@ -219,7 +219,7 @@ def test_remove_plugin_unmounts_static_dir_and_prunes_vfs(tmp_path):
     (comp_dir / "gadget.py").write_text("class Gadget:\n    pass\n")
     plugin = BasisPlugin(
         prefix="/gadget", name="gadget",
-        static_dir=comp_dir, static_mount="/gadget",
+        serving_dir=comp_dir, serving_mount="/gadget",
     )
     reg = app.include_plugin(plugin)
     assert reg.component_mount is not None
@@ -251,7 +251,7 @@ def test_disable_enable_cycle_restores_vfs_manifest(tmp_path):
     (comp_dir / "gadget.py").write_text("class Gadget:\n    pass\n")
     plugin = BasisPlugin(
         prefix="/gadget", name="gadget",
-        static_dir=comp_dir, static_mount="/gadget",
+        serving_dir=comp_dir, serving_mount="/gadget",
     )
     app.include_plugin(plugin)
     # The app's live VFS registry already includes the plugin's files.
@@ -289,7 +289,7 @@ def test_remove_plugin_refuses_when_imported_by_consumer(tmp_path):
     (pkg_dir / "widget.py").write_text("class Widget:\n    pass\n")
     plugin = BasisPlugin(
         prefix="/myapp/plugins", name="widget",
-        static_dir=pkg_dir, static_mount="/myapp/plugins",
+        serving_dir=pkg_dir, serving_mount="/myapp/plugins",
     )
 
     # Consumer component (sibling package) imports the plugin directly.
@@ -328,7 +328,7 @@ def test_plugin_importers_cached_and_invalidated_on_mutations(tmp_path):
     (pkg_dir / "widget.py").write_text("class Widget:\n    pass\n")
     plugin = BasisPlugin(
         prefix="/myapp/plugins", name="widget",
-        static_dir=pkg_dir, static_mount="/myapp/plugins",
+        serving_dir=pkg_dir, serving_mount="/myapp/plugins",
     )
 
     comp_dir = app_pkg / "components"
@@ -339,7 +339,11 @@ def test_plugin_importers_cached_and_invalidated_on_mutations(tmp_path):
     app.include_plugin(plugin)
 
     first = app._plugin_importers()
-    assert first == {"widget": ["myapp.components.app"]}
+    assert first["widget"] == ["myapp.components.app"]
+    # Option A: the in-tree ambient theme's package is now served (a consumer),
+    # and its module imports the ``theme`` mechanism plugin — so ``theme`` is
+    # pinned too (harmlessly redundant: it's framework-essential anyway).
+    assert first["theme"] == ["basis.plugins.ambient.theme"]
     # Cached: the second call is the same object, not recomputed.
     assert app._plugin_importers() is first
 
@@ -349,14 +353,15 @@ def test_plugin_importers_cached_and_invalidated_on_mutations(tmp_path):
     (extra / "x.py").write_text("from myapp.plugins.widget import Widget\n")
     app.include_components_dir("/myapp/extra", str(extra), name="extra")
     assert app._plugin_importers_cache is None
-    assert app._plugin_importers() == {
-        "widget": ["myapp.components.app", "myapp.extra.x"],
-    }
+    assert app._plugin_importers()["widget"] == [
+        "myapp.components.app", "myapp.extra.x",
+    ]
 
-    # Removing the plugin invalidates again; a disposed plugin is not tracked.
+    # Removing the plugin invalidates again; a disposed plugin is not tracked
+    # (the theme mechanism pin from the served ambient module remains).
     assert asyncio.run(app.remove_plugin("widget", force=True)) is True
     assert app._plugin_importers_cache is None
-    assert app._plugin_importers() == {}
+    assert app._plugin_importers() == {"theme": ["basis.plugins.ambient.theme"]}
 
 
 def test_include_plugin_idempotent_returns_existing_registration():
@@ -482,6 +487,9 @@ def test_plugins_projection_endpoint_includes_disabled_plugins():
         "prefix": "/svc",
         "actions": ["do_thing"],
         "requires": [],
+        # inline-constructed via include_plugin (no discovery) → no owning
+        # module recorded; entry key is still present.
+        "module": None,
     }
     assert registry["regions"]["state"] == "enabled"
 
@@ -741,3 +749,66 @@ def test_ssr_direct_page_render_attaches_app_to_registry_swept_store():
     assert "ui-registry-manager-row" in html  # shared RegistryManager row chrome
     assert "chat" in html
     assert "Disable" in html
+
+
+def test_local_package_plugin_not_duplicated_in_vfs(tmp_path, monkeypatch):
+    """Option A must NOT re-mount a local package plugin's package when the app's
+    ``plugins/`` conventional dir already serves the whole subtree. Re-mounting
+    would serve every file to the same VFS destination twice — the
+    'Duplicated destination' client error."""
+    app = Basis()
+    app.bootstrap()
+
+    app_pkg = tmp_path / "optapp"
+    plugins_dir = app_pkg / "plugins"
+    sub = plugins_dir / "widget"
+    sub.mkdir(parents=True)
+    (app_pkg / "__init__.py").write_text("")
+    (plugins_dir / "__init__.py").write_text("")
+    (sub / "__init__.py").write_text(
+        "from basis.server.plugin import BasisPlugin\n"
+        "plugin = BasisPlugin(prefix='/optapp/plugins/widget', name='widget')\n"
+    )
+
+    monkeypatch.syspath_prepend(str(app_pkg.parent))
+    import optapp.plugins.widget as widget_mod
+
+    # The app's plugins/ conventional dir serves the whole subtree once.
+    app.include_components_dir("/optapp/plugins", str(plugins_dir), name="plugins")
+    app.include_plugin(widget_mod.plugin)
+
+    # The local package plugin's files are served exactly once, via the parent
+    # mount — the plugin did not create its own (duplicating) package mount.
+    dests = [v for v in app.vfs.files.values() if v.startswith("./optapp/plugins")]
+    assert dests.count("./optapp/plugins/widget/__init__.py") == 1
+    assert "optapp.plugins.widget" in app.vfs.client_modules
+    reg = app._plugin_registrations["widget"]
+    assert reg.component_mount is None
+
+
+def test_local_discovery_records_origin_module(tmp_path, monkeypatch):
+    """Discovery-time module recording for local plugins: the canonical module
+    name (e.g. ``optapp.plugins.widget``) is stamped onto the plugin, so the
+    catalogs / client can import it to reach the live ``plugin`` instance."""
+    from basis.server.plugins import discover_local_plugins
+
+    app_pkg = tmp_path / "optapp"
+    plugins_dir = app_pkg / "plugins"
+    sub = plugins_dir / "widget"
+    sub.mkdir(parents=True)
+    (app_pkg / "__init__.py").write_text("")
+    (plugins_dir / "__init__.py").write_text("")
+    (sub / "__init__.py").write_text(
+        "from basis.server.plugin import BasisPlugin\n"
+        "plugin = BasisPlugin(prefix='/optapp/plugins/widget', name='widget')\n"
+    )
+
+    monkeypatch.syspath_prepend(str(app_pkg.parent))
+    found = discover_local_plugins(app_pkg, "plugins")
+    assert len(found) == 1
+    assert found[0]._origin_module == "optapp.plugins.widget"
+
+    # The recorded module is the canonical import path of the same instance.
+    import optapp.plugins.widget as widget_mod
+
+    assert widget_mod.plugin is found[0]

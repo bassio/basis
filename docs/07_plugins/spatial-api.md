@@ -158,12 +158,12 @@ is **auto-mounted once** at its package path (exactly like `components/` and
 client at its isomorphic import path.
 
 > [!NOTE]
-> A **local** plugin must **not** self-mount its `static_dir`. A flat-file
-> plugin (e.g. `plugins/heroes.py`) that sets `static_dir=Path(__file__).parent`
+> A **local** plugin must **not** self-mount its `serving_dir`. A flat-file
+> plugin (e.g. `plugins/heroes.py`) that sets `serving_dir=Path(__file__).parent`
 > would mount its whole parent `plugins/` dir and re-serve every sibling to the
 > same VFS destination — PyScript rejects duplicate destinations and the page
 > fails to load client-side. Files in the conventional `plugins/` dir are
-> already served; drop `static_dir`/`static_mount` on local plugins. Installed
+> already served; drop `serving_dir`/`serving_mount` on local plugins. Installed
 > plugins (packages) keep their own package-dir mounts.
 
 ---

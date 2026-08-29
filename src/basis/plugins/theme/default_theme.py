@@ -10,5 +10,6 @@ themes identically — the framework dogfoods its own format
 from basis.plugins.theme.default import DEFAULT_DEFINITION
 from basis.plugins.theme.theme import Theme
 
-# The default theme — token-only (no css/fonts to serve), so no static_dir.
-theme = Theme(definition=DEFAULT_DEFINITION)
+# The default theme — token-only (no css/fonts to serve), so no serving_dir.
+# Uniform convention: every plugin/theme module exposes its instance as ``plugin``.
+plugin = Theme(definition=DEFAULT_DEFINITION)

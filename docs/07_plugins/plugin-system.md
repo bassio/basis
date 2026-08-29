@@ -25,8 +25,8 @@ from basis import BasisPlugin
 plugin = BasisPlugin(
     name="chat",
     prefix="/chat",
-    static_dir="./components",   # component .py/.html/.css files served to PyScript
-    static_mount="/chat",        # URL path they are served at (defaults to prefix)
+    serving_dir="./components",   # component .py/.html/.css files served to PyScript
+    serving_mount="/chat",        # URL path they are served at (defaults to prefix)
 )
 
 @plugin.get("/messages")

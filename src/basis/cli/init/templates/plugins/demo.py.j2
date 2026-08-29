@@ -25,8 +25,8 @@ class DemoView(Component):
 
 plugin = BasisPlugin(
     prefix="",
-    static_dir=Path(__file__).parent,
-    static_mount="/{{ slug }}/plugins",
+    serving_dir=Path(__file__).parent,
+    serving_mount="/{{ slug }}/plugins",
     name="demo",
 )
 

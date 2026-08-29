@@ -180,7 +180,7 @@ loud warning:
 
 If you ever see this warning, a mount path diverges from its package path — fix
 the mount (or the directory layout) before anything else. Plugins that serve
-components get the same check on their `static_mount`.
+components get the same check on their `serving_mount`.
 
 ---
 

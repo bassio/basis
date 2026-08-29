@@ -38,10 +38,10 @@ def _discover_conventional_dirs(
 
     ``plugins/`` is mounted like the other two so local plugin files (flat
     modules and packages alike) are served once at their package path — a local
-    plugin must NOT self-mount its ``static_dir`` (a flat-file plugin would
+    plugin must NOT self-mount its ``serving_dir`` (a flat-file plugin would
     otherwise mount its whole parent ``plugins/`` dir and duplicate every
     sibling's VFS destination). Installed plugins live outside the app tree and
-    keep their own package-dir static mounts.
+    keep their own package-dir serving mounts.
     """
     found = []
     for name, subdir in (
@@ -102,6 +102,54 @@ def page_bootstrap(app, page_cls=None) -> dict:
                 bootstrap["entrypoint"] = {page_cls.__name__: module_file}
 
     return bootstrap
+
+
+def page_js_modules(page_cls) -> dict[str, str]:
+    """Collect the JS modules needed by *page_cls*'s component tree.
+
+    A static walk of the page root component's template blueprints: every
+    custom-element tag that resolves to a registered ``@js_component`` class
+    contributes its module (via ``__js_name__``/``__js_module__``). Hidden
+    (if-bound) subtrees are included — the walk reflects the page's *declared*
+    intent, so tab-hidden components still preload. Components contributed
+    dynamically (regions, slots, ``#``-refs, loop items from a parent binding)
+    are not statically visible and fall back to the client's lazy loader.
+    """
+    from basis.shared.component import Component
+
+    root_component = getattr(page_cls, "root_component", None)
+    if root_component is None:
+        return {}
+
+    seen: set[type] = set()
+    modules: dict[str, str] = {}
+    stack: list[type] = [root_component]
+
+    while stack:
+        cls = stack.pop()
+        if cls in seen:
+            continue
+        seen.add(cls)
+
+        if getattr(cls, "__js_component__", False):
+            name = getattr(cls, "__js_name__", None)
+            url = getattr(cls, "__js_module__", None)
+            if name and url:
+                modules[name] = url
+
+        blueprint = getattr(cls, "__blueprint__", None)
+        root_elem = blueprint.get("component") if blueprint else None
+        if root_elem is None:
+            continue
+        for node in root_elem.descendants:
+            tag = getattr(node, "tagName", None)
+            if not tag or "-" not in tag:
+                continue
+            child_cls = Component._registry.get(tag.lower())
+            if child_cls is not None:
+                stack.append(child_cls)
+
+    return modules
 
 
 class BootstrapMixin:
@@ -199,6 +247,13 @@ class BootstrapMixin:
         if not self._has_route(name="basis_shared"):
             shared_mount = Mount("/basis/shared", static_cls(packages=[('basis', 'shared')]), name='basis_shared')
             self.routes.append(shared_mount)
+
+        # Raw vendored JS libraries for @js_component. Served as plain static
+        # assets — not Python, so nothing is VFS-transformed. See
+        # JS-COMPONENT-PLAN.md.
+        if not self._has_route(name="basis_js"):
+            js_mount = Mount("/basis/js", static_cls(packages=[('basis', 'static/js')]), name='basis_js')
+            self.routes.append(js_mount)
 
     def _auto_discover_dirs(self):
         """

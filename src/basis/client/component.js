@@ -48,6 +48,15 @@ function CustomElementFactory(config) {
       
       console.log(`JS: ${this.tagName} added to page (connectedCallback())`);
 
+      // Generic "this element just joined the live document" signal. Fires on
+      // every connect — initial mount, an if-reveal re-insert, fallback moves.
+      // The JS side stays dumb: Python (Basis) listens and decides what to do
+      // (e.g. boot a @js_component that was hidden at SSR render time).
+      this.dispatchEvent(new CustomEvent('basis:connected', {
+        bubbles: true,
+        detail: { tag: this.tagName.toLowerCase() }
+      }));
+
       // Refresh from the registry so HMR template updates reach existing elements.
       const tag = (this.tagName || '').toLowerCase();
       if (globalThis.__basisElementConfigs[tag]) {
@@ -55,29 +64,8 @@ function CustomElementFactory(config) {
       }
 
       const shadow = this.config['__shadow__'];
-      const pyClassName = this.config['pyClassName'];
 
-      // ── SSR Hydration Detection ──────────────────────────────────────────
-      // If the first element child carries a data-basis-component marker that
-      // matches this element's Python class, the content was server-rendered.
-      // In that case we call .hydrate(this) so PyScript wires up reactivity
-      // against the existing DOM rather than inserting a fresh template clone.
-      const firstChild = this.firstElementChild;
-      const ssrMarker = firstChild && firstChild.dataset && firstChild.dataset.basisComponent;
-      const isSSR = ssrMarker === pyClassName;
-
-      if (isSSR) {
-        console.log(`JS: ${this.tagName} — SSR content detected, triggering hydration`);
-        // PyScript picks this up via the custom event, or the Python mount_app
-        // entry checks for data-basis-component and calls .hydrate() directly.
-        this.dispatchEvent(new CustomEvent('basis:hydrate', {
-          bubbles: true,
-          detail: { pyClassName, element: this }
-        }));
-        return;
-      }
-
-      // ── Fresh Mount (no SSR) ─────────────────────────────────────────────
+      // ── Fresh Mount ──────────────────────────────────────────────────────
       const init_template = document.createElement('template');
       init_template.innerHTML = this.config['__templatestr__'];
       
@@ -98,15 +86,6 @@ function CustomElementFactory(config) {
           const templateContent = init_template.content
           shadowRoot.appendChild(document.importNode(templateContent, true));
         }
-
-      }
-      else {
-        const shadowRoot = this.shadowRoot;
-
-        const templateContent = init_template.content
-        const fragment = templateContent.cloneNode(true); // cloneNode(true) is essential for deep cloning all children      
-        //shadowRoot.appendChild(document.importNode(templateContent, true));
-        //this.appendChild(document.importNode(templateContent, true));
 
       }
       

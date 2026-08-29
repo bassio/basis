@@ -29,21 +29,18 @@ class ThemePicker(RegistryManager):
         theme_store = self.S.get("theme")
         if theme_store is None:
             return
-        import asyncio
-        asyncio.ensure_future(theme_store.set_theme(theme_id))
+        # Client-side engine: synchronous local apply + cookie flush (no RPC).
+        theme_store.set_theme(theme_id)
 
     def button_label(self, info):
         return "Apply"
 
     def toggle_mode(self, event):
-        """Flip the color mode via the ``$theme.set_mode`` server action."""
+        """Flip the color mode via the ``$theme.set_mode`` dual-path method."""
         theme_store = self.S.get("theme")
         if theme_store is None:
             return
-        import asyncio
-        asyncio.ensure_future(
-            theme_store.set_mode("light" if getattr(theme_store, "dark_mode", False) else "dark")
-        )
+        theme_store.set_mode("light" if getattr(theme_store, "dark_mode", False) else "dark")
 
     def mode_label(self):
         store = self.S.get("theme")

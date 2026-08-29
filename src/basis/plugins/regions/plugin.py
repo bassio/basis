@@ -8,7 +8,7 @@ third-party plugin. It owns:
 - the ``$regions`` store (created in ``on_register``),
 - the region contribution API (``add_to_region`` / ``remove_from_region``,
   formerly app-level ``Basis`` methods),
-- the ``<ui-region>`` component (served to the client via ``static_dir``).
+- the ``<ui-region>`` component (served to the client via ``serving_dir``).
 """
 
 from pathlib import Path
@@ -110,8 +110,8 @@ class RegionsPlugin(BasisPlugin):
 # ``plugin`` variable that is a ``BasisPlugin`` instance).
 plugin = RegionsPlugin(
     prefix="",
-    static_dir=Path(__file__).parent,
-    static_mount="/basis/plugins/regions",
+    serving_dir=Path(__file__).parent,
+    serving_mount="/basis/plugins/regions",
     name="regions",
     tags=None,
 )

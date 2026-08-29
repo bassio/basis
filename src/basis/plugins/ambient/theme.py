@@ -60,5 +60,5 @@ definition = ThemeDefinition(
     ),
 )
 
-#: The module-level ``theme`` plugin instance (entry-point convention).
-theme = Theme(definition=definition)
+#: The module-level ``plugin`` instance (uniform entry-point convention).
+plugin = Theme(definition=definition)

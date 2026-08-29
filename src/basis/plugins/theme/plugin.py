@@ -11,7 +11,7 @@ entry point. It provides:
   the shared registry (``kind == "theme"``) that the theme manager renders,
 - the token schema (``ThemeDefinition`` / ``ThemeTokens``), the ``Theme``
   plugin base, and the built-in ``basis`` default theme,
-- the ``<ui-theme-provider>`` element (served to the client via ``static_dir``).
+- the ``<ui-theme-provider>`` element (served to the client via ``serving_dir``).
 
 The ``ui`` and ``shell`` plugins depend on it (``requires=["theme"]``); the
 default theme is a separate ``Theme`` entry point (``kind="theme"``) that rides
@@ -43,8 +43,8 @@ class ThemePlugin(BasisPlugin):
 
 plugin = ThemePlugin(
     prefix="",
-    static_dir=Path(__file__).parent,
-    static_mount="/basis/plugins/theme",
+    serving_dir=Path(__file__).parent,
+    serving_mount="/basis/plugins/theme",
     name="theme",
     tags=None,
     requires=[],

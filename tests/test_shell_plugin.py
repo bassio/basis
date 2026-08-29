@@ -74,7 +74,7 @@ def _render(app, root_component, entry_module):
 # Plugin registration + static serving.
 # ---------------------------------------------------------------------------
 
-def test_plugin_registers_and_serves_static_mount():
+def test_plugin_registers_and_serves_serving_mount():
     app = _app_with_shell()
 
     assert shell_plugin.name == "shell"

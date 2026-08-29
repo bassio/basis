@@ -121,6 +121,7 @@ class VFSRegistry:
             "actions.py",
             "errors.py",
             "errors_component.py",
+            "js_bridge.py",
         ]:
             stem = Path(f_name).stem
             target = stem + py_ext
@@ -142,6 +143,7 @@ class VFSRegistry:
             "context.py",
             "hmr.py",
             "hydration.py",
+            "js_component.py",
             "errors.py",
             "actions.py",
             "plugin.py",
@@ -460,23 +462,63 @@ class VFSRegistry:
                     f"and IDEs resolve the same import names."
                 )
 
-    def render_manifest(self, base_url: str, bootstrap: dict | None = None) -> dict:
+    def render_manifest(self, base_url: str, bootstrap: dict | None = None, js_modules: dict | None = None) -> dict:
         """Render the ``/pyscript.json`` payload for *base_url* (``{DOMAIN}`` → URL).
 
         *bootstrap* is the per-page ``basis.bootstrap`` section computed by
         :func:`basis.server.bootstrap.page_bootstrap` (``None`` for a bare
-        fetch). The ``basis.bootstrap`` key is always present (possibly empty) so
-        the client can rely on it.
+        fetch). *js_modules* is the ``{name: url}`` map for the page's
+        ``@js_component`` modules — injected as PyScript's ``js_modules.main`` so
+        the runtime preloads them at boot. The ``basis.bootstrap`` key is always
+        present (possibly empty) so the client can rely on it.
         """
         files = {"{DOMAIN}": base_url}
         for k, v in self.files.items():
             files[k.replace("{DOMAIN}", base_url)] = v
-        return {
+        manifest = {
             "files": files,
             "interpreter": "pyscript/pyodide/pyodide.mjs",
             "client_modules": self.client_modules,
             "basis": {"bootstrap": bootstrap or {}},
         }
+        if js_modules:
+            manifest["js_modules"] = {"main": dict(js_modules)}
+        return manifest
+
+
+def _add_mount_path(mount_paths: set[str], path) -> None:
+    """Normalise a route path into a mount prefix (skip the root ``/``)."""
+    if not path:
+        return
+    normalized = str(path).rstrip("/")
+    if normalized:
+        mount_paths.add(normalized + "/")
+
+
+def _warn_unserved_js_modules(app, js_modules: dict[str, str]) -> None:
+    """Warn loudly for ``@js_component`` modules whose URL isn't served by any
+    registered mount (a typo'd ``module=`` or a forgotten static mount). Only
+    real mounts count — component/plugin dirs (``_component_routes``) and
+    framework ``Mount`` routes — never plain page/route endpoints (a page at
+    ``/`` would otherwise make every URL look served). Files missing *inside* a
+    real mount aren't caught here; the client loader reports those at runtime."""
+    if not js_modules:
+        return
+    mount_paths: set[str] = set()
+    for route in getattr(app, "_component_routes", ()) or ():
+        _add_mount_path(mount_paths, getattr(route, "path", None))
+    from starlette.routing import Mount
+    for route in getattr(app, "routes", ()) or ():
+        if isinstance(route, Mount):
+            _add_mount_path(mount_paths, getattr(route, "path", None))
+    for name, url in js_modules.items():
+        path = url.split("?", 1)[0].split("#", 1)[0]
+        if not any(path.startswith(m) for m in mount_paths):
+            logger.warning(
+                f"⚠️  @js_component module {name!r} ({url}) is not served by any "
+                f"registered mount — check the module= URL (typo?) or that the "
+                f"file lives under a static/component mount."
+            )
 
 
 async def pyscript_json(request: Request):
@@ -485,9 +527,12 @@ async def pyscript_json(request: Request):
     Page-aware: ``?url=<route>`` selects a registered page whose page-specific
     bootstrap (``entrypoint``, ``page_stores``) is injected under
     ``basis.bootstrap`` alongside the app-global ``store_modules`` /
-    ``headless_modules``. Bare fetches (no ``?url=``) get app-global only.
+    ``headless_modules``, and whose ``@js_component`` modules are injected as
+    ``js_modules.main`` (preloaded by PyScript at boot). Bare fetches (no
+    ``?url=``) get app-global only (all registered js modules).
     """
-    from basis.server.bootstrap import page_bootstrap
+    from basis.server.bootstrap import page_bootstrap, page_js_modules
+    from basis.shared.js_component import JsComponentRegistry
 
     base_url = str(request.base_url).removesuffix("/")
     page_cls = None
@@ -495,5 +540,13 @@ async def pyscript_json(request: Request):
     if url is not None:
         page_cls = request.app._pages.get(url)
     bootstrap = page_bootstrap(request.app, page_cls)
-    return JSONResponse(request.app.vfs.render_manifest(base_url, bootstrap=bootstrap))
+    js_modules = (
+        page_js_modules(page_cls)
+        if page_cls is not None
+        else JsComponentRegistry.js_modules()
+    )
+    _warn_unserved_js_modules(request.app, js_modules)
+    return JSONResponse(
+        request.app.vfs.render_manifest(base_url, bootstrap=bootstrap, js_modules=js_modules)
+    )
 

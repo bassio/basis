@@ -41,14 +41,14 @@ class Theme(BasisPlugin):
         }
         super().__init__(**kwargs)
         # NOTE (isomorphism rule): a theme that ships css/fonts passes BOTH
-        # ``static_dir`` (its package dir) and ``static_mount`` = "/" + the
+        # ``serving_dir`` (its package dir) and ``serving_mount`` = "/" + the
         # package path (e.g. ``"/dracula_basis"``), so the client VFS name
         # equals the filesystem import name. Never derive the mount from the
         # id (``"/basis/themes/<id>"") — that breaks client imports.
-        if self.static_dir is not None and not plugin_kwargs.get("static_mount"):
-            # Default the mount to the top-level package of static_dir, the
+        if self.serving_dir is not None and not plugin_kwargs.get("serving_mount"):
+            # Default the mount to the top-level package of serving_dir, the
             # same derivation ``include_plugin`` validates against.
-            self.static_mount = "/" + _package_path(self.static_dir)
+            self.serving_mount = "/" + _package_path(self.serving_dir)
 
 
 def _package_path(dir_path) -> str:

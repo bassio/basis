@@ -2,7 +2,7 @@
 
 Formerly the framework-core ``basis.ui`` package, mounted unconditionally at
 ``/basis/ui/`` by ``bootstrap``. Now a plugin: it self-serves its component
-files to the client (via ``static_dir`` / ``static_mount``) and is registered
+files to the client (via ``serving_dir`` / ``serving_mount``) and is registered
 through the standard ``basis.plugins`` entry point, exactly like any
 third-party plugin — so apps can also opt out of the component library by
 excluding the ``ui`` plugin.
@@ -41,8 +41,8 @@ class UiPlugin(BasisPlugin):
 # ``plugin`` variable that is a ``BasisPlugin`` instance).
 plugin = UiPlugin(
     prefix="",
-    static_dir=Path(__file__).parent,
-    static_mount="/basis/plugins/ui",
+    serving_dir=Path(__file__).parent,
+    serving_mount="/basis/plugins/ui",
     name="ui",
     tags=None,
     requires=["theme"],

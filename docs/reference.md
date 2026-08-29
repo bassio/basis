@@ -24,6 +24,10 @@ Lookup-oriented documentation for the framework's core APIs and catalogues. For 
 - **[CLI Tooling](08_appendix/cli.md)** — Scaffold projects with `basis init`, run dev servers with `basis dev`, and inspect plugins with `basis plugin list`.
 - **[Codebase Structure](08_appendix/codebase-structure.md)** — Core directories, modules, and architecture layout of the Basis repository.
 
+## JavaScript Interop
+
+- **[Wrapping JS Libraries with `@js_component`](04_components/js-components.md)** — The `@js_component` decorator, `JsComponent` base, the lazy/preloaded module loader, and the proxied bridge.
+
 ---
 
 *Part of the **API Reference** track. See also [Tutorial](tutorial.md), [Concepts](concepts.md), and [Advanced Guide](advanced.md).*

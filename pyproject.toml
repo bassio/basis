@@ -22,9 +22,12 @@ basis = "basis.cli.main:app"
 # package also imports a submodule named ``plugin``, which would shadow the
 # instance attribute if resolved as ``...regions:plugin``.
 [project.entry-points."basis.plugins"]
+ambient = "basis.plugins.ambient.theme:plugin"
 regions = "basis.plugins.regions.plugin:plugin"
-ui = "basis.plugins.ui.plugin:plugin"
 shell = "basis.plugins.shell.plugin:plugin"
+theme = "basis.plugins.theme.plugin:plugin"
+theme-basis = "basis.plugins.theme.default_theme:plugin"
+ui = "basis.plugins.ui.plugin:plugin"
 
 [project.optional-dependencies]
 db = [

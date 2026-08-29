@@ -234,7 +234,7 @@ def test_demo_plugin_contributes_region_view(tmp_path):
     generate(_canonical_app(), tmp_path)
     plugin = (tmp_path / "src/myapp/plugins/demo.py").read_text()
     assert "BasisPlugin(" in plugin
-    assert 'static_mount="/myapp/plugins"' in plugin
+    assert 'serving_mount="/myapp/plugins"' in plugin
     assert 'plugin.add_to_region("workspace-center", DemoView)' in plugin
     frame = (tmp_path / "src/myapp/components/app_container.py").read_text()
     assert '<ui-region name="workspace-center">' in frame

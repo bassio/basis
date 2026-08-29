@@ -450,10 +450,10 @@ Theming is provided by the official **`basis.plugins.theme`** plugin — the tok
 
 ```python
 theme.active_theme = "basis"          # currently applied theme id
-# server actions (authoritative new_state + cookie):
-await theme.set_theme("basis")        # resolve + apply a theme by id
-await theme.set_mode("dark")          # "light" | "dark"
-await theme.set_accent("#e63946")     # accent override layered on the theme
+# dual-path methods (client: local apply + cookie flush; server: apply + cookie):
+theme.set_theme("basis")        # resolve + apply a theme by id
+theme.set_mode("dark")          # "light" | "dark"
+theme.set_accent("#e63946")     # accent override layered on the theme
 ```
 
 The **installed themes** live on the sibling **`$themes`** catalog store (a `kind`-filtered slice of the shared registry — see [Theme Manager](#24-theme-manager-ui-theme-picker)).

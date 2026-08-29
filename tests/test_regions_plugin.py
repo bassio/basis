@@ -51,7 +51,7 @@ def test_regions_plugin_discoverable_via_entry_point():
     regions = next((p for p in plugins if p.name == "regions"), None)
     assert regions is not None, "regions entry point not discovered"
     assert isinstance(regions, RegionsPlugin)
-    assert regions.static_mount == "/basis/plugins/regions"
+    assert regions.serving_mount == "/basis/plugins/regions"
 
 
 def test_bootstrap_registers_regions_plugin_and_wires_store():
@@ -91,12 +91,12 @@ def test_regions_plugin_is_framework_essential_non_disableable():
     assert app._plugin_registrations["regions"].disposed is True
 
 
-def test_regions_plugin_static_mount_is_isomorphic(caplog):
+def test_regions_plugin_serving_mount_is_isomorphic(caplog):
     app = Basis()
     app.bootstrap()
     client = TestClient(app)
-    # The plugin's static dir is served at /basis/plugins/regions and the
-    # isomorphism guard (static_mount == package path) did not warn.
+    # The plugin's serving dir is served at /basis/plugins/regions and the
+    # isomorphism guard (serving_mount == package path) did not warn.
     resp = client.get("/basis/plugins/regions/plugin.py")
     assert resp.status_code == 200
     assert "isomorphism" not in caplog.text.lower()

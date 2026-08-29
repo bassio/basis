@@ -87,15 +87,15 @@ class BasisPlugin(ModelRegistryMixin):
         self,
         *,
         prefix: str,
-        static_dir: Any = None,
-        static_mount: str | None = None,
+        serving_dir: Any = None,
+        serving_mount: str | None = None,
         name: str | None = None,
         tags: list[str] | None = None,
         requires: list[str] | None = None,
     ):
         self.prefix = prefix.rstrip("/")
-        self.static_dir = static_dir
-        self.static_mount = static_mount or self.prefix
+        self.serving_dir = serving_dir
+        self.serving_mount = serving_mount or self.prefix
         self.name = _resolve_plugin_name(name, self.prefix)
         self.requires = requires or []
         self.models = set()
