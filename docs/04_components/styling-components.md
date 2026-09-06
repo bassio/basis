@@ -81,7 +81,7 @@ Set a variable inline on the tag — the standard Custom Element idiom:
 
 ### Reactive theming with `ThemeStore`
 
-For **runtime** theming — light/dark mode, a user-selected accent color — use the reactive [`ThemeStore`](ui-components.md#themestore-basisuitheme). It holds the same tokens as reactive state, and a `<ui-theme-provider>` injects them as CSS variables:
+For **runtime** theming — light/dark mode, a user-selected accent color — use the reactive [`ThemeStore`](ui-components.md#themestore-basispluginstheme). It holds the same tokens as reactive state, and a `<ui-theme-provider>` injects them as CSS variables:
 
 ```python
 from basis.plugins.theme import ThemeStore, ThemeProvider
@@ -96,7 +96,7 @@ theme.accent_color = "light-dark(#6E5FD8, #9384F5)"
 Changing a token at runtime re-renders just the DOM that depends on it — the same reactivity engine as component state.
 
 > [!TIP]
-> The full token set — `bg_*`, `text_*`, `accent_*`, `border_*`, `radius_*`, `shadow_*`, `font_*` — is documented in the [Built-in UI Suite](ui-components.md#themestore-basisuitheme).
+> The full token set — `bg_*`, `text_*`, `accent_*`, `border_*`, `radius_*`, `shadow_*`, `font_*` — is documented in the [Built-in UI Suite](ui-components.md#themestore-basispluginstheme).
 
 ---
 

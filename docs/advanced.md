@@ -10,6 +10,10 @@ Deep dives into how Basis works under the hood, and how to get the most out of t
 - **[SSR & Client Hydration](05_reactivity/ssr-hydration.md)** — The single canonical hydration model, the canonical tree, hydration markers and text ordinals, the matching pipeline, diagnostics, and the fallback re-render.
 - **[Importing Components & the Isomorphism Principle](04_components/importing-components.md)** — Why every import name is identical on the server, in the client VFS, and in your IDE, and how conventional directories are auto-discovered without breaking that invariant.
 
+## The Component Lifecycle
+
+- **[The Component Lifecycle](04_components/component-lifecycle.md)** — The three hooks (`on_mounted` / `on_hydrated` / `on_unmounted`), the one unmount verb (`destroy()`), hide vs unmount, the `basis:connected` / `basis:disconnected` DOM signals, JS-component boot mapping, and plugin ↔ component parity.
+
 ## Templates & Scoping
 
 - **[Scoping in Loops](04_components/loop-scope.md)** — Who owns the loop body? The parent-scope-plus-loop-variable mental model, the verified behaviour for plain-element vs custom-element loop children, event ownership, and the silent-staleness footgun.

@@ -16,7 +16,7 @@ from basis.shared.element import Element
 from basis.shared.reactive import (
     ComputedNode,
     EffectNode,
-    _dirty_effects,
+    _wake_list,
     derived,
 )
 from basis.shared.store import Store
@@ -29,9 +29,9 @@ def _clean_state():
     Store._store_blueprints.clear()
     BaseComponent._instance_registry.clear()
     BaseComponent._pending_subscriptions.clear()
-    _dirty_effects.clear()
+    _wake_list.clear()
     yield
-    _dirty_effects.clear()
+    _wake_list.clear()
 
 
 def _mount(cls, **attrs):

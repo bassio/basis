@@ -496,7 +496,8 @@ reactively (no component state of its own).
 `<ui-theme-picker>` and `<ui-plugin-manager>` share a common base — [`RegistryManager`](https://github.com/bassio/basis) —
 rendering reactive rows over a `$registry.items` projection (one row chrome, one action dispatch;
 the faces differ only by a `kind` filter and their row action). Themes are `BasisPlugin` subclasses
-with `kind="theme"`, so they never appear in the plugin manager (ROADMAP-THEMING.md §6.5).
+with `kind="theme"`, so they never appear in the plugin manager — they are managed separately
+under the `basis theme` CLI instead (see [CLI Tooling](../08_appendix/cli.md)).
 
 ---
 

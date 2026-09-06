@@ -1,16 +1,18 @@
-"""
-``basis theme`` — Theme package commands (ROADMAP-THEMING.md §8 P4).
+"""``basis theme`` — theme package commands, contributed by the theme plugin.
+
+The lazy CLI-discovery convention (CLI-EXTENSIBILITY.md): a plugin ships a
+``cli/`` subpackage exposing a module-level ``cli`` ``typer.Typer``; the CLI
+mounts it as ``basis <plugin-name>`` with import-on-first-use. This module is the
+``theme`` plugin's contribution — previously hardcoded in ``basis.cli.commands.theme``.
 
 Sub-commands::
 
     basis theme list     — Show installed theme packages (kind == "theme")
     basis theme apply    — Resolve + validate a theme by id (loud errors)
 
-Themes are packages (``Theme(BasisPlugin)``, ``kind == "theme"``) discovered
-through the standard ``basis.plugins`` entry points — the same list the theme
-manager renders from ``$themes``.
+CLI-only: this module imports ``typer`` and server discovery and is never
+imported by the client (nothing in the app references ``basis.plugins.theme.cli``).
 """
-
 from __future__ import annotations
 
 import typer
@@ -20,9 +22,13 @@ from rich import box
 
 console = Console()
 
-theme_app = typer.Typer(
+# Read import-free by CLI discovery (CLI-EXTENSIBILITY.md §6.11) so that
+# `basis --help` shows the real description without importing this module.
+help = "🎨 Manage Basis themes."
+
+cli = typer.Typer(
     name="theme",
-    help="🎨 Manage Basis themes.",
+    help=help,
     no_args_is_help=True,
     rich_markup_mode="rich",
 )
@@ -44,7 +50,7 @@ def _modes(definition) -> list[str]:
     return ["light", "dark"] if scheme in ("auto", "system") else [scheme]
 
 
-@theme_app.command("list")
+@cli.command("list")
 def theme_list():
     """Show all installed theme packages (kind == \"theme\")."""
     themes = _discover_themes()
@@ -82,7 +88,7 @@ def theme_list():
     )
 
 
-@theme_app.command("apply")
+@cli.command("apply")
 def theme_apply(
     theme_id: str = typer.Argument(
         ...,

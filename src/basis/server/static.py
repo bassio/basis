@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import marshal
 import os
@@ -8,6 +9,45 @@ from starlette.responses import Response, FileResponse
 from starlette.types import Scope, Receive, Send
 
 from basis.server.ast_utils import strip_server_actions
+
+
+def _content_etag(data: bytes) -> str:
+    """A strong validator over a response body: a quoted content hash."""
+    return '"' + hashlib.sha256(data).hexdigest() + '"'
+
+
+def _if_none_match(scope, if_none_match: str | None) -> str | None:
+    """The client's ``If-None-Match`` value, if any (scope headers or explicit)."""
+    if if_none_match is not None:
+        return if_none_match
+    headers = (scope or {}).get("headers") or ()
+    for name, value in headers:
+        if name.lower() == b"if-none-match":
+            return value.decode("latin-1")
+    return None
+
+
+def conditional_response(body: bytes, media_type: str, *,
+                         scope=None,
+                         if_none_match: str | None = None,
+                         headers: dict | None = None) -> Response:
+    """Build a revalidate-able response: strong content-hash ``ETag`` +
+    ``Cache-Control: no-cache`` so the browser revalidates (304) instead of
+    re-downloading on every visit, while a content change still gets a fresh
+    200 — correct under HMR / plugin toggles / per-page manifests (no
+    time-based staleness).
+    """
+    etag = _content_etag(body)
+    inm = _if_none_match(scope, if_none_match)
+    if inm is not None and etag in [e.strip() for e in inm.split(",")]:
+        response: Response = Response(status_code=304)
+    else:
+        response = Response(body, media_type=media_type)
+    response.headers["etag"] = etag
+    response.headers["cache-control"] = "no-cache"
+    for key, value in (headers or {}).items():
+        response.headers[key] = value
+    return response
 
 
 def compile_to_pyc_bytes(source_code: str, filename: str = "<string>") -> bytes:
@@ -49,7 +89,11 @@ class BasisStaticFiles(StaticFiles):
         if path in self._synthetic:
             full_path, _ = self.lookup_path(path)
             if not (full_path and os.path.isfile(full_path)):
-                return Response(self._synthetic[path], media_type="text/x-python")
+                return conditional_response(
+                    self._synthetic[path].encode("utf-8"),
+                    "text/x-python",
+                    scope=scope,
+                )
 
         # Get the standard response first
         response = await super().get_response(path, scope)
@@ -65,7 +109,11 @@ class BasisStaticFiles(StaticFiles):
                 if full_path in self._cache:
                     cached_mtime, cached_content = self._cache[full_path]
                     if cached_mtime == mtime:
-                        return Response(cached_content, media_type="text/x-python")
+                        return conditional_response(
+                            cached_content.encode("utf-8"),
+                            "text/x-python",
+                            scope=scope,
+                        )
                 
                 # Read and transform
                 try:
@@ -73,8 +121,12 @@ class BasisStaticFiles(StaticFiles):
                     
                     # Update cache
                     self._cache[full_path] = (mtime, transformed)
-                    
-                    return Response(transformed, media_type="text/x-python")
+
+                    return conditional_response(
+                        transformed.encode("utf-8"),
+                        "text/x-python",
+                        scope=scope,
+                    )
                 
                 except Exception:
                     # Fallback to original response if transformation fails
@@ -108,8 +160,10 @@ class BasisStaticFilesPyc(BasisStaticFiles):
                     except Exception:
                         pass
                     else:
-                        return Response(
-                            pyc_bytes, media_type="application/x-bytecode.python"
+                        return conditional_response(
+                            pyc_bytes,
+                            "application/x-bytecode.python",
+                            scope=scope,
                         )
             full_path, _ = self.lookup_path(py_path)
 
@@ -119,13 +173,21 @@ class BasisStaticFilesPyc(BasisStaticFiles):
                 if full_path in self._cache_pyc:
                     cached_mtime, cached_bytes = self._cache_pyc[full_path]
                     if cached_mtime == mtime:
-                        return Response(cached_bytes, media_type="application/x-bytecode.python")
+                        return conditional_response(
+                            cached_bytes,
+                            "application/x-bytecode.python",
+                            scope=scope,
+                        )
 
                 try:
                     transformed = self.get_transformed_py_source(full_path)
                     pyc_bytes = compile_to_pyc_bytes(transformed, filename=full_path)
                     self._cache_pyc[full_path] = (mtime, pyc_bytes)
-                    return Response(pyc_bytes, media_type="application/x-bytecode.python")
+                    return conditional_response(
+                        pyc_bytes,
+                        "application/x-bytecode.python",
+                        scope=scope,
+                    )
                 except Exception:
                     # If bytecode compilation fails, fallback to super class handling
                     pass

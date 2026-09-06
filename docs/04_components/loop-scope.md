@@ -139,6 +139,6 @@ target's `data-*` attributes (the canonical idiom above), not from `self`.
   attributes only; slot content inside a loop remains unbound (footgun #2).
   Parent fields in a plain-element loop body stay live (owner-bound).
 
-*See also [Components](tutorial.md#2-components), [Importing Components &
+*See also [Components](../tutorial.md#2-components), [Importing Components &
 the Isomorphism Principle](importing-components.md), and [SSR & Client
 Hydration](../05_reactivity/ssr-hydration.md).*

@@ -16,7 +16,7 @@ from basis.shared.reactive import (
     DependencyGraph,
     ReactiveObject,
     ReactiveScope,
-    _dirty_effects,
+    _wake_list,
 )
 from basis.shared.store import Store
 
@@ -28,9 +28,9 @@ def _clean_state():
     Store._store_blueprints.clear()
     BaseComponent._instance_registry.clear()
     BaseComponent._pending_subscriptions.clear()
-    _dirty_effects.clear()
+    _wake_list.clear()
     yield
-    _dirty_effects.clear()
+    _wake_list.clear()
 
 
 def _mount(cls, **attrs):
@@ -129,13 +129,18 @@ def test_remove_node_computed_detaches_from_its_deps():
     assert "x" in graph.nodes  # the state node remains
 
 
-def test_remove_node_discards_from_dirty_effects():
+def test_remove_node_drops_enqueued_effect_from_pending():
+    """Removing a node that has pending work drops it from its graph's pending
+    queue and the module wake-list (owner-scoped teardown, I2)."""
     graph = DependencyGraph()
     graph.add_effect("e", lambda: None, ["x"])
     node = graph.nodes["e"]
-    _dirty_effects.add(node)
+    node.mark_stale()  # enqueue (no drain yet)
+    assert node in graph._pending
+    assert graph in _wake_list.values()
     graph.remove_node("e")
-    assert node not in _dirty_effects
+    assert node not in graph._pending
+    assert graph not in _wake_list.values()
 
 
 def test_remove_node_missing_is_noop():

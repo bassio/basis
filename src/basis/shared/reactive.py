@@ -1,5 +1,6 @@
 import contextlib
 import inspect
+import itertools
 import weakref
 from typing import Callable, Set, Dict, List, Any
 
@@ -46,9 +47,34 @@ class ReactiveNode:
 # against the innermost tracker. Empty in the common path (zero overhead).
 _tracker_stack: List[ReactiveNode] = []
 
-# Effects marked stale but not yet flushed. Cross-object edges mark dependents
-# on OTHER objects' graphs, so a trigger on any graph flushes them all.
-_dirty_effects = set()
+# ──────────────────────────────────────────────
+# Scheduler — owner-scoped pending queues (HYDRATION-REPOINT-RACE-FIX-PLAN.md §5)
+# ──────────────────────────────────────────────
+
+# Monotonic creation ordinal. The deterministic flush policy drains graphs in
+# ascending creation order, so a store/ancestor graph's effects run before its
+# consumers/descendants — correct for the framework's parent→child /
+# store→component data flow. Stable across runs and processes.
+_graph_orders = itertools.count()
+
+# Module wake-list: graphs that currently have pending effects, keyed by the
+# graph's creation ordinal. This is the ONLY module-global scheduler state —
+# coarse-grained (one entry per dirty graph, NOT per effect). The effects
+# themselves live on their owning graph's ``_pending`` queue, so a scope can
+# drain / discard only its own work.
+_wake_list = {}  # int (graph._order) -> DependencyGraph
+
+# Re-entrancy guard: a trigger fired from INSIDE an effect must not start a
+# nested drain (which would re-sort mid-flush); it only enqueues, and the outer
+# wave-based drain picks the work up in its next pass.
+_flush_depth = 0
+
+# Batch depth: while > 0 (inside ``batch()``) flushes are HELD — triggers only
+# enqueue onto their owner graphs. The outermost batch exit drains to
+# quiescence or, if ``discard()`` was requested, drops all pending effects
+# instead — the "SSR DOM is authoritative" hydration boundary (I7).
+_batch_depth = 0
+_batch_discard = False
 
 
 class _TrackingProbe(ReactiveNode):
@@ -207,6 +233,9 @@ class EffectNode(ReactiveNode):
     def __init__(self, name: str, update_func: Callable):
         super().__init__(name)
         self.update_func = update_func
+        #: The DependencyGraph that owns this effect (set by add_effect). Pending
+        #  work is queued on the OWNER graph, not a global bag (I2 ownership).
+        self.owner_graph: 'DependencyGraph | None' = None
 
     def update(self):
         if self.stale:
@@ -220,7 +249,8 @@ class EffectNode(ReactiveNode):
     def mark_stale(self):
         if not self.stale:
             self.stale = True
-            _dirty_effects.add(self)
+            if self.owner_graph is not None:
+                self.owner_graph._enqueue_effect(self)
             for dependent in self.dependents:
                 dependent.mark_stale()
 
@@ -234,6 +264,24 @@ class DependencyGraph:
         self.nodes: Dict[str, ReactiveNode] = {}
         self.effects: List[EffectNode] = []
         self._wildcard_effects: List[EffectNode] = []
+        #: THIS graph's own stale-but-unflushed effects, in enqueue order.
+        #  Ownership (I2): pending work is attributable to exactly one graph.
+        self._pending: 'Dict[EffectNode, None]' = {}
+        #: Creation ordinal — deterministic flush order (older graphs first).
+        self._order: int = next(_graph_orders)
+
+    def _enqueue_effect(self, effect: 'EffectNode'):
+        """Add a stale effect to this graph's pending queue (idempotent per
+        enqueue — mark_stale already guards on the stale flag) and register the
+        graph on the module wake-list so any graph's trigger drains it."""
+        if effect not in self._pending:
+            self._pending[effect] = None
+            _wake_list[self._order] = self
+
+    def pending_effects(self) -> list:
+        """The graph's currently pending (stale, unflushed) effects, in enqueue
+        order. Read-only introspection for tests / tooling."""
+        return list(self._pending)
 
     def get_or_create_state(self, name: str) -> StateNode:
         if name not in self.nodes:
@@ -268,6 +316,7 @@ class DependencyGraph:
 
     def add_effect(self, name: str, update_func: Callable, dependencies: List[str]):
         node = EffectNode(name, update_func)
+        node.owner_graph = self  # ownership: pending work queues onto THIS graph
         node.stale = False  # start clean; becomes stale only when a dependency triggers
         self.nodes[name] = node
         self.effects.append(node)
@@ -279,6 +328,7 @@ class DependencyGraph:
     def add_wildcard_effect(self, name: str, update_func: Callable):
         """Register an effect that depends on ALL current and future state/computed nodes."""
         node = EffectNode(name, update_func)
+        node.owner_graph = self
         node.stale = False  # start clean; becomes stale only when a dependency triggers
         self.nodes[name] = node
         self.effects.append(node)
@@ -296,7 +346,9 @@ class DependencyGraph:
         if node and node in self._wildcard_effects:
             self._wildcard_effects.remove(node)
         if node:
-            _dirty_effects.discard(node)
+            self._pending.pop(node, None)
+            if not self._pending:
+                _wake_list.pop(self._order, None)
 
     def remove_node(self, name: str):
         """Remove any node (state, computed, or effect) by name, detaching it
@@ -312,7 +364,9 @@ class DependencyGraph:
             self.effects.remove(node)
         if node in self._wildcard_effects:
             self._wildcard_effects.remove(node)
-        _dirty_effects.discard(node)
+        self._pending.pop(node, None)
+        if not self._pending:
+            _wake_list.pop(self._order, None)
 
     def trigger(self, name: str):
         if name in self.nodes:
@@ -332,12 +386,107 @@ class DependencyGraph:
         self.process_updates()
 
     def process_updates(self):
-        """Flush stale effects across ALL objects' graphs. Cross-object edges
-        mark dependents on other objects, so a trigger on any graph drains the
-        shared dirty queue (each effect runs at most once per flush)."""
-        while _dirty_effects:
-            effect = _dirty_effects.pop()
-            effect.update()
+        """Flush stale effects across ALL graphs (drain to quiescence).
+
+        Delegates to the module-level ``_drain_pending`` (graphs drained in
+        ascending creation order, waves, at-most-once per wave). Inside a
+        ``batch()`` this is a no-op — flushes are held until the outermost
+        batch exit, which drains (or discards, I7).
+        """
+        if _batch_depth:
+            return  # held by batch(); the outermost exit drains or discards
+        _drain_pending()
+
+
+# ──────────────────────────────────────────────
+# Batching & flush boundaries (HYDRATION-REPOINT-RACE-FIX-PLAN.md §5 — I7)
+# ──────────────────────────────────────────────
+
+def _drain_pending():
+    """Drain every graph with pending effects to quiescence.
+
+    Graphs run in ascending creation order (older = stores/ancestors first),
+    each graph's pending effects once each in enqueue order (waves, I3); an
+    effect re-dirtied while draining is re-run in a later wave (I5). Nested
+    triggers fired from inside an effect only enqueue — this is the sole drain.
+    """
+    global _flush_depth
+    if _flush_depth or not _wake_list:
+        return
+    _flush_depth += 1
+    try:
+        while _wake_list:
+            graphs = sorted(_wake_list.values(), key=lambda g: g._order)
+            _wake_list.clear()
+            for graph in graphs:
+                while graph._pending:
+                    effect = next(iter(graph._pending))
+                    del graph._pending[effect]
+                    # The effect may have been removed/replaced (teardown, HMR
+                    # re-registration) between enqueue and now.
+                    if graph.nodes.get(effect.name) is not effect:
+                        continue
+                    effect.update()
+    finally:
+        _flush_depth -= 1
+
+
+def _drop_all_pending():
+    """Discard (without running) every effect currently pending, resetting each
+    dropped effect's stale flag so a FUTURE real change re-runs it. Used at the
+    SSR-hydration boundary: the SSR DOM is authoritative, so shadow-mount work
+    is dropped, not applied."""
+    for graph in list(_wake_list.values()):
+        for effect in graph._pending:
+            effect.stale = False
+        graph._pending.clear()
+    _wake_list.clear()
+
+
+class ReactiveBatch:
+    """Context manager that HOLDS all effect flushes for the duration of the
+    block, then on the OUTERMOST exit either drains to quiescence or — if
+    ``.discard()`` was requested — drops all pending effects instead (I7).
+
+    Used by SSR hydration (P4): the shadow mount + re-point run inside a batch
+    so no effect can write to a live SSR node mid-adoption; ``discard()`` makes
+    the exit drop pre-adoption work rather than flushing it.
+    """
+
+    def __enter__(self):
+        global _batch_depth
+        _batch_depth += 1
+        return self
+
+    def discard(self):
+        """Request that this batch DISCARDS all pending effects on exit instead
+        of flushing them (SSR-authoritative semantics)."""
+        global _batch_discard
+        _batch_discard = True
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        global _batch_depth, _batch_discard
+        _batch_depth -= 1
+        if _batch_depth <= 0:
+            _batch_depth = 0
+            try:
+                if _batch_discard:
+                    _drop_all_pending()
+                else:
+                    _drain_pending()
+            finally:
+                _batch_discard = False
+        return False
+
+
+def batch() -> ReactiveBatch:
+    """Hold effect flushes until the block exits, then drain to quiescence — or,
+    if ``.discard()`` was requested, drop all pending instead.
+
+    The synchronous SSR-hydration boundary primitive: works on the plain-Python
+    server too (no event loop / microtask dependency).
+    """
+    return ReactiveBatch()
 
 
 # ──────────────────────────────────────────────
@@ -380,6 +529,38 @@ class ReactiveScope:
         """Record an effect created elsewhere (e.g. a subscription edge on a
         target's graph) so ``destroy()`` removes it from that graph."""
         self._effects.append((graph, name))
+
+    # ── pending / discard — owner-scoped flush boundary (I2/I7, P3) ──
+
+    def pending_count(self) -> int:
+        """How many effects this scope owns are currently pending (unflushed)."""
+        count = 0
+        for graph, name in self._effects:
+            node = graph.nodes.get(name)
+            if node is not None and node in graph._pending:
+                count += 1
+        return count
+
+    def has_pending(self) -> bool:
+        return self.pending_count() > 0
+
+    def discard_pending(self) -> int:
+        """Drop (without running) every effect this scope owns that is currently
+        pending, resetting each dropped effect's stale flag so a future real
+        change re-runs it. Returns the number dropped. The owner-scoped half of
+        the I7 hydration boundary: call inside ``batch()`` to drop one subtree's
+        pre-adoption work without touching other scopes' pending effects."""
+        dropped = 0
+        for graph, name in self._effects:
+            node = graph.nodes.get(name)
+            if node is not None and node in graph._pending:
+                del graph._pending[node]
+                node.stale = False
+                dropped += 1
+        for graph, _name in self._effects:
+            if not graph._pending:
+                _wake_list.pop(graph._order, None)
+        return dropped
 
     def destroy(self):
         """Tear down every owned resource (recursively) and detach from the

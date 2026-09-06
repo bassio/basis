@@ -2,8 +2,39 @@ import json
 import warnings
 
 from basis.shared.component import Component
-from basis.shared.element import Element, DocumentType
+from basis.shared.element import Element, ElementString, DocumentType
 from basis.shared.store import Store, attach_app_to_store, FRAMEWORK_STORE_NAMES
+from basis.shared.serialization import json_dumps_script_safe
+
+#: M1.1 (ROADMAP-MOBILE.md) — framework mobile viewport base CSS.
+#:
+#: Document-level rules only. Component styles live in shadow roots and can
+#: never reach ``html``/``body``, so the handful of page-level mobile rules ship
+#: as a light-DOM ``<style id="basis-viewport">`` injected into ``<head>`` by
+#: :meth:`Page.render` (both SSR and CSR end there). The block is deliberately
+#: neutral and theme-agnostic — safe for the fixed-viewport workbench *and* the
+#: document-flow site paradigm.
+#:
+#: It is NOT inlined in ``Page.template()``: text inside a raw-text
+#: ``<style>``/``<script>`` is binding-parsed (the page already resolves
+#: ``{initial_state_json}`` inside a ``<script>``), so CSS braces would be
+#: misread as ``{expr}`` fields. (The theme provider sidesteps the same hazard
+#: by binding ``tokens_css`` through a ``text-content`` attribute instead of
+#: inlining the CSS.) Constructing the element here with a literal
+#: ``ElementString`` bypasses template analysis entirely.
+_VIEWPORT_BASE_CSS = """\
+/* basis mobile viewport base (M1.1) — neutral, theme-agnostic */
+html {
+    /* iOS: prevent auto font-inflation on rotate/zoom; ``100%`` (not ``none``)
+       still lets the user zoom manually. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+}
+button, a, input, select, textarea, [role="button"] {
+    /* no double-tap zoom, no legacy 300ms tap delay on interactive controls */
+    touch-action: manipulation;
+}
+"""
 
 #: True while the framework's render pipeline (``render_page`` /
 #: ``PageResponse.from_page``) runs, so ``Page.load()`` / ``Page.render()`` do
@@ -71,6 +102,16 @@ class Page(Component):
     pyscript_json_url: str = "/pyscript.json"
     initial_state_json: str = "{}"
     render_mode: str = "csr"
+    # Mobile viewport policy (ROADMAP-MOBILE.md M1.1). The default is the
+    # mobile-correct layout viewport: ``viewport-fit=cover`` opts into
+    # ``env(safe-area-inset-*)`` on notched devices, and
+    # ``interactive-widget=resizes-content`` makes the on-screen keyboard resize
+    # the layout instead of covering it. Override on a ``Page`` subclass to opt
+    # out (e.g. ``interactive-widget=resizes-visual`` for a full-screen reader).
+    viewport: str = (
+        "width=device-width, initial-scale=1.0, viewport-fit=cover, "
+        "interactive-widget=resizes-content"
+    )
     root_component = None
     stores = []
     # Stylesheet URLs appended to the END of <body> — i.e. AFTER the SSR root
@@ -108,7 +149,8 @@ class Page(Component):
                       "pyscript_src": cls.pyscript_src,
                       "pyscript_json_url": cls.pyscript_json_url,
                       "initial_state_json": cls.initial_state_json,
-                      "render_mode": cls.render_mode}
+                      "render_mode": cls.render_mode,
+                      "viewport": cls.viewport}
 
         page_instance = cls.mount(container, replace=False, **attributes)
         page_instance.__element__ = container.children[0]
@@ -128,7 +170,7 @@ class Page(Component):
 <html>
     <head>
         <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="viewport" content="{viewport}" />
         <meta name="basis-render-mode" content="{render_mode}" />
         <title>{title}</title>
 
@@ -136,7 +178,10 @@ class Page(Component):
         <link rel="stylesheet" href="{pyscript_src}/core.css" />
         <script type="module" src="{pyscript_src}/core.js" onload="window.pyscript = this.module;"></script>
         
-        <script src="./basis/client/component.js"></script>
+        <!-- Root-absolute (not ./basis/...): the script is resolved against the
+             document URL, so a relative path would break on nested routes
+             (e.g. /docs/{path} → /docs/basis/client/component.js → 404). -->
+        <script src="/basis/client/component.js"></script>
 
         <!-- PyScript entry point: mounts/hydrates the application -->
         <script type="py" src="{entry_module}" config="{pyscript_json_url}"></script>
@@ -216,7 +261,16 @@ class Page(Component):
                         pass
                 initial_state[name] = instance.serialize()
             if initial_state:
-                initial_state_json = json.dumps(initial_state)
+                # Script-safe JSON for embedding in <script type="application/json">.
+                # The page template HTML-escapes the interpolated value (text
+                # escaping turns `&` into `&amp;`), but script content is NOT
+                # entity-decoded by the browser — so the client's
+                # json.loads(textContent) would hydrate the ESCAPED string
+                # (e.g. `&amp;` instead of `&`). json_dumps_script_safe escapes
+                # `<`, `>` and `&` as \uXXXX sequences: they survive template
+                # escaping unchanged, `</script>` can't break out, and
+                # json.loads decodes them back to the original characters.
+                initial_state_json = json_dumps_script_safe(initial_state)
 
         self.initial_state_json = initial_state_json
 
@@ -233,6 +287,19 @@ class Page(Component):
 
         if head_node:
             from basis.shared.element import Element
+
+            # 2b. M1.1 — framework mobile viewport base CSS. Document-level
+            # rules (component styles live in shadow roots and can't reach
+            # html/body). Injected here so it appears in BOTH SSR and CSR pages
+            # (both engines end in Page.render) and stays out of the
+            # binding-analyzed template (see _VIEWPORT_BASE_CSS above).
+            head_node.appendChild(
+                Element(
+                    "style",
+                    {"id": "basis-viewport"},
+                    [ElementString(_VIEWPORT_BASE_CSS)],
+                )
+            )
 
             # 2c. Dev-mode marker read by client tooling (e.g. the error
             # overlay).  Mirrors the HMR dev affordance: `basis dev --hmr`

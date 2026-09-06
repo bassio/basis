@@ -216,7 +216,7 @@ class ErrorOverlay(Component):
 
     def template(self):
         """
-        <div class="basis-error-overlay">
+        <div class="basis-error-overlay" if="{items}">
             <div class="basis-error-header" onclick="{toggle_panel}">
                 <span class="basis-error-title">⚠ Basis errors</span>
                 <span class="basis-error-count">{len(items)}</span>

@@ -1,5 +1,28 @@
+import html
+import re
+
 from dataclasses import dataclass, field
 voids = {'area', 'base', 'br', 'col', 'command', 'embed', 'hr', 'img', 'input', 'keygen', 'link', 'meta', 'param', 'source', 'track', 'wbr', '!doctype'}
+
+#: Raw-text elements (HTML spec): their content is literal raw text — no
+#: character references, no tags; only the matching closing tag terminates it.
+#: Entity-escaping their text (e.g. ``&`` → ``&amp;``) corrupts the content,
+#: because the browser does NOT decode entities inside them. Contrast
+#: ``<textarea>``/``<title>`` (RCDATA — entities ARE decoded, so escaping
+#: round-trips) and normal elements like ``<pre>`` (markup — must escape).
+_RAW_TEXT_TAGS = frozenset({"script", "style"})
+
+#: The raw-text closing sequences that would terminate the element early,
+#: matched case-insensitively (the HTML parser's end-tag match is
+#: case-insensitive). ``<\/`` is not a raw-text close in HTML, and ``\/`` is
+#: valid inside script/style string & regex content, so it round-trips.
+_RAW_TEXT_CLOSE = re.compile(r"</(?=(?:script|style)\b)", re.IGNORECASE)
+
+
+def _guard_raw_text(value: str) -> str:
+    """Neutralize the raw-text closing sequence so *value* can't close its
+    element early, leaving everything else literal (no entity escaping)."""
+    return _RAW_TEXT_CLOSE.sub(r"<\\/", value)
 
 class Node(object):
     parent:'Node|None' = None
@@ -97,7 +120,12 @@ class ElementString(Node):
     textContent = property(get_value, set_value)
     
     def __html__(self):
-        return self.value
+        # Text is escaped at serialization time only — mirroring the browser,
+        # where textContent stores the raw string and the HTML output escapes
+        # it. Without this, a TextBinding value containing markup (e.g. a code
+        # sample "<b>hi</b>") would be written raw into the SSR HTML and the
+        # browser would parse it back as real elements.
+        return html.escape(self.value, quote=False)
 
     def __str__(self):
         return self.value
@@ -264,18 +292,37 @@ class Element(Node):
             else:
                 attrs_dict[key] = value
 
-        attrs_str = ' '.join(f'{k}="{v}"' for k, v in attrs_dict.items())
+        attrs_str = ' '.join(
+            f'{k}="{html.escape(str(v), quote=True)}"' for k, v in attrs_dict.items()
+        )
         children = self.children
 
         if self.is_void:
             return f"<{tag}{' ' + attrs_str if attrs_str else ''} />"
 
         children_str = ""
-        for c in children:
-            if isinstance(c, Element):
-                children_str += c.__html__()
-            else:
-                children_str += str(c)
+        if tag in _RAW_TEXT_TAGS:
+            # Raw-text element (script/style): per the HTML spec the content is
+            # literal raw text — no character references, no tags — so text is
+            # emitted verbatim (NOT html.escape'd), guarding only the closing
+            # sequence. The browser reads this back exactly as written; the
+            # client DOM (textContent) already behaves the same way.
+            for c in children:
+                if isinstance(c, ElementString):
+                    children_str += _guard_raw_text(c.value)
+                else:
+                    # Comment / (unusual) nested element: str() verbatim.
+                    children_str += str(c)
+        else:
+            for c in children:
+                if isinstance(c, Element):
+                    children_str += c.__html__()
+                elif isinstance(c, ElementString):
+                    # Text serializes escaped (see ElementString.__html__).
+                    children_str += c.__html__()
+                else:
+                    # Comment / DocumentType: str() renders their markup verbatim.
+                    children_str += str(c)
 
         if attrs_str:
             return f"<{tag} {attrs_str}>{children_str}</{tag}>"

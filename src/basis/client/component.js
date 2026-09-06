@@ -91,6 +91,26 @@ function CustomElementFactory(config) {
       
       
     }
+
+    disconnectedCallback() {
+      
+      console.log(`JS: ${this.tagName} removed from page (disconnectedCallback())`);
+
+      // Mirror of the 'basis:connected' connect signal, for when this element
+      // (or an ancestor subtree containing it) leaves the live document.
+      //
+      // DOM note: disconnectedCallback fires AFTER the node is already removed,
+      // so an event dispatched on `this` can never bubble up to `document`.
+      // Dispatch on `document` directly instead — Python listens there for the
+      // bubbled basis:connected AND this basis:disconnected, then tests its own
+      // target element's isConnected to decide whether IT is the one that left.
+      //
+      // Signal only: Basis never auto-destroys on disconnect — if-hide and
+      // hydration-fallback moves legitimately disconnect then reconnect.
+      document.dispatchEvent(new CustomEvent('basis:disconnected', {
+        detail: { tag: this.tagName.toLowerCase() }
+      }));
+    }
   }
 
   Object.defineProperty (C, 'name', {value: config['pyClass']});

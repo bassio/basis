@@ -23,7 +23,25 @@ handlers compose.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
+
+
+def json_dumps_script_safe(obj, **kwargs) -> str:
+    """``json.dumps`` output that is safe to embed inside a ``<script>`` tag.
+
+    The page template HTML-escapes interpolated text (``&`` → ``&amp;``), but
+    script content is NOT entity-decoded by browsers — so a literal ``&``
+    would hydrate as ``&amp;``. Escaping ``<``/``>``/``&`` as ``\\uXXXX``
+    sequences keeps ``</script>`` from closing the tag and round-trips
+    through ``json.loads`` back to the original characters.
+    """
+    return (
+        json.dumps(obj, **kwargs)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
 
 #: type -> handler. Later registrations replace earlier ones (last include
 #: wins). Process-global, populated at boot / plugin-include time (single

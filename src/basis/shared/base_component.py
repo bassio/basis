@@ -292,6 +292,11 @@ class BaseComponent(ReactiveObject):
         self.__dict__['_selfattr_bindings'] = {}
         self.__dict__['__fields__'] = []
         self.__dict__['_subscriptions'] = []
+        # Identities this instance registered under in _instance_registry
+        # (__component_id__ / root-element id) — deregistered on unmount.
+        self.__dict__['_registered_identities'] = []
+        # Set once destroy() runs (idempotency guard).
+        self.__dict__['_destroyed'] = False
         self.__class__._live_instances.add(self)
         
     def __init_selfbinding__(self):
@@ -403,6 +408,118 @@ class BaseComponent(ReactiveObject):
         No-op by default; never called on the server.
         """
         pass
+
+    def on_unmounted(self):
+        """Lifecycle hook called once when this component is unmounted via
+        ``destroy()`` — after its bindings are detached, its reactive scope
+        destroyed, its identities deregistered and its DOM element removed.
+        Override for teardown that must run once the framework state is clean
+        (closing a socket, persisting state, ...). Never called on an if-hide —
+        hiding a subtree is not unmounting it.
+        """
+        pass
+
+    def _teardown_bindings(self):
+        """Detach every binding (destroy: listeners, if-anchors, and — via
+        ChildBinding — the recursively-mounted child subtree) and destroy this
+        instance's root reactive scope (removing DAG effects/computeds and the
+        cross-object store/subscription edges recorded on it).
+
+        The single teardown path shared by ``destroy()`` (permanent unmount)
+        and HMR's hot-swap re-render (which tears down, then rebuilds a fresh
+        scope/DAG on the same instance).
+        """
+        for b in list(self.__dict__.get('__bindings__', ())):
+            self.remove_binding(b)
+        self._scope.destroy()
+
+    def _teardown_js(self):
+        """Teardown of JS subresources (widgets, ffi proxies, module refs).
+        Overridden by ``JsComponent``; a no-op for plain components. Called by
+        ``destroy()`` while the DOM + event wiring still exist."""
+        pass
+
+    def destroy(self):
+        """Unmount this component and its whole mounted subtree. Idempotent.
+
+        The single framework-owned teardown chokepoint (COMPONENT-LIFECYCLE-
+        PLAN.md §3.1). Runs in a fixed order:
+          1. mark destroyed (idempotency guard);
+          2. tear down JS subresources (``_teardown_js``);
+          3. detach every binding + destroy the root scope
+             (``_teardown_bindings``) — which recursively destroys mounted
+             children through their ChildBindings / loop items;
+          4. deregister ``#id`` / ``__component_id__`` identities;
+          5. drop pending-subscription entries where this instance is the
+             waiting subscriber;
+          6. remove the root element from the DOM;
+          7. call ``on_unmounted()``.
+
+        Destroy is EXPLICIT and framework-driven: it never fires from an
+        if-hide or a DOM disconnect (Basis re-inserts hidden subtrees, so
+        hiding is not unmounting).
+        """
+        if getattr(self, "_destroyed", False):
+            return
+        self.__dict__["_destroyed"] = True
+
+        try:
+            self._teardown_js()
+        except Exception as exc:
+            print(f"[basis] {self.__class__.__name__}._teardown_js failed: {exc}")
+
+        self._teardown_bindings()
+
+        # Deregister identities registered in __init_bindings__ — but only if
+        # this instance is STILL the occupant (a later mount may have taken the
+        # same #id, in which case it must survive).
+        registry = self.__class__._instance_registry
+        for cid in list(self.__dict__.get("_registered_identities", ())):
+            try:
+                if cid in registry and registry.get(cid) is self:
+                    del registry[cid]
+            except Exception:
+                pass
+        self.__dict__["_registered_identities"] = []
+
+        # Drop pending-subscription entries where this instance is the waiting
+        # subscriber (its target never mounted / never resolved).
+        for pending in (self.__class__._pending_subscriptions,
+                        Store._pending_subscriptions):
+            try:
+                for key in list(pending.keys()):
+                    kept = [e for e in pending[key] if e[0] is not self]
+                    if kept:
+                        pending[key] = kept
+                    else:
+                        del pending[key]
+            except Exception:
+                pass
+
+        # Remove the root element from its parent (server Element + client DOM).
+        element = self.__dict__.get("_element")
+        if element is not None:
+            try:
+                parent = getattr(element, "parentNode", None)
+                if parent is not None and hasattr(element, "remove"):
+                    element.remove()
+            except Exception:
+                pass
+        self.__dict__["_element"] = None
+
+        # Clear the (target-side) subscription list — nothing can still be
+        # subscribed to an unmounted instance.
+        self.__dict__["_subscriptions"] = []
+
+        try:
+            self.__class__._live_instances.discard(self)
+        except Exception:
+            pass
+
+        try:
+            self.on_unmounted()
+        except Exception as exc:
+            print(f"[basis] on_unmounted failed for {self.__class__.__name__}: {exc}")
 
     def add_binding(self, binding):
 
@@ -535,7 +652,7 @@ class BaseComponent(ReactiveObject):
         loops are kept as units (skip_loop_descendants) and recurse via
         _analyze_node, so nesting is precompiled recursively here."""
         body = element.cloneNode(True)
-        for a in ("for", "in", "key"):
+        for a in ("for", "in", "key", "index"):
             body.removeAttribute(a)
         body_blueprints = []
         for node_index, node in enumerate(cls._loop_body_nodes(body)):
@@ -560,7 +677,7 @@ class BaseComponent(ReactiveObject):
             event_attrs = [a for a in element_attrs if a.startswith("on")]
             other_attrs = [a for a in element_attrs if not a.startswith("on")]
 
-            special_attrs = ["if", "for", "in", "key", "bind", "text-content"]
+            special_attrs = ["if", "for", "in", "key", "index", "bind", "text-content"]
             non_standard_attrs = [a for a in other_attrs if a in special_attrs]
             standard_attrs = [a for a in other_attrs if a not in non_standard_attrs]
 
@@ -590,6 +707,8 @@ class BaseComponent(ReactiveObject):
                 kwargs = {'item': for_attr_value, 'collection': inlist_attr_value}
                 if 'key' in non_standard_attrs:
                     kwargs['key'] = element.getAttribute('key')
+                if 'index' in non_standard_attrs:
+                    kwargs['index'] = element.getAttribute('index')
                 # Precompile the loop body once, on the owner, so LoopBinding can
                 # instantiate owner-bound, per-item bindings (item overlay via
                 # LoopScope).
@@ -766,6 +885,7 @@ class BaseComponent(ReactiveObject):
 
         for component_id in dict.fromkeys(identities):
             self.__class__._instance_registry[component_id] = self
+            self.__dict__['_registered_identities'].append(component_id)
 
             if component_id in self.__class__._pending_subscriptions:
                 for subscribing_component_instance, attr_name in self.__class__._pending_subscriptions.pop(component_id):
@@ -1129,10 +1249,10 @@ class BaseComponent(ReactiveObject):
 
     def _rerender_after_swap(self, state):
         """Rebind + re-render this instance against the (possibly new) class blueprint."""
-        # 1. Clean up old bindings and DAG
-        for b in list(self.__bindings__):
-            self.remove_binding(b)
-        self._scope.destroy()
+        # 1. Clean up old bindings + DAG via the SHARED teardown path (this now
+        #    also recursively destroys stale mounted children instead of leaking
+        #    them), then a FRESH scope for the rebuilt instance.
+        self._teardown_bindings()
         self.__dict__['_scope'] = ReactiveScope()
 
         self.__dict__['__bindings__'] = []

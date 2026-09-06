@@ -139,3 +139,73 @@ def test_loop_dotted_collection():
     # Renders both items from the subscripted collection.
     assert "x" in text and "y" in text
     assert "[Error:" not in text
+
+
+# --------------------------------------------------------------------------
+# index="<attr>" stamps the positional index onto each item (dicts get a key,
+# objects get an attribute), and re-stamps it when the collection reorders.
+# --------------------------------------------------------------------------
+def test_loop_index_attr():
+    class Row:
+        def __init__(self, name):
+            self.name = name
+
+    class Owner(Component):
+        dicts = [{"n": "a"}, {"n": "b"}, {"n": "c"}]
+        objs = [Row("x"), Row("y")]
+
+        def template(self):
+            """
+            <div>
+                <div for="it" in="{dicts}" index="_index">{it['_index']}:{it['n']}</div>
+                <div for="o" in="{objs}" index="_index">{o._index}:{o.name}</div>
+            </div>
+            """
+
+    mounted = Owner.mount(Element("div", attrs={}, children=[]))
+    text = text_of(mounted.__element__)
+    assert "0:a1:b2:c" in text
+    assert "0:x1:y" in text
+
+    # Items themselves are stamped (not just rendered text).
+    assert mounted.dicts[0]["_index"] == 0
+    assert mounted.dicts[2]["_index"] == 2
+    assert mounted.objs[0]._index == 0
+
+    # A reorder re-stamps indices; no-op without the attribute.
+    mounted.dicts = [{"n": "z"}, {"n": "a"}, {"n": "b"}]
+    assert "0:z1:a2:b" in text_of(mounted.__element__)
+    assert mounted.dicts[0]["_index"] == 0
+
+
+def test_loop_index_attr_opt_in_default():
+    """Without index=, items are NOT mutated with a surprise _index key."""
+    class Owner(Component):
+        dicts = [{"n": "a"}]
+
+        def template(self):
+            """
+            <div>
+                <div for="it" in="{dicts}">{it['n']}</div>
+            </div>
+            """
+
+    mounted = Owner.mount(Element("div", attrs={}, children=[]))
+    assert "a" in text_of(mounted.__element__)
+    assert "_index" not in mounted.dicts[0]
+
+
+def test_loop_index_attr_scalars_skipped():
+    """Immutable scalar items are skipped silently (can't hold attributes)."""
+    class Owner(Component):
+        nums = [10, 20]
+
+        def template(self):
+            """
+            <div>
+                <div for="v" in="{nums}" index="_index">{v}</div>
+            </div>
+            """
+
+    mounted = Owner.mount(Element("div", attrs={}, children=[]))
+    assert "10" in text_of(mounted.__element__) and "20" in text_of(mounted.__element__)

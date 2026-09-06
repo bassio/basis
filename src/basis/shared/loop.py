@@ -12,6 +12,14 @@ unit-testable and gives the whole feature one mental model:
 
     resolve collection -> derive keys -> reconcile -> apply ops
 
+Loop-body bindings may reference ``$store.*`` fields (e.g. a ``class`` binding
+like ``{entry['path'] == $docs.path and 'is-active' or ''}``).  Those fields
+never reach the owner's ``__fields__`` (they live only in the per-item body
+blueprints), so without extra wiring the owner is never subscribed to the store
+and the loop-body binding never re-renders when the store changes — see
+LOOP-BINDING-STORE-REACTIVITY.md (Option A).  ``_register_owner_effect``
+restores that subscription (the missing "first mile").
+
 This module must not import ``bindings.py`` (the binding classes import this
 module); everything here is duck-typed against the server ``Element`` model and
 the browser DOM, and against ``LoopItem`` / ``LoopBinding`` by attribute.
@@ -23,6 +31,7 @@ from functools import lru_cache
 
 from basis.shared.expr import ALLOWED_BUILTINS, LoopScope, _FORMATTER, safe_format
 from basis.shared.reactive import ComputedNode, DependencyGraph, ReactiveScope
+from basis.shared.store import Store
 
 
 @lru_cache(maxsize=None)
@@ -251,7 +260,7 @@ class LoopBodyBuilder:
     def new_clone(self):
         """A fresh body clone with the loop-control attributes stripped."""
         cloned = self.clone.cloneNode(True)
-        for a in ("for", "in", "key"):
+        for a in ("for", "in", "key", "index"):
             cloned.removeAttribute(a)
         return cloned
 
@@ -263,7 +272,7 @@ class LoopBodyBuilder:
         if "-" not in str.lower(self.clone.tagName):
             return props
         for c_attr in self.clone.getAttributeNames():
-            if c_attr in ("for", "in", "key") or c_attr in props:
+            if c_attr in ("for", "in", "key", "index") or c_attr in props:
                 continue
             c_attr_value = self.clone.getAttribute(c_attr)
             has_expr = any(
@@ -366,3 +375,26 @@ class LoopBodyBuilder:
             item._subscope.add_effect(owner._dag, effect_name, binding.update, owner_fields)
             for f in derived_fields:
                 owner._dag.nodes[effect_name].add_dependency(scope.derived_node(f))
+
+            # LOOP-BINDING-STORE-REACTIVITY.md (Option A): a loop body can
+            # reference $store.* fields (e.g. a class binding inside the body).
+            # Those fields never reach the owner's __fields__ (only the body
+            # blueprints see them), so the owner was never subscribed to the
+            # store and nothing ever triggered the local DAG node the per-item
+            # effect is wired to — silent staleness. Subscribe the owner here
+            # (idempotent: add_subscription dedups by (component, attr)) and
+            # record the field on __fields__ so the store change → owner.react
+            # → trigger_batch → local node → effect path works exactly like a
+            # top-level binding. Runs per item at reconcile time, so it also
+            # covers nested loops and loops created after __init_fields__.
+            for f in owner_fields:
+                if not f.startswith("$"):
+                    continue
+                dot = f.find(".")
+                store_name = f[1:dot] if dot != -1 else f[1:]
+                attr_name = f[dot + 1:] if dot != -1 else ""
+                store = Store._registry.get(store_name)
+                if store is not None:
+                    store.add_subscription(owner, attr_name, scope=owner._scope)
+                if f not in owner.__fields__:
+                    owner.__fields__.append(f)

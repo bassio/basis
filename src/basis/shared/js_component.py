@@ -185,10 +185,11 @@ class JsComponent(Component):
             return
         self._boot()
 
-    def destroy(self) -> None:
-        """Best-effort teardown: tear down the JS widget + release the module ref.
-        Framework unmount integration is a follow-up; callable by wrappers / lifecycle
-        code that owns the instance."""
+    def _teardown_js(self) -> None:
+        """Teardown of JS subresources, invoked by ``Component.destroy()`` while
+        the DOM + event wiring still exist: tear down the JS widget, release the
+        module ref and reset the boot flags. (Idempotent — guarded by the
+        ``_js_booted`` flag.)"""
         if IS_CLIENT and getattr(self, "_js_booted", False):
             try:
                 self.destroy_js()
@@ -240,6 +241,14 @@ class JsComponent(Component):
             module = await JsModuleRegistry.load(self.__js_module__)
         except Exception as exc:
             _log_error(f"@js_component {self.__class__.__name__}: module load failed: {exc}")
+            return
+        # Destroy-before-boot guard (COMPONENT-LIFECYCLE-PLAN.md P2 §2.3): the
+        # instance may have been destroyed while the ES module was loading —
+        # destroy() sets _destroyed and clears _js_booted (via _teardown_js).
+        # If so, cancel the boot: never call boot_js on a dead node. The module
+        # load itself is harmless (cached, ref-counted). Async is single-
+        # threaded, so this check right after the await is sufficient.
+        if getattr(self, "_destroyed", False) or not getattr(self, "_js_booted", False):
             return
         self.__dict__["_js_module"] = module
         for name in self.__class__.__js_exports__:

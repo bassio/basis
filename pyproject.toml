@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-basis = "basis.cli.main:app"
+basis = "basis.cli.main:main"
 
 # Official in-tree plugins, registered through the same entry-point mechanism
 # third-party plugins use ("everything is a plugin").
@@ -50,3 +50,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/basis"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "benchmark: Basis benchmark scenarios (ROADMAP-PERFORMANCE.md T0) — run with --bench; skipped by default.",
+]

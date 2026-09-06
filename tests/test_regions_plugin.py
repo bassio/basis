@@ -344,6 +344,74 @@ def test_region_store_uses_generic_refresh_action_after_plugin_disable():
     assert [e["cls_path"].rsplit(".", 1)[-1] for e in listing["activity"]] == ["DemoIcon"]
 
 
+def test_region_hosted_plugin_disables_over_http_without_force():
+    """Component-lifecycle P2/P3 contract: a PURE region-hosted plugin
+    (``region_items``, no ``root_component``, no app static import) disables
+    over HTTP through the store-bound ``$plugins.disable`` action with NO
+    ``force``, and a ``$regions`` refresh no longer lists its contribution (the
+    live ``<ui-region>`` path unmounts it via ``destroy()`` — pinned in
+    ``tests/test_component_lifecycle_contract.py``). Re-enable restores it.
+    Guards the "no-force disable for region-hosted plugins" contract."""
+    app = Basis()
+    app.bootstrap()
+
+    plugin = BasisPlugin(prefix="/demo", name="demo")
+
+    @plugin.region("activity")
+    class DemoIcon(Component):
+        def template(self):
+            return "<div class='demo-icon'>icon</div>"
+
+    app.include_plugin(plugin)
+    client = TestClient(app)
+
+    def regions_listing():
+        resp = client.post(
+            "/basis/api/action",
+            json={
+                "path": "basis.shared.app_state.AppStateStore.refresh",
+                "store_name": "regions",
+                "args": [],
+                "kwargs": {},
+            },
+        )
+        assert resp.status_code == 200
+        return resp.json()["new_state"]["items"]
+
+    # Disable through the store-bound action (the HTTP path a plugin manager
+    # uses) — no force: a pure region-hosted plugin is live-disable-able.
+    resp = client.post(
+        "/basis/api/action",
+        json={
+            "path": "basis.shared.plugin_registry.PluginRegistryStore.disable",
+            "store_name": "plugins",
+            "args": ["demo"],
+            "kwargs": {},
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"] == {"ok": True}
+    assert body["new_state"]["items"]["demo"]["state"] == "disabled"
+    # Contribution gone from the authoritative $regions projection.
+    assert regions_listing().get("activity") in (None, [])
+
+    # Re-enable through the store-bound action restores the contribution.
+    resp = client.post(
+        "/basis/api/action",
+        json={
+            "path": "basis.shared.plugin_registry.PluginRegistryStore.enable",
+            "store_name": "plugins",
+            "args": ["demo"],
+            "kwargs": {},
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"] == {"ok": True}
+    listing = regions_listing()
+    assert [e["cls_path"].rsplit(".", 1)[-1] for e in listing["activity"]] == ["DemoIcon"]
+
+
 def test_region_store_subscribes_to_plugins_via_dag_edge():
     """``RegionStore`` subscribes to ``$plugins.items`` through a first-class
     cross-object DAG edge (the mechanism ``ComponentSubscription`` became —

@@ -93,7 +93,10 @@ def test_existing_dir_is_clean_error(tmp_path):
     (tmp_path / "demo").mkdir()
     result = runner.invoke(app, ["init", "demo", "--dir", str(tmp_path), "--yes"])
     assert result.exit_code == 1
-    assert "already exists" in result.output
+    # Rich word-wraps long error lines to the console width (80 cols when stdout
+    # isn't a tty, as under pytest capture); the pytest tmp_path is long enough
+    # to force a wrap here, so collapse whitespace before the substring check.
+    assert "already exists" in re.sub(r"\s+", " ", result.output)
 
 
 def test_yes_without_name_is_clean_error(tmp_path):

@@ -66,7 +66,21 @@ _FORMATTER = Formatter()
 
 _FIELD_MARKER_RE = re.compile(r"\x00FIELD:(\d+)\x00")
 
+def is_valid_python_expression(expr: str) -> bool:
+    try:
+        compile(expr, '<string>', 'eval')
+        return True
+    except SyntaxError:
+        return False
 
+def is_valid_basis_expression(expr: str) -> bool:
+    """Check if the given string is a valid Basis expression.
+
+    A valid Basis expression is a valid Python expression after desugaring.
+    """
+    desugared_expr = desugar_expression(expr)
+    return is_valid_python_expression(desugared_expr)
+    
 def _is_css_field(inner: str) -> bool:
     """True when ``inner`` (the text between a ``{...}`` pair) is a valid Basis
     expression — i.e. it should interpolate rather than be treated as a CSS

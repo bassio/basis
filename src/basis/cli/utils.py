@@ -16,7 +16,12 @@ from rich.console import Console
 console = Console()
 
 
-def find_basis_app(app_path: str | None = None, cwd: Path | None = None) -> tuple[str, Path]:
+def find_basis_app(
+    app_path: str | None = None,
+    cwd: Path | None = None,
+    *,
+    quiet: bool = False,
+) -> tuple[str, Path]:
     """
     Locate the Basis application module.
 
@@ -24,6 +29,13 @@ def find_basis_app(app_path: str | None = None, cwd: Path | None = None) -> tupl
     ----------------
     1. Explicit ``app_path`` argument (e.g. ``"myapp:app"`` or ``"myapp"``).
     2. Scan the current directory for common conventions.
+
+    Parameters
+    ----------
+    quiet:
+        Suppress the "Could not find a Basis app" message when raising
+        ``typer.Exit`` (used by non-interactive discovery that treats a missing
+        app as "no local plugins", e.g. ``basis.cli.discovery``).
 
     Returns
     -------
@@ -80,12 +92,13 @@ def find_basis_app(app_path: str | None = None, cwd: Path | None = None) -> tupl
         if var_name:
             return f"{cwd.name}:{var_name}", cwd.parent
 
-    console.print(
-        "[bold red]Error:[/] Could not find a Basis app.\n"
-        "Try one of:\n"
-        "  • [cyan]basis dev myapp:app[/cyan]\n"
-        "  • Run from a directory containing a Basis project\n"
-    )
+    if not quiet:
+        console.print(
+            "[bold red]Error:[/] Could not find a Basis app.\n"
+            "Try one of:\n"
+            "  • [cyan]basis dev myapp:app[/cyan]\n"
+            "  • Run from a directory containing a Basis project\n"
+        )
     raise typer.Exit(code=1)
 
 

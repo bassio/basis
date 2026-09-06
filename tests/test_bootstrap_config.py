@@ -77,6 +77,56 @@ def test_page_registry_populated_by_app_page():
     assert "/" in app._pages
 
 
+def test_pyscript_json_etag_revalidates():
+    """/pyscript.json is dynamic-but-bursty: content-hash ETag + no-cache so
+    the browser revalidates (304) instead of re-downloading, while any real
+    manifest change (page / plugin / host) still yields a fresh 200."""
+    app = Basis()
+    app.bootstrap()
+    client = TestClient(app)
+
+    r1 = client.get("/pyscript.json")
+    assert r1.status_code == 200
+    etag = r1.headers.get("etag")
+    assert etag and etag.startswith('"')
+    assert r1.headers.get("cache-control") == "no-cache"
+
+    # Identical content -> 304.
+    r2 = client.get("/pyscript.json", headers={"If-None-Match": etag})
+    assert r2.status_code == 304
+
+
+def test_pyscript_json_etag_is_page_aware():
+    """Different pages carry different bodies -> different ETags; each page's
+    manifest revalidates to 304 independently (no cross-page staleness)."""
+    app = Basis()
+    app.bootstrap()
+
+    Store("page_store_x")
+
+    class MyPage(Page):
+        root_component = Root  # in-module component; no entrypoint emitted
+        stores = ["page_store_x"]
+
+    app.include_page("/cached", page_cls=MyPage)
+    client = TestClient(app)
+
+    bare = client.get("/pyscript.json")
+    page = client.get("/pyscript.json?url=/cached")
+    assert bare.status_code == page.status_code == 200
+    # The page manifest carries page_stores that the bare manifest lacks, so
+    # the bodies (and thus the content-hash ETags) must differ.
+    assert page.json()["basis"]["bootstrap"].get("page_stores") == ["page_store_x"]
+    assert page.headers.get("etag") != bare.headers.get("etag")
+
+    # Re-requesting the page manifest with its own etag -> 304.
+    again = client.get(
+        "/pyscript.json?url=/cached",
+        headers={"If-None-Match": page.headers["etag"]},
+    )
+    assert again.status_code == 304
+
+
 def test_manifest_unknown_route_no_page_specific():
     app = Basis()
     app.bootstrap()

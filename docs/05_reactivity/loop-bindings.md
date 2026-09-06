@@ -74,6 +74,22 @@ Toggling `mode` re-renders every item's class without touching the list. See [Sc
 
 ---
 
+## Item index (`index="<attr>"`)
+
+By default a loop only exposes the **item** through its loop variable — there is no built-in `$index`. When you need the item's positional position inside the body, add `index="<name>"` and the framework stamps that attribute/key onto **each item** on every reconcile, so it is readable in the body:
+
+```html
+<div for="it" in="{items}" index="_index">{it['_index']} — {it['n']}</div>
+```
+
+- **Dict items** get a key: `it['_index']` → `0`, `1`, `2`, …
+- **Object items** get an attribute: `it._index` → `0`, `1`, …
+- **Immutable scalars** (int, str) can't hold attributes and are skipped silently.
+
+The index is the **positional** position and is re-stamped on every reconcile, so it stays correct after inserts/removes/reorders (it is *not* the reconciliation key — that only coincides with the index in keyless loops). The attribute is **opt-in**: without `index=`, items are never mutated, so a real data field named `_index` can't be clobbered.
+
+---
+
 ## Nested loops
 
 A `for` inside another loop's body is a nested loop. Its `in=` and body resolve against the chain `{inner_item, outer_item, owner}`, and reusing an outer item re-runs the inner loop:

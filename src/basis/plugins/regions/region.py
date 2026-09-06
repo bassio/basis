@@ -84,6 +84,26 @@ class Region(Component):
         self._sync()
         self._subscribe_to_region_store()
 
+    def on_unmounted(self):
+        """Destroy any contributions still mounted when this region itself is
+        unmounted via ``Component.destroy()``.
+
+        Contributions are imperative mounts tracked only in ``_region_mounted``
+        (they have no binding edge), so ``destroy()``'s binding recursion cannot
+        reach them. This hook is the teardown path that makes destroying the
+        region — or any component that contains one — tear its items down too
+        (full ``destroy()``: nested children, JS subresources, ``on_unmounted``).
+        ``_sync``-driven removal of individual items is handled inline there.
+        """
+        mounted = self.__dict__.get("_region_mounted", {})
+        for path in list(mounted):
+            instance = mounted.pop(path, None)
+            if instance is not None:
+                try:
+                    instance.destroy()
+                except Exception:
+                    pass
+
     def _sync(self):
         """Reconcile mounted contributions against the current store slice."""
         store = self.S.get("regions")
@@ -95,15 +115,12 @@ class Region(Component):
         for path in list(mounted):
             if path not in expected_paths:
                 instance = mounted.pop(path)
-                # Real teardown: the contribution's scope owns its bindings /
-                # subscriptions; then remove its DOM node.
+                # Full unmount via Component.destroy() (COMPONENT-LIFECYCLE-
+                # PLAN.md P1): recurses into the contribution's nested children,
+                # tears down its JS subresources, fires on_unmounted, and removes
+                # its DOM node — not the ad hoc scope-destroy + node.remove().
                 try:
-                    instance._scope.destroy()
-                except Exception:
-                    pass
-                try:
-                    node = instance.__element__
-                    node.remove()
+                    instance.destroy()
                 except Exception:
                     pass
 

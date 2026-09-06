@@ -512,7 +512,7 @@ class Component(BaseComponent):
         from basis.shared.component import _set_ssr_hydration
         _set_ssr_hydration(True)
         try:
-            cls._mount_app_ssr_impl(ssr_root, replace)
+            return cls._mount_app_ssr_impl(ssr_root, replace)
         finally:
             _set_ssr_hydration(False)
 
@@ -564,38 +564,61 @@ class Component(BaseComponent):
             except Exception:
                 fallback_snapshot.append((child_instance, None, []))
 
-        for child_instance in root_plus_child_component_instances:
-            hid = child_instance.hydration_id
-            if hid \
-            and (hid in marked_for_hydration_dict):
-                corresponding_ssr_root_node = marked_for_hydration_dict[hid]
-                try:
-                    child_instance.initialize_ssr(corresponding_ssr_root_node, report=report,
-                                                  ssr_map=marked_for_hydration_dict)
-                except Exception as exc:
-                    # One broken component must not abort the whole report.
-                    report.add_unhydrated_component(
-                        child_instance.__class__.__name__, client_id=hid,
-                        reason=f"initialize_ssr raised: {exc}",
-                    )
-            else:
-                # Component root not present in the SSR tree.  Normal when it is
-                # hidden by an if-binding on the server (its shadow node is then
-                # detached); otherwise it is a genuine mismatch.
-                if hid is not None:
-                    hidden = not _shadow_contains(shadow, child_instance.__element__)
-                    report.add_unhydrated_component(
-                        child_instance.__class__.__name__, client_id=hid,
-                        reason="hidden by if-binding" if hidden
-                        else "component not present in SSR tree",
-                    )
-                    if not hidden:
-                        fallback_needed = True
+        # Repoint every component's bindings at its live SSR node. This runs
+        # inside a flush batch (P4 — HYDRATION-REPOINT-RACE-FIX-PLAN.md §5, I7):
+        # no effect can drain mid-re-point onto a partially-adopted tree with
+        # un-converged state. The MOUNT above stays unbatched so the shadow tree
+        # renders (and structural effects — regions, loops — run) exactly as
+        # before; only the adoption phase is held.
+        #
+        # On a clean hydration the single batch-exit drain applies any
+        # post-adoption work (e.g. hydrate-indicator flipping to "ready")
+        # against the fully re-pointed tree, in deterministic parent-before-
+        # child order, so values equal the SSR-rendered ones. On the fallback
+        # path the batch is DISCARDED: the fully-rendered shadow tree is about
+        # to replace the SSR content, so re-point-phase work must never write to
+        # SSR nodes that will be discarded.
+        from basis.shared.reactive import batch
+
+        with batch() as hyd_batch:
+            for child_instance in root_plus_child_component_instances:
+                hid = child_instance.hydration_id
+                if hid \
+                and (hid in marked_for_hydration_dict):
+                    corresponding_ssr_root_node = marked_for_hydration_dict[hid]
+                    try:
+                        child_instance.initialize_ssr(corresponding_ssr_root_node, report=report,
+                                                      ssr_map=marked_for_hydration_dict)
+                    except Exception as exc:
+                        # One broken component must not abort the whole report.
+                        report.add_unhydrated_component(
+                            child_instance.__class__.__name__, client_id=hid,
+                            reason=f"initialize_ssr raised: {exc}",
+                        )
+                else:
+                    # Component root not present in the SSR tree.  Normal when it is
+                    # hidden by an if-binding on the server (its shadow node is then
+                    # detached); otherwise it is a genuine mismatch.
+                    if hid is not None:
+                        hidden = not _shadow_contains(shadow, child_instance.__element__)
+                        report.add_unhydrated_component(
+                            child_instance.__class__.__name__, client_id=hid,
+                            reason="hidden by if-binding" if hidden
+                            else "component not present in SSR tree",
+                        )
+                        if not hidden:
+                            fallback_needed = True
+            if fallback_needed:
+                # Repoint-phase work must not reach the live SSR nodes — the
+                # shadow tree is about to replace them.
+                hyd_batch.discard()
 
         if fallback_needed and hydration_fallback_enabled():
             _fallback_rerender(ssr_root, shadow, report, snapshot=fallback_snapshot)
 
         _emit_hydration_report(report)
+        
+        return mounted_app_component
     
     @client
     def _stamp_hydration_ids(self, element=None):

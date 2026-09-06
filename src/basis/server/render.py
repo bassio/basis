@@ -31,6 +31,7 @@ from basis.shared.store import Store
 from basis.shared.base_component import BaseComponent
 from basis.shared.hydration import apply_hydration_to_component
 from basis.shared.errors import ErrorCollector, get_error_sink, set_error_sink
+from basis.shared.serialization import json_dumps_script_safe
 
 
 def _attach_app_to_store_bound_stores(all_stores, request_app):
@@ -126,7 +127,9 @@ def _serialize_initial_state(all_stores: dict[str, Store], errors=None) -> str:
     if errors is not None and not errors.is_empty:
         initial_state["__basis_errors__"] = errors.to_dict()
 
-    return json.dumps(initial_state, indent=2)
+    # Script-safe JSON: the page template escapes interpolated text, and
+    # <script> content is not entity-decoded, so `<`/`>`/`&` must be \uXXXX.
+    return json_dumps_script_safe(initial_state, indent=2)
 
 
 def _apply_hydration_logic(app, root_component_plus_child_components):

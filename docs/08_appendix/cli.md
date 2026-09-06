@@ -14,9 +14,39 @@ basis [OPTIONS] COMMAND [ARGS]...
 | :--- | :--- |
 | `basis dev` | Start the development server with auto-detection, live HMR, and plugin scanning. |
 | `basis init [name]` | Interactive app-shell wizard: scaffold a loadable workbench (`app`) or website (`site`) project. |
+| `basis bench` | Run the framework benchmark suite (median + p95) — see [ROADMAP-PERFORMANCE.md T0](https://github.com/bassio/basis/blob/main/ROADMAP-PERFORMANCE.md). |
 | `basis plugin list` | List all discovered local and installed plugins. |
 | `basis theme list` | List installed theme packages (`kind == "theme"`). |
 | `basis theme apply <id>` | Resolve + validate a theme by id (loud errors on a broken manifest). |
+
+### Plugin-contributed commands
+
+Basis plugins can extend the CLI with their own command groups. The hook point is
+**`basis <plugin-name> <subcommand>`** (namespaced by the plugin's identifier — the
+same name used by `$plugins.<name>`). A plugin ships its commands in a `cli/`
+subpackage exposing a module-level `cli` that is a `typer.Typer`:
+
+```text
+myapp/plugins/migrations/
+    __init__.py          # plugin = BasisPlugin(...)
+    cli/
+        __init__.py      # cli = typer.Typer(...)  →  basis migrations up
+```
+
+The `cli/__init__.py` may also declare a module-level `help = "…"` string — the
+one-line description shown in `basis --help`. Discovery reads it straight from
+source (no import), so the root help shows each group's real description while
+staying import-free; without it, a generic `{plugin} commands` line is used.
+
+The CLI mounts these groups **lazily** (import-on-first-use): `basis dev` /
+`basis init` / `basis bench` never import plugin code, and a plugin's `cli/`
+module is imported only when one of its commands is actually requested. Installed
+plugins always contribute; local `plugins/` plugins contribute when the command
+is run inside the project.
+
+`basis theme list` and `basis theme apply` are themselves contributed this way —
+they live in the `theme` plugin (`basis.plugins.theme.cli`), not hardcoded in the
+CLI core.
 
 To check the CLI version:
 ```bash
@@ -49,6 +79,7 @@ If `APP_PATH` is omitted, `basis dev` auto-detects the app in this order:
 | `--hmr / --no-hmr` | | `True` | **Live client-side HMR** (default): watch component files (`.py`/`.html`/`.css`) and hot-swap them in the browser over a WebSocket — no page refresh, no state loss. |
 | `--reload / --no-reload` | | `False` | Full-process restart on any file change (uvicorn `--reload`). Mutually exclusive with HMR — use while editing server-only code outside component directories. |
 | `--pyc` | | `False` | Enable **PYC Compilation Mode** (serves pre-compiled bytecode to PyScript client VFS). |
+| `--profile` | | `False` | Run the server under `cProfile` and print a hot-path summary on shutdown (saves `.basis-profile.pstats`). T0 server profiling — see `tests/benchmarks/README.md`. |
 
 ### Example Usage
 
@@ -60,6 +91,11 @@ basis dev
 Run on custom host and port with PYC mode enabled:
 ```bash
 basis dev myapp:app --host 0.0.0.0 --port 8080 --pyc
+```
+
+Profile the server and print a hot-path summary on shutdown (SSR/action profiling):
+```bash
+basis dev --profile
 ```
 
 ### Startup Banner & Plugin Summary
@@ -220,7 +256,7 @@ This scans:
 2. **Installed Plugins**: Third-party packages registered via the `basis.plugins` entry point in `pyproject.toml`.
 
 Themes (`kind == "theme"`) are excluded from `basis plugin list` — they live under
-`basis theme` (the plugin/theme split from ROADMAP-THEMING §6.5).
+`basis theme`.
 
 ---
 
@@ -253,3 +289,30 @@ its manifest, and prints the resolved metadata. A broken theme package fails
 At runtime the theme is applied per-user via the theme manager
 (`<ui-theme-picker>`) and persists through the `basis_theme` cookie. A per-app
 default-theme seed from the CLI is a later phase.
+
+---
+
+## 5. `basis bench` — Benchmark Suite (T0)
+
+Runs the framework's realistic benchmark scenarios and reports **median + p95**
+timings (plus mean; full min/max/stdev via `--json`). This is the T0
+"Measure First" harness — the baseline against which T1+ optimization work is
+judged and the future CI regression gate. See
+[`tests/benchmarks/README.md`](https://github.com/bassio/basis/blob/main/tests/benchmarks/README.md) for the
+scenario list, baseline numbers, and client/server profiling notes.
+
+```bash
+basis bench              # full suite, 5 iterations per scenario
+basis bench --quick      # 1 iteration each (fast smoke)
+basis bench -s loop      # only scenarios whose name contains "loop"
+basis bench -n 3 --json  # 3 iterations, machine-readable output (CI)
+```
+
+Scenarios: mount N components (50/200), mutate M state fields in one handler
+(10/25, sequential vs `refrain()`-batched), render a 1k/10k-row keyed loop,
+hydrate an SSR page (1k-row root), fan-out a store to 50/100 subscribers, and a
+template-parse/format baseline. Under pytest, the same scenarios are opt-in:
+
+```bash
+pytest tests/benchmarks --bench
+```

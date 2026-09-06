@@ -979,9 +979,24 @@ class ChildBinding(NodeBinding):
         self.childinstance = child_instance
 
     def destroy(self):
-        """Teardown: clear the mounted child reference (its node/listeners/DAG
-        are reclaimed with the subtree)."""
+        """Teardown: recursively destroy the mounted child, then drop the
+        reference.  Previously this only nulled ``childinstance`` and assumed
+        the child's node/listeners/DAG were "reclaimed with the subtree" — but
+        nothing recursed, leaking the child's bindings, store subscription
+        edges and JS widgets.  Removing a ChildBinding now really unmounts the
+        child subtree."""
+        child = self.childinstance
         self.childinstance = None
+        if child is not None:
+            try:
+                node = getattr(self, "node", None)
+                if node is not None and getattr(node, "__basis_instance__", None) is child:
+                    node.__basis_instance__ = None
+            except Exception:
+                pass
+            destroy = getattr(child, "destroy", None)
+            if destroy is not None:
+                destroy()
 
 @dataclass(kw_only=True)
 class LoopBinding(NodeBinding):
@@ -994,6 +1009,7 @@ class LoopBinding(NodeBinding):
     clone: object
     parent: object
     key: str | None = None
+    index: str | None = None
     instances: dict = field(default_factory=dict)
     ast_trees: dict = field(default_factory=dict, repr=False)
     body_blueprints: list = field(default_factory=list, repr=False)
@@ -1035,6 +1051,20 @@ class LoopBinding(NodeBinding):
             return []
         return val
 
+    def _stamp_indexes(self, collection_value):
+        """Attach the positional index to each item under ``self.index`` so
+        loop bodies can read it (``{it['_index']}`` for dicts,
+        ``{it._index}`` for objects).  Dicts get a key, objects get an
+        attribute; immutable scalars are skipped."""
+        for i, item in enumerate(collection_value):
+            if isinstance(item, dict):
+                item[self.index] = i
+            else:
+                try:
+                    setattr(item, self.index, i)
+                except (AttributeError, TypeError):
+                    pass
+
     def _builder(self):
         return LoopBodyBuilder(
             component_instance=self.component_instance,
@@ -1050,6 +1080,8 @@ class LoopBinding(NodeBinding):
         collection_value = self._collection_value()
         if not isinstance(collection_value, (list, tuple)):
             collection_value = list(collection_value)
+        if self.index:
+            self._stamp_indexes(collection_value)
         new_keys = derive_keys(collection_value, self.key)
         ops = Reconciler.diff(list(self.instances.keys()), new_keys)
         builder = self._builder()

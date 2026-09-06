@@ -12,13 +12,15 @@ environments (server imports, client VFS, IDEs) resolve against.
 
 import inspect
 import itertools
+import json
 import logging
 import sys
 from collections import defaultdict
 from pathlib import Path
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
+
+from basis.server.static import conditional_response
 
 logger = logging.getLogger('uvicorn.error')
 logger.setLevel(logging.DEBUG)
@@ -477,7 +479,12 @@ class VFSRegistry:
             files[k.replace("{DOMAIN}", base_url)] = v
         manifest = {
             "files": files,
-            "interpreter": "pyscript/pyodide/pyodide.mjs",
+            # Root-absolute: PyScript resolves ``interpreter`` against the
+            # *document* URL, so a relative path ("pyscript/...") only works on
+            # top-level routes — a nested route like /docs/{path} would fetch
+            # /docs/pyscript/... and 404. The /pyscript mount is at the root, so
+            # the absolute path is correct on every page.
+            "interpreter": "/pyscript/pyodide/pyodide.mjs",
             "client_modules": self.client_modules,
             "basis": {"bootstrap": bootstrap or {}},
         }
@@ -546,7 +553,19 @@ async def pyscript_json(request: Request):
         else JsComponentRegistry.js_modules()
     )
     _warn_unserved_js_modules(request.app, js_modules)
-    return JSONResponse(
-        request.app.vfs.render_manifest(base_url, bootstrap=bootstrap, js_modules=js_modules)
+    manifest = request.app.vfs.render_manifest(
+        base_url, bootstrap=bootstrap, js_modules=js_modules
+    )
+    body = json.dumps(
+        manifest, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+    ).encode("utf-8")
+    # Content-hash ETag + revalidate: the manifest is dynamic but bursty (it
+    # changes only on page registration / plugin toggles / host), so the
+    # browser revalidates with If-None-Match → 304 instead of re-downloading,
+    # and any real change still gets a fresh 200 on the next request.
+    return conditional_response(
+        body,
+        "application/json",
+        if_none_match=request.headers.get("if-none-match"),
     )
 

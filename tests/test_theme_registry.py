@@ -385,21 +385,21 @@ def test_theme_with_serving_dir_serves_files(tmp_path):
 
 
 def test_theme_cli_list_and_apply():
-    from typer.testing import CliRunner
+    from click.testing import CliRunner
 
-    from basis.cli.main import app as cli_app
+    from basis.cli.main import build_root  # theme commands now come from the theme plugin (lazy group)
 
     runner = CliRunner()
-    result = runner.invoke(cli_app, ["theme", "list"])
+    result = runner.invoke(build_root(), ["theme", "list"])
     assert result.exit_code == 0
     assert "ambient" in result.output
     assert "Basis Ambient" in result.output
     assert "basis" in result.output
 
-    result = runner.invoke(cli_app, ["theme", "apply", "ambient"])
+    result = runner.invoke(build_root(), ["theme", "apply", "ambient"])
     assert result.exit_code == 0
     assert "Basis Ambient (ambient) — valid." in result.output
 
-    result = runner.invoke(cli_app, ["theme", "apply", "does-not-exist"])
+    result = runner.invoke(build_root(), ["theme", "apply", "does-not-exist"])
     assert result.exit_code == 1
     assert "Unknown theme" in result.output

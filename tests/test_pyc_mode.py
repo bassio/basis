@@ -99,3 +99,70 @@ def test_basis_pyc_mode_environment_variable(monkeypatch):
     monkeypatch.setenv("BASIS_PYC_MODE", "1")
     app = Basis()
     assert app.pyc_mode is True
+
+
+def _scope_with_headers(extra=None):
+    headers = [(b"host", b"testserver")]
+    for key, value in (extra or {}).items():
+        headers.append((key.lower().encode("latin-1"), value.encode("latin-1")))
+    return {"type": "http", "method": "GET", "path": "/", "headers": headers}
+
+
+@pytest.mark.anyio
+async def test_transformed_py_etag_revalidates():
+    """Served .py carries a content-hash ETag + no-cache; unchanged -> 304,
+    changed source -> fresh 200 (correct under HMR edits)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        comp_file = Path(tmpdir) / "comp.py"
+        comp_file.write_text("value = 1\n")
+
+        handler = BasisStaticFiles(directory=tmpdir)
+
+        r1 = await handler.get_response("comp.py", _scope_with_headers())
+        assert r1.status_code == 200
+        etag = r1.headers.get("etag")
+        assert etag and etag.startswith('"')
+        assert r1.headers.get("cache-control") == "no-cache"
+
+        # Identical content + matching If-None-Match -> 304 (no body re-sent).
+        r2 = await handler.get_response(
+            "comp.py", _scope_with_headers({"If-None-Match": etag})
+        )
+        assert r2.status_code == 304
+        assert r2.headers.get("etag") == etag
+
+        # Source changed -> new body -> new ETag -> fresh 200.
+        comp_file.write_text("value = 2\n")
+        r3 = await handler.get_response(
+            "comp.py", _scope_with_headers({"If-None-Match": etag})
+        )
+        assert r3.status_code == 200
+        assert r3.headers.get("etag") != etag
+
+
+@pytest.mark.anyio
+async def test_pyc_etag_revalidates():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        comp_file = Path(tmpdir) / "comp.py"
+        comp_file.write_text("value = 1\n")
+
+        handler = BasisStaticFilesPyc(directory=tmpdir)
+
+        r1 = await handler.get_response("comp.pyc", _scope_with_headers())
+        assert r1.status_code == 200
+        etag = r1.headers.get("etag")
+        assert etag and etag.startswith('"')
+        assert r1.headers.get("cache-control") == "no-cache"
+
+        r2 = await handler.get_response(
+            "comp.pyc", _scope_with_headers({"If-None-Match": etag})
+        )
+        assert r2.status_code == 304
+
+        # Recompile after the source edit yields different bytes -> fresh 200.
+        comp_file.write_text("value = 2\n")
+        r3 = await handler.get_response(
+            "comp.pyc", _scope_with_headers({"If-None-Match": etag})
+        )
+        assert r3.status_code == 200
+        assert r3.headers.get("etag") != etag

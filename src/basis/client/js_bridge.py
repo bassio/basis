@@ -84,6 +84,59 @@ def wait_connected(element, callback) -> None:
     return _dispose
 
 
+def wait_disconnected(element, callback) -> None:
+    """One-shot: invoke *callback* the first time *element* leaves the live
+    document.
+
+    Mirror of :func:`wait_connected` for the disconnect direction. Basis custom
+    elements dispatch a generic ``basis:disconnected`` event when they — or an
+    ancestor subtree containing them — are removed from the document. A removed
+    node cannot bubble its own event up to ``document`` (it is already
+    detached), so ``disconnectedCallback`` dispatches directly on ``document``;
+    this helper therefore also listens on ``document`` and fires when *element*
+    reports ``isConnected == False`` (its host — or an ancestor — just left the
+    live document).
+
+    Unlike :func:`wait_connected` there is deliberately NO synchronous-fire
+    path for "already disconnected": a component staged in the detached SSR
+    shadow is also ``isConnected == False`` but has not *disconnected* — it is
+    about to connect. The callback fires only on a real connected →
+    disconnected transition. Returns a no-arg disposer; the listener is one-shot
+    and removed after firing.
+    """
+    if element is None:
+        callback()
+        return lambda: None
+
+    def _on_disconnected(_event):
+        try:
+            connected = bool(getattr(element, "isConnected", False))
+        except Exception:
+            connected = True
+        if connected:
+            return  # some other element disconnected; ours is still in the doc
+        try:
+            document.removeEventListener("basis:disconnected", proxy)
+        except Exception:
+            pass
+        callback()
+
+    proxy = ffi.create_proxy(_on_disconnected)
+    document.addEventListener("basis:disconnected", proxy)
+
+    def _dispose():
+        try:
+            document.removeEventListener("basis:disconnected", proxy)
+        except Exception:
+            pass
+        try:
+            proxy.destroy()
+        except Exception:
+            pass
+
+    return _dispose
+
+
 class JsModuleRegistry:
     """Ref-counted cache of imported JS module namespaces, keyed by URL."""
 

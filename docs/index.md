@@ -19,7 +19,7 @@
 
 ## Read the docs by track
 
-The documentation is organised into four tracks, so you can read it the way that fits what you are doing right now.
+The documentation is organised into five tracks, so you can read it the way that fits what you are doing right now.
 
 ### 🚀 [Tutorial — User Guide](tutorial.md)
 
@@ -28,6 +28,10 @@ Learn Basis by building. A progressive path — from your first reactive app, th
 ### 💡 [Concepts](concepts.md)
 
 Why Basis exists and the design principles behind it — plus the deliberate non-goals and comparisons with other tools.
+
+### 🧪 [Mini-Tutorials](tutorials/index.md)
+
+Short, self-contained mini-app walkthroughs for newcomers — the Counter, a Todo list, Server Actions, and the Theme Changer — each explaining exactly how it works.
 
 ### 📚 [API Reference](reference.md)
 

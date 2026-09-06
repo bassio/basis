@@ -56,6 +56,11 @@ def dev(
         "--pyc",
         help="Enable PYC compilation mode for served Python files.",
     ),
+    profile: bool = typer.Option(
+        False,
+        "--profile",
+        help="Run the server under cProfile and print a hot-path summary on shutdown (T0 server profiling).",
+    ),
 ):
     """
     Start the Basis development server with hot-module reloading.
@@ -88,7 +93,7 @@ def dev(
     module_part, attr_part = import_path.split(":", 1)
 
     # Build the startup banner
-    _print_banner(import_path, host, port, reload, hmr, pyc, project_dir)
+    _print_banner(import_path, host, port, reload, hmr, pyc, profile, project_dir)
 
     # Discover and display plugins before starting
     _show_plugin_summary(module_part, project_dir)
@@ -109,6 +114,17 @@ def dev(
         if src_dir.is_dir():
             uvicorn_args.extend(["--reload-dir", str(src_dir)])
 
+    # T0 server profiling: wrap uvicorn under cProfile so SSR/action hot paths
+    # can be measured, and print a summary on shutdown.
+    profile_file: Path | None = None
+    if profile:
+        profile_file = project_dir / ".basis-profile.pstats"
+        uvicorn_args = [
+            sys.executable, "-m", "cProfile",
+            "-o", str(profile_file),
+            *uvicorn_args[1:],  # re-add "-m uvicorn <app> ..."
+        ]
+
     # Run uvicorn in the project directory
     try:
         os.chdir(run_dir)
@@ -116,13 +132,70 @@ def dev(
             uvicorn_args,
             cwd=str(run_dir),
         )
+        if profile and profile_file is not None:
+            _print_profile_summary(profile_file, module_part)
         raise typer.Exit(code=result.returncode)
     except KeyboardInterrupt:
         console.print("\n[dim]👋 Shutting down...[/]")
+        if profile and profile_file is not None:
+            _print_profile_summary(profile_file, module_part)
         raise typer.Exit()
 
 
-def _print_banner(import_path: str, host: str, port: int, reload: bool, hmr: bool, pyc: bool, project_dir: Path):
+def _print_profile_summary(profile_file: Path, module_name: str) -> None:
+    """Print the hot-path summary from a cProfile dump (T0 server profiling).
+
+    Reports the top cumulative-time frames that include this app's own module
+    (or the framework's SSR/render path) so the "where does the time go" answer
+    is about *user* code, not uvicorn's event loop internals.
+    """
+    import pstats
+
+    if not profile_file.exists():
+        console.print(
+            "[yellow]No profile data was written[/] — the server never ran long "
+            "enough to flush stats."
+        )
+        return
+
+    console.print("\n[bold cyan]🔥 Hot-path summary[/] (top cumulative time)")
+    try:
+        stats = pstats.Stats(str(profile_file))
+        stats.strip_dirs()
+        rows = []
+        for func, (cc, nc, tt, ct, callers) in stats.stats.items():
+            # func is (file, line, name); skip the profile machinery itself.
+            if func[2].startswith("_") and func[2] in ("_frame",):
+                continue
+            rows.append((ct, func, tt))
+        rows.sort(reverse=True)
+        shown = 0
+        for ct, func, tt in rows:
+            fname = func[0] or ""
+            if module_name not in fname and "basis" not in fname:
+                continue
+            if shown >= 30:
+                break
+            if ct < 0.005:
+                break
+            console.print(
+                f"  {ct:8.3f}s cum  {tt:8.3f}s self  "
+                f"[dim]{fname}:{func[1]}[/] [white]{func[2]}[/]"
+            )
+            shown += 1
+        if not shown:
+            console.print("  [dim](no app/framework frames above the 5ms threshold)[/]")
+    except Exception as e:  # pragma: no cover - defensive
+        console.print(f"[yellow]Could not read profile: {e}[/]")
+
+    console.print(
+        f"\n[dim]Full profile saved to [bold]{profile_file}[/]. "
+        "Open with `snakeviz`/`gprof2dot`, or: "
+        "`python -m pstats .basis-profile.pstats`.[/]"
+    )
+
+
+def _print_banner(import_path: str, host: str, port: int, reload: bool, hmr: bool, pyc: bool, profile: bool, project_dir: Path):
     """Print a styled startup banner."""
     url = f"http://{host}:{port}"
     if host == "0.0.0.0":
@@ -135,6 +208,8 @@ def _print_banner(import_path: str, host: str, port: int, reload: bool, hmr: boo
     ]
     if pyc:
         lines.append("[bold cyan]⚡ PYC:[/]     [yellow]enabled[/] — serving bytecode to client VFS")
+    if profile:
+        lines.append("[bold cyan]🔬 Profile:[/] [yellow]enabled[/] — cProfile → .basis-profile.pstats on exit")
     if hmr and not reload:
         lines.append("[bold cyan]🔥 HMR:[/]     [green]enabled[/] — live hot-swap (.py/.html/.css)")
     elif reload:
