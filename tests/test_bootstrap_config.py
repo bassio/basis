@@ -127,6 +127,45 @@ def test_pyscript_json_etag_is_page_aware():
     assert again.status_code == 304
 
 
+def test_offline_pyscript_bundle_versioned_and_immutable():
+    """The vendored offline bundle is mounted at a content-addressed
+    /pyscript/<fingerprint> root and served immutable; page shells and the
+    manifest interpreter point at that versioned root — so a bundle upgrade
+    orphans old URLs instead of serving stale WASM/core from a fixed path."""
+    from basis.server.static import offline_pyscript_url
+
+    app = Basis()
+    app.bootstrap()
+
+    class OfflineRoot(Component):
+        """<div>hi</div>"""
+
+    class OfflinePage(Page):
+        root_component = OfflineRoot
+        entry_module = "/test_root.py"
+
+    app.include_page("/ssr", page_cls=OfflinePage)
+    client = TestClient(app)
+
+    root = offline_pyscript_url()
+    assert root.startswith("/pyscript/") and root != "/pyscript"
+
+    # Manifest interpreter points at the versioned pyodide loader.
+    interpreter = client.get("/pyscript.json").json()["interpreter"]
+    assert interpreter == f"{root}/pyodide/pyodide.mjs"
+
+    # The versioned mount serves the asset with immutable caching.
+    r = client.get(interpreter)
+    assert r.status_code == 200
+    assert "immutable" in (r.headers.get("cache-control") or "")
+
+    # SSR page shell references core.js/css at the versioned root.
+    html = client.get("/ssr").text
+    assert f'href="{root}/core.css"' in html
+    assert f'src="{root}/core.js"' in html
+    assert "/pyscript/core.js" not in html
+
+
 def test_manifest_unknown_route_no_page_specific():
     app = Basis()
     app.bootstrap()

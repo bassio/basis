@@ -20,7 +20,7 @@ from pathlib import Path
 
 from fastapi import Request
 
-from basis.server.static import conditional_response
+from basis.server.static import conditional_response, offline_pyscript_url
 
 logger = logging.getLogger('uvicorn.error')
 logger.setLevel(logging.DEBUG)
@@ -482,9 +482,11 @@ class VFSRegistry:
             # Root-absolute: PyScript resolves ``interpreter`` against the
             # *document* URL, so a relative path ("pyscript/...") only works on
             # top-level routes — a nested route like /docs/{path} would fetch
-            # /docs/pyscript/... and 404. The /pyscript mount is at the root, so
-            # the absolute path is correct on every page.
-            "interpreter": "/pyscript/pyodide/pyodide.mjs",
+            # /docs/pyscript/... and 404. The mount is at the root, so the
+            # absolute path is correct on every page. It points at the
+            # content-addressed offline bundle (``/pyscript/<fingerprint>``) so
+            # the Pyodide interpreter + stdlib are immutable-cacheable.
+            "interpreter": offline_pyscript_url() + "/pyodide/pyodide.mjs",
             "client_modules": self.client_modules,
             "basis": {"bootstrap": bootstrap or {}},
         }

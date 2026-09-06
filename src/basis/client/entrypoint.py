@@ -98,9 +98,9 @@ for component_name, module_path in modules_dict.items():
         root_component = getattr(page_cls, "root_component", None)
         if root_component is not None:
             if is_ssr:
-                root_component.mount_app_ssr(
-                    document.body.querySelector("#basis-ssr-root")
-                )
+                # SSR: hydrate in place — the app is a direct <body> child (no
+                # #basis-ssr-root wrapper), so the whole <body> is the tree.
+                root_component.mount_app_ssr(document.body)
             else:
                 root_component.mount_app(document.body)
     except Exception as e:

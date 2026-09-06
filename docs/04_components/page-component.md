@@ -31,13 +31,15 @@ Here is the template `Page` renders, showing the actual structure from `page.py`
             {initial_state_json}
         </script>
     </head>
-    <body>
-        <div id="basis-ssr-root"></div>
-    </body>
+    <body></body>
 </html>
 ```
 
-Your reactive components mount inside `<div id="basis-ssr-root">` during both server rendering and client hydration.
+Your reactive components mount as a **direct child of `<body>`** — server-side
+rendering (SSR) pre-renders them there, and a client-side-rendered (CSR) page
+ships an empty `<body>` that the client fills. Both modes therefore produce the
+same page tree; only the `<meta name="basis-render-mode">` value differs. (There
+is no `#basis-ssr-root` wrapper — see `HYDRATION-WHOLEPAGE.md`.)
 
 ---
 

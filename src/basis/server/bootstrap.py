@@ -222,12 +222,25 @@ class BootstrapMixin:
             name="basis_action",
         )
 
-    def include_offline_pyscript(self, mount_path: str = "/pyscript"):
-        from basis.server.static import BasisStaticFiles
+    def include_offline_pyscript(self, mount_path: str | None = None):
+        """Mount the vendored offline PyScript/Pyodide bundle.
 
+        By default the mount is **content-addressed** — ``offline_pyscript_url()``
+        (``/pyscript/<fingerprint>``) — and served with ``immutable`` caching
+        (see :class:`OfflinePyscriptFiles`). An explicit ``mount_path`` opts out
+        (caller takes responsibility for cache safety).
+        """
+        from basis.server.static import OfflinePyscriptFiles, offline_pyscript_url
+
+        if mount_path is None:
+            mount_path = offline_pyscript_url()
         if self._has_route(name="pyscript") or self._has_route(path=mount_path):
             return
-        pyscript_mount = Mount(mount_path, BasisStaticFiles(packages=[("basis", "static/pyscript")]), name="pyscript")
+        pyscript_mount = Mount(
+            mount_path,
+            OfflinePyscriptFiles(packages=[("basis", "static/pyscript")]),
+            name="pyscript",
+        )
         self.routes.append(pyscript_mount)
 
     def include_pyscript_json(self, mount_path: str = "/pyscript.json"):

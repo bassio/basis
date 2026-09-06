@@ -194,3 +194,68 @@ class BasisStaticFilesPyc(BasisStaticFiles):
 
         return await super().get_response(path, scope)
 
+
+# ──────────────────────────────────────────────
+# Offline PyScript/Pyodide bundle (ROADMAP-PERFORMANCE.md T1 #10)
+# ──────────────────────────────────────────────
+
+#: ``max-age`` for the immutable offline bundle (1 year).
+_IMMUTABLE_MAX_AGE = 31536000
+
+
+def _vendored_bundle_dir() -> Path:
+    """The offline PyScript/Pyodide bundle shipped inside the package
+    (``basis/static/pyscript``)."""
+    return Path(__file__).resolve().parents[1] / "static" / "pyscript"
+
+
+_offline_version: str | None = None
+
+
+def offline_pyscript_url() -> str:
+    """The URL root of the offline PyScript bundle, content-addressed by a
+    deterministic fingerprint of the vendored files (path + size).
+
+    Everything the bundle loads — ``core.js``'s hashed chunks, Pyodide's
+    ``indexURL``-derived ``pyodide.asm.*`` / ``python_stdlib.zip`` / lock —
+    resolves *relative* to its own URL, so mounting under
+    ``/pyscript/<fingerprint>`` keeps the whole tree self-consistent. That is
+    what makes ``immutable`` caching safe: an upgraded vendored bundle changes
+    the fingerprint → a new URL → old entries are orphaned, never served stale.
+    """
+    global _offline_version
+    if _offline_version is None:
+        root = _vendored_bundle_dir()
+        h = hashlib.sha256()
+        try:
+            for p in sorted(root.rglob("*")):
+                if p.is_file():
+                    h.update(p.relative_to(root).as_posix().encode("utf-8"))
+                    h.update(str(p.stat().st_size).encode("utf-8"))
+            _offline_version = h.hexdigest()[:12]
+        except OSError:
+            # Bundle missing (e.g. source tree without package data) — fall
+            # back to an unversioned root so URLs remain stable.
+            _offline_version = ""
+    return f"/pyscript/{_offline_version}" if _offline_version else "/pyscript"
+
+
+class OfflinePyscriptFiles(StaticFiles):
+    """Serves the versioned offline PyScript/Pyodide bundle with long-lived
+    immutable caching.
+
+    Every file lives under a content-addressed version path (see
+    :func:`offline_pyscript_url`), so its URL never changes for the lifetime of
+    that content — clients may cache it forever without revalidating. A bundle
+    upgrade produces a new version path instead of changing bytes at an old
+    one, so returning clients never see a stale WASM/stdlib.
+    """
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers["cache-control"] = (
+                f"public, max-age={_IMMUTABLE_MAX_AGE}, immutable"
+            )
+        return response
+

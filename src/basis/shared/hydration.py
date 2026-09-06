@@ -121,15 +121,21 @@ def normalized_children(node):
         yield child
 
 
-def iter_tree_paths(root):
+def iter_tree_paths(root, prefix="r"):
     """Yield ``(node, path_str)`` for every countable node, depth-first
-    pre-order.  The root is ``r:0``; children are numbered 0..N over
-    ``normalized_children``.
+    pre-order.  The root is ``<prefix>:0`` (default ``r:0``); children are
+    numbered 0..N over ``normalized_children``.
+
+    ``prefix`` names the walk's root region (HYDRATION-WHOLEPAGE.md No.2):
+    each mounted/hydrated region supplies its own root with a distinct prefix
+    (e.g. ``h`` for the head island, ``b`` for the body app), so paths stay
+    globally unique when more than one region shares a document. The default
+    ``"r"`` is byte-compatible with every existing caller.
     """
     stack = [(root, [0])]
     while stack:
         node, path = stack.pop()
-        yield node, "r:" + ":".join(map(str, path))
+        yield node, prefix + ":" + ":".join(map(str, path))
         normalized = list(normalized_children(node))
         # Push reversed so popping yields document order.
         for i, child in reversed(list(enumerate(normalized))):

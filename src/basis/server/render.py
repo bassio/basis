@@ -212,6 +212,13 @@ async def _render_page_ssr(
     title = getattr(page_cls, "title", "Basis App")
     entry_module = getattr(page_cls, "entry_module", "/basis/client/entrypoint.py")
     pyscript_src = getattr(page_cls, "pyscript_src", "/pyscript")
+    # The default "/pyscript" means "the framework's offline bundle", which is
+    # served at a content-addressed /pyscript/<fingerprint> root (immutable
+    # caching) — expand it here so the shell references the versioned URLs.
+    if pyscript_src == "/pyscript":
+        from basis.server.static import offline_pyscript_url
+
+        pyscript_src = offline_pyscript_url()
 
     # Reset global registries to isolate per-request SSR state and avoid DetachedInstanceError
     Store._registry.clear()
@@ -257,14 +264,17 @@ async def _render_page_ssr(
                 except Exception:
                     pass
 
-        # 3. Locate the SSR mount point in the page shell
-        basis_ssr_root = None
+        # 3. Locate the mount region in the page shell: the app mounts as a
+        #    DIRECT child of <body> (no #basis-ssr-root wrapper) so SSR and CSR
+        #    render the same tree — only the basis-render-mode meta differs
+        #    (HYDRATION-WHOLEPAGE.md No.1).
+        body_root = None
         for node in page_instance.__element__.descendants:
-            if hasattr(node, 'getAttribute') and node.getAttribute('id') == 'basis-ssr-root':
-                basis_ssr_root = node
+            if hasattr(node, 'tagName') and node.tagName.lower() == 'body':
+                body_root = node
                 break
-        if basis_ssr_root is None:
-            basis_ssr_root = page_instance.__element__.children[1]
+        if body_root is None:
+            body_root = page_instance.__element__.children[1]
 
         # 4. Optional DB session for the request (DBAppMixin apps)
         session_token = None
@@ -296,7 +306,7 @@ async def _render_page_ssr(
             # 5. Mount the root component (if any — static pages have none)
             mounted_apps = []
             if root_component is not None:
-                mounted_apps.append(root_component.mount_app(basis_ssr_root, replace=False))
+                mounted_apps.append(root_component.mount_app(body_root, replace=False))
 
             # 6. Collect every component for the server_load preload phase
             all_components = []
@@ -367,6 +377,12 @@ def _render_page_csr(
     _set_render_pipeline(True)
     try:
         page_instance = page_cls.load(request=request)
+        # Same default expansion as the SSR engine: the shell's core.js/css
+        # point at the content-addressed offline bundle root.
+        if getattr(page_instance, "pyscript_src", None) == "/pyscript":
+            from basis.server.static import offline_pyscript_url
+
+            page_instance.pyscript_src = offline_pyscript_url()
         page_instance.render_mode = "csr"
         return page_instance.render(request=request)
     finally:

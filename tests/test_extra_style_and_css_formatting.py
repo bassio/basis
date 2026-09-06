@@ -192,7 +192,7 @@ def test_mount_app_injects_extra_style_after_main():
 
 # ── Page.stylesheets (override layer) ──────────────────────────────────────
 
-def test_page_stylesheets_rendered_after_ssr_root():
+def test_page_stylesheets_rendered_after_app_content():
     from fastapi.testclient import TestClient
 
     from basis.server.app import Basis
@@ -215,9 +215,12 @@ def test_page_stylesheets_rendered_after_ssr_root():
     resp = TestClient(app).get("/stylesheets")
     assert resp.status_code == 200
     assert '<link rel="stylesheet" href="/static/app.css"' in resp.text
-    # The override layer must land AFTER the SSR root (where component <style>
-    # elements are injected) so it wins the cascade at equal specificity.
-    assert resp.text.index("basis-ssr-root") < resp.text.index("/static/app.css")
+    # The app mounts as a DIRECT <body> child (no #basis-ssr-root wrapper,
+    # HYDRATION-WHOLEPAGE.md No.1); the user stylesheet must still land AFTER
+    # the app's component content so it wins the cascade at equal specificity.
+    # (Anchor on the app's rendered text — the root element also carries
+    # hydration-marker attributes, so it is not a literal <div>hi</div>.)
+    assert resp.text.index(">hi<") < resp.text.index("/static/app.css")
 
 
 def test_page_stylesheets_default_empty():

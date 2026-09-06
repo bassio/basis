@@ -1,20 +1,26 @@
 from basis.shared.component import Component
-from basis.shared.bindings import SetterBinding
+
 
 class Toggle(Component):
+    """A controlled boolean switch.
+
+    ``value`` is the component's state (one of ``first`` / ``second``) and is
+    parent-driven: bind it (e.g. ``value="{$store.flag}"``) so external changes
+    move the switch, and handle the bubbling ``change`` event to write state
+    back (or persist it, e.g. through a store action on the owner).  The
+    control never writes outside its own ``value`` — the old ``update`` prop
+    (backed by the removed ``SetterBinding``) routed a raw, unpersisted
+    ``$store.attr`` write.
+    """
+
     __tag__ = "ui-toggle"
     first = ""
     second = ""
     value = ""
-    update = ""
     checked = False
 
     def __init_bindings__(self):
         super().__init_bindings__()
-        field_to_update = self.update
-        self.add_binding(SetterBinding(component_instance=self,
-                                       node=self.__element__,
-                                       field=field_to_update))
         # Reflect the bound value onto the checkbox on first mount.
         self._sync_checked()
 
@@ -48,20 +54,13 @@ class Toggle(Component):
         checkbox.checked = bool(checked)
 
     def on_change(self, event):
-
-        #client
+        # Keep the control's own declared state (``value``) in sync with the
+        # DOM (mirrors Checkbox.on_change).  Writing state back to a store /
+        # parent is the owner's job — e.g. a persisting store action in the
+        # handler bound to the bubbling change event.
         checkbox = self.__element__.querySelector('.toggle-checkbox')
-        
-        is_checked = checkbox.checked
-        
-        if not is_checked:
-            value_to_set = self.first
-        else:
-            value_to_set = self.second
-
-        if self.update:
-            field_to_update = self.update
-            setattr(self, field_to_update, value_to_set)
+        is_checked = bool(getattr(checkbox, "checked", False)) if checkbox else False
+        self.value = self.second if is_checked else self.first
 
     def style(self):
         """

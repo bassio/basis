@@ -353,18 +353,6 @@ class TextContentAttributeBinding(AttributeBinding):
         return instance
 
 @dataclass(kw_only=True)
-class SetterBinding(NodeBinding):
-    field: str
-    ast_trees: dict = field(default_factory=dict, init=False, repr=False)
-
-    @property
-    def fields(self):
-        return [self.field]
-
-    def update(self):
-        pass
-
-@dataclass(kw_only=True)
 class ModelBinding(NodeBinding):
     field: str
     _input_type: str = field(default="text", init=False, repr=False)

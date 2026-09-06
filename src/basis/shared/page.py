@@ -23,7 +23,7 @@ from basis.shared.serialization import json_dumps_script_safe
 #: inlining the CSS.) Constructing the element here with a literal
 #: ``ElementString`` bypasses template analysis entirely.
 _VIEWPORT_BASE_CSS = """\
-/* basis mobile viewport base (M1.1) — neutral, theme-agnostic */
+/* basis mobile viewport base */
 html {
     /* iOS: prevent auto font-inflation on rotate/zoom; ``100%`` (not ``none``)
        still lets the user zoom manually. */
@@ -102,7 +102,7 @@ class Page(Component):
     pyscript_json_url: str = "/pyscript.json"
     initial_state_json: str = "{}"
     render_mode: str = "csr"
-    # Mobile viewport policy (ROADMAP-MOBILE.md M1.1). The default is the
+    # Mobile viewport policy. The default is the
     # mobile-correct layout viewport: ``viewport-fit=cover`` opts into
     # ``env(safe-area-inset-*)`` on notched devices, and
     # ``interactive-widget=resizes-content`` makes the on-screen keyboard resize
@@ -192,9 +192,12 @@ class Page(Component):
         </script>
         
     </head>
-    <body>
-        <div id="basis-ssr-root"></div>
-    </body>
+    <!-- The app mounts as a direct child of <body> (SSR pre-renders it here; a
+         CSR page ships this body empty and the client fills it), so SSR and CSR
+         produce the same page tree — only the basis-render-mode meta differs.
+         Declared stylesheets are appended at the END of <body> by Page.render()
+         so they load after the app's component <style> elements. -->
+    <body></body>
 </html>
 """
 

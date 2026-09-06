@@ -116,8 +116,34 @@ def _fallback_rerender(ssr_root, shadow, report, snapshot=None):
         children = list(shadow.childNodes)
         if not children:
             return
-        ssr_root.replaceChildren()
+
+        # The app is a DIRECT child of <body> (no #basis-ssr-root wrapper,
+        # HYDRATION-WHOLEPAGE.md No.1), so we must NOT replaceChildren(body):
+        # that would wipe non-app body siblings — e.g. the user stylesheet
+        # <link>s Page.render() appends at the END of <body>. Remove only the
+        # app-owned nodes (injected component <style>s + the marked component
+        # roots), move the shadow app in, then re-append the non-app siblings
+        # AFTER it so the user stylesheet still loads last (the "your CSS comes
+        # later" cascade contract).
+        def _is_app_owned(node):
+            if getattr(node, "nodeType", None) != 1:  # element only
+                return False
+            if node.hasAttribute("data-component-class"):
+                return True
+            return (
+                node.hasAttribute("data-hydration-id")
+                or node.hasAttribute("data-component-hydration-id")
+                or node.hasAttribute("data-basis-text")
+            )
+
+        owned, non_owned = [], []
+        for child in list(ssr_root.childNodes):
+            (owned if _is_app_owned(child) else non_owned).append(child)
+        for child in owned:
+            ssr_root.removeChild(child)
         for child in children:
+            ssr_root.appendChild(child)
+        for child in non_owned:
             ssr_root.appendChild(child)
 
         if snapshot:

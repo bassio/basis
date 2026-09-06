@@ -40,6 +40,34 @@ def _deterministic_hydration_mode():
 
 
 # ---------------------------------------------------------------------------
+# Two-root groundwork — iter_tree_paths(root, prefix) (HYDRATION-WHOLEPAGE.md
+# No.2: h: head island / b: body app, disjoint namespaces from one algorithm)
+# ---------------------------------------------------------------------------
+
+def test_iter_tree_paths_prefix_parameterization():
+    """The walk root is named by its prefix. The default ``r`` stays
+    byte-compatible; ``h``/``b`` give disjoint namespaces over head/body."""
+    html = html_to_element(
+        "<html><head><meta charset='utf-8'><title>T</title></head>"
+        "<body><div>hi</div></body></html>"
+    )
+    head = next(c for c in html.children if getattr(c, "tag", "") == "head")
+    body = next(c for c in html.children if getattr(c, "tag", "") == "body")
+
+    head_paths = [p for _, p in iter_tree_paths(head, prefix="h")]
+    body_paths = [p for _, p in iter_tree_paths(body, prefix="b")]
+    default_paths = [p for _, p in iter_tree_paths(body)]
+
+    # head root + its countable children are h:-prefixed, body b:-prefixed
+    assert head_paths[0] == "h:0" and all(p.startswith("h:") for p in head_paths)
+    assert body_paths[0] == "b:0" and all(p.startswith("b:") for p in body_paths)
+    # backward-compatible default (existing callers pass no prefix → r:0…)
+    assert default_paths[0] == "r:0"
+    # the two region namespaces never collide
+    assert not (set(head_paths) & set(body_paths))
+
+
+# ---------------------------------------------------------------------------
 # Phase E — diagnostics report (shared shape)
 # ---------------------------------------------------------------------------
 
