@@ -45,8 +45,9 @@ def _deterministic_hydration_mode():
 # ---------------------------------------------------------------------------
 
 def test_iter_tree_paths_prefix_parameterization():
-    """The walk root is named by its prefix. The default ``r`` stays
-    byte-compatible; ``h``/``b`` give disjoint namespaces over head/body."""
+    """The walk root is named by its prefix. The default ``b`` (the body/app
+    region) is what a standalone walk gets; ``h``/``b`` give disjoint
+    namespaces over head/body."""
     html = html_to_element(
         "<html><head><meta charset='utf-8'><title>T</title></head>"
         "<body><div>hi</div></body></html>"
@@ -61,8 +62,8 @@ def test_iter_tree_paths_prefix_parameterization():
     # head root + its countable children are h:-prefixed, body b:-prefixed
     assert head_paths[0] == "h:0" and all(p.startswith("h:") for p in head_paths)
     assert body_paths[0] == "b:0" and all(p.startswith("b:") for p in body_paths)
-    # backward-compatible default (existing callers pass no prefix → r:0…)
-    assert default_paths[0] == "r:0"
+    # the default prefix is the body/app region (b:) — there is no r: scheme
+    assert default_paths[0] == "b:0"
     # the two region namespaces never collide
     assert not (set(head_paths) & set(body_paths))
 
@@ -85,16 +86,16 @@ def test_hydration_report_starts_clean():
 
 def test_hydration_report_accumulates_and_serializes():
     report = HydrationReport()
-    report.add_unhydrated_component("StatusBar", client_id="r:0:3", reason="x")
+    report.add_unhydrated_component("StatusBar", client_id="b:0:3", reason="x")
     report.add_unmatched_binding(
-        "Root", "TextBinding", client_id="r:0:0", reason="text node not matched"
+        "Root", "TextBinding", client_id="b:0:0", reason="text node not matched"
     )
     report.set_fallback("whole-app client re-render")
 
     assert report.is_clean is False
     data = report.to_dict()
     assert data["unhydrated_components"] == [
-        {"tag": "StatusBar", "client_id": "r:0:3", "reason": "x"}
+        {"tag": "StatusBar", "client_id": "b:0:3", "reason": "x"}
     ]
     assert data["unmatched_bindings"][0]["binding_type"] == "TextBinding"
     assert data["fallback"] == "whole-app client re-render"
@@ -320,31 +321,31 @@ def test_tree_builder_does_not_merge_across_tags():
 
 GOLDEN = {
     "flat": {
-        "r:0": ("tag", "div"),
-        "r:0:0": ("tag", "span"),
-        "r:0:0:0": ("#text", "Score: {score}"),
+        "b:0": ("tag", "div"),
+        "b:0:0": ("tag", "span"),
+        "b:0:0:0": ("#text", "Score: {score}"),
     },
     "indented": {
-        "r:0": ("tag", "div"),
-        "r:0:0": ("tag", "span"),
-        "r:0:0:0": ("#text", "{a}"),
-        "r:0:1": ("tag", "span"),
-        "r:0:1:0": ("#text", "{b}"),
+        "b:0": ("tag", "div"),
+        "b:0:0": ("tag", "span"),
+        "b:0:0:0": ("#text", "{a}"),
+        "b:0:1": ("tag", "span"),
+        "b:0:1:0": ("#text", "{b}"),
     },
     "inline_comment": {
-        "r:0": ("tag", "p"),
-        "r:0:0": ("#text", "Hello "),
-        "r:0:1": ("tag", "b"),
-        "r:0:1:0": ("#text", "{name}"),
-        "r:0:2": ("#text", "!"),
-        "r:0:3": ("#text", "Bye"),
+        "b:0": ("tag", "p"),
+        "b:0:0": ("#text", "Hello "),
+        "b:0:1": ("tag", "b"),
+        "b:0:1:0": ("#text", "{name}"),
+        "b:0:2": ("#text", "!"),
+        "b:0:3": ("#text", "Bye"),
     },
     "nested": {
-        "r:0": ("tag", "section"),
-        "r:0:0": ("tag", "h2"),
-        "r:0:0:0": ("#text", "Hi"),
-        "r:0:1": ("tag", "p"),
-        "r:0:1:0": ("#text", "{body}"),
+        "b:0": ("tag", "section"),
+        "b:0:0": ("tag", "h2"),
+        "b:0:0:0": ("#text", "Hi"),
+        "b:0:1": ("tag", "p"),
+        "b:0:1:0": ("#text", "{body}"),
     },
 }
 
@@ -392,8 +393,8 @@ def test_canonical_paths_are_whitespace_stable():
     padded = html_to_element(
         "<div>\n    <span>{a}</span>\n    <span>{b}</span>\n</div>"
     )
-    assert element_paths(base) == {"r:0", "r:0:0", "r:0:1"}
-    assert element_paths(padded) == {"r:0", "r:0:0", "r:0:1"}
+    assert element_paths(base) == {"b:0", "b:0:0", "b:0:1"}
+    assert element_paths(padded) == {"b:0", "b:0:0", "b:0:1"}
 
 
 # ---------------------------------------------------------------------------
@@ -461,14 +462,14 @@ def test_apply_hydration_markers_stamps_bindings_and_components():
         root, binding_nodes=[root, *spans], component_nodes=[root]
     )
 
-    assert root.getAttribute("data-component-hydration-id") == "r:0"
-    assert root.getAttribute("data-hydration-id") == "r:0"
-    assert spans[0].getAttribute("data-hydration-id") == "r:0:0"
-    assert spans[1].getAttribute("data-hydration-id") == "r:0:1"
+    assert root.getAttribute("data-component-hydration-id") == "b:0"
+    assert root.getAttribute("data-hydration-id") == "b:0"
+    assert spans[0].getAttribute("data-hydration-id") == "b:0:0"
+    assert spans[1].getAttribute("data-hydration-id") == "b:0:1"
     assert report == {
-        "r:0": {"binding": True, "component": True},
-        "r:0:0": {"binding": True, "component": False},
-        "r:0:1": {"binding": True, "component": False},
+        "b:0": {"binding": True, "component": True},
+        "b:0:0": {"binding": True, "component": False},
+        "b:0:1": {"binding": True, "component": False},
     }
 
 
@@ -483,10 +484,10 @@ def test_build_hydration_map_keys_by_stamped_path():
     )
 
     ssr_map = build_hydration_map(root)
-    assert set(ssr_map.keys()) == {"r:0", "r:0:0", "r:0:1"}
-    assert ssr_map["r:0"] is root
-    assert ssr_map["r:0:0"] is spans[0]
-    assert ssr_map["r:0:1"] is spans[1]
+    assert set(ssr_map.keys()) == {"b:0", "b:0:0", "b:0:1"}
+    assert ssr_map["b:0"] is root
+    assert ssr_map["b:0:0"] is spans[0]
+    assert ssr_map["b:0:1"] is spans[1]
 
 
 def test_build_hydration_map_ignores_unmarked_nodes():

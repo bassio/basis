@@ -7,7 +7,7 @@ MOBILE-M1.1-PLAN.md):
   ``interactive-widget=resizes-content``) in BOTH SSR and CSR.
 * A ``Page`` subclass may override ``viewport`` to opt out — the rendered meta
   reflects the subclass value exactly.
-* ``Page.render`` injects the framework mobile base CSS as a light-DOM
+* ``Page._render`` injects the framework mobile base CSS as a light-DOM
   ``<style id="basis-viewport">`` into ``<head>`` (component styles live in
   shadow roots and cannot reach ``html``/``body``); it is present and intact
   (not binding-parsed/escaped) in SSR and CSR output.

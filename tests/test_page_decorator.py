@@ -7,7 +7,8 @@ Tests for the Page / root-component API:
 * ``app.include_page(path, page_cls=...)`` registers a Page; also usable as a decorator.
 * ``include_page`` requires a Page subclass.
 * ``Page`` defaults: ``root_component = None`` (abstract/static shell), ``stores = []``.
-* Synthesized pages are NOT emitted into ``#basis-entrypoint-imports``.
+* Synthesized pages ARE listed in the per-page manifest ``entrypoint`` under
+  their root component name (P0 — one client driver for every page).
 * SSR pages carry a ``<meta name="basis-render" content="ssr">`` marker (the
   unified client entrypoint dispatches on it); a strict page store subset is
   emitted as ``#basis-page-stores`` and the framework control-plane store
@@ -192,7 +193,7 @@ def test_page_subclass_carries_root_and_stores():
     assert Concrete.stores == ["one", "two"]
 
 
-def test_synthesized_page_not_in_manifest_entrypoint():
+def test_synthesized_page_listed_in_manifest_entrypoint():
     app = Basis()
 
     @app.page(path="/")
@@ -202,12 +203,15 @@ def test_synthesized_page_not_in_manifest_entrypoint():
     client = TestClient(app)
     resp = client.get("/")
     assert resp.status_code == 200
-    # The synthesized class is server-side shell config only — its (unimportable)
-    # name must not leak into the per-page manifest's basis.bootstrap.entrypoint.
+    # The synthesized shell boots through the SAME single client driver as a
+    # real Page (P0): the manifest lists its root COMPONENT by name so the
+    # driver can import the module and rebuild the shell. The synthesized class
+    # name itself stays server-side config — it never leaks into HTML/manifest.
     assert "HomePage" not in resp.text
     manifest = client.get("/pyscript.json?url=/")
     assert manifest.status_code == 200
-    assert "entrypoint" not in manifest.json()["basis"]["bootstrap"]
+    entrypoint = manifest.json()["basis"]["bootstrap"].get("entrypoint", {})
+    assert set(entrypoint) == {"Home"}
 
 
 def test_ssr_page_emits_render_mode_marker():
@@ -616,10 +620,9 @@ def test_page_response_rejects_unknown_render_mode():
 
 
 # ---------------------------------------------------------------------------
-# Page.load — unified store instantiation (SSR and CSR)
+# Page._load — unified store instantiation (SSR and CSR)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_page_load_instantiates_stores_without_ssr_flag():
     from basis.shared.page import Page
 
@@ -634,18 +637,21 @@ def test_page_load_instantiates_stores_without_ssr_flag():
     class MyPage(Page):
         stores = ["csr_load_store"]
 
-    # load() with no ssr flag still instantiates the page's stores.
-    MyPage.load()
+    # _load() with no ssr flag still instantiates the page's stores.
+    MyPage._load()
     store = Store._registry.get("csr_load_store")
     assert isinstance(store, S)
     assert store.v == 7
 
 
 def test_client_basis_shim_mirrors_serve_onto_page():
-    """The client-side Basis shim must expose ``serve`` (mirroring ``page``) so
-    the single-file ``@app.serve`` component quickstart hydrates in the browser
-    (the component file is the PyScript boot module; the shim is only defined
-    when IS_CLIENT, so this is a source-level guard)."""
+    """The client-side Basis shim mirrors ``serve`` onto ``page`` so the
+    single-file ``@app.serve`` component quickstart is accepted on the client.
+    The shim is a decorator-idom annotation (like ``@scoped``/``@py_event``): it
+    stamps the decorated root component's OWN ``__dict__`` with its
+    synthesized-shell recipe (``_synthesized_page_args``) and leaves mounting to
+    the client driver — no module-global registry, no import-time registration.
+    Source-level guard (the shim is only defined when IS_CLIENT)."""
     import inspect
 
     import basis.shared.component as component_mod
@@ -653,3 +659,7 @@ def test_client_basis_shim_mirrors_serve_onto_page():
     src = inspect.getsource(component_mod)
     assert "def serve(self, *args, **kwargs):" in src
     assert "self.page(component, **kwargs)" in src
+    # Decorator-idom annotation on the class, not a module-global registry.
+    assert "_synthesized_page_args" in src
+    assert 'component.__dict__["_synthesized_page_args"]' in src
+    assert "_registered_root_components" not in src

@@ -7,7 +7,8 @@ Covers:
   ``entrypoint`` / ``page_stores`` alongside the app-global ``store_modules`` /
   ``headless_modules``.
 * ``app._pages`` is keyed by route and populated by ``include_page`` + ``@app.page``.
-* Synthesized ``@app.page`` shells emit NO entrypoint.
+* Synthesized ``@app.page`` shells ARE listed in ``entrypoint`` (root component
+  name — P0: one client driver for every page).
 * Custom ``pyscript_json_url`` is left unchanged (no ``?url=`` appended).
 * ``client_modules`` stays at the manifest root.
 """
@@ -205,7 +206,7 @@ def test_hand_rolled_route_self_registers_page_for_manifest(tmp_path):
     manifest: the shell appends ?url= from the request and self-registers the
     route→page mapping so the endpoint can resolve the page.
 
-    Note: ``Page.load()`` reconstructs the class via ``initialize()``
+    Note: ``Page._load()`` reconstructs the class via ``initialize()``
     (``type(cls.__name__, (cls,), ...)``), so ``app._pages["/"]`` is that
     reconstructed subclass — assert by name/module, not identity.
     """
@@ -318,7 +319,7 @@ def test_page_aware_config_url():
     assert page_aware_config_url("/pyscript.json?x=1", FakeRequest) == "/pyscript.json?x=1"
 
 
-def test_page_bootstrap_skips_synthesized_entrypoint():
+def test_page_bootstrap_lists_synthesized_entrypoint():
     app = Basis()
 
     @app.page(path="/")
@@ -326,4 +327,7 @@ def test_page_bootstrap_skips_synthesized_entrypoint():
         """<div>Hi</div>"""
 
     page_cls = app._pages["/"]
-    assert page_bootstrap(app, page_cls).get("entrypoint") is None
+    # P0: synthesized shells boot through the SAME client driver as real Pages —
+    # the manifest lists the root component so the driver can import + rebuild.
+    entrypoint = page_bootstrap(app, page_cls).get("entrypoint")
+    assert set(entrypoint or {}) == {"Home"}

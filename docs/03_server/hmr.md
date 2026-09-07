@@ -173,7 +173,7 @@ Content is always **pushed over the WebSocket** — no file is re-fetched over H
 
 1. Resolve the owning component class by `module` (or fall back to the filename heuristic / explicit class name).
 2. Set `cls.style = content` and re-derive the scoped string via `cls._get_style_string()`, so `@scope`-wrapped styles stay scoped.
-3. Update every mounted `<style data-component-class="…">` for that class — from `BaseComponent._style_elements` (a registry filled by `mount_app` that works inside shadow roots) **and** from a light-DOM scan, so the visible stylesheet always reflects the change.
+3. Update every mounted `<style data-component-class="…">` for that class — re-resolved by selector so the visible stylesheet always reflects the change.
 4. If the component isn't mounted, fall back to a global `<style id="basis-hmr-global-css">` appended to `<body>`.
 
 The class object and the `.py` module are untouched; only the stylesheet text changes. No re-render is needed.

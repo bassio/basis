@@ -235,7 +235,7 @@ def _hydrate_page_head(page_cls, report=None, *, stamp_live=True):
     """Stage the Page's ``<head>`` region and re-point its head bindings at the
     LIVE ``document.head`` (HYDRATION-WHOLEPAGE.md §4.1 P2 shared head pass).
 
-    Used by the CSR boot (``Page.mount_document_csr``): the served CSR head is
+    Used by the CSR boot (``Page.mount_document`` — CSR): the served CSR head is
     STATIC (the server never stamps it), so:
 
     1. Mount the Page detached in a ``DocumentFragment`` (a browser
@@ -345,7 +345,7 @@ def _hydrate_page_document_ssr(page_cls):
                 # a nested ChildBinding under a hyphenated host tag (declared or
                 # kebab-derived) — every page root mounts this way, the exact
                 # shape the server serves. The legacy imperative staged
-                # mount_app path is gone (§4.1 P5).
+                # mount path is gone (§4.1 P5).
                 mounted_app = staged_page.mount_root_app()
                 instances = [mounted_app]
                 instances.extend(
@@ -517,7 +517,7 @@ def _fallback_rerender(ssr_root, shadow, report, snapshot=None):
         # The app is a DIRECT child of <body> (no #basis-ssr-root wrapper,
         # HYDRATION-WHOLEPAGE.md No.1), so we must NOT replaceChildren(body):
         # that would wipe non-app body siblings — e.g. the user stylesheet
-        # <link>s Page.render() appends at the END of <body>. Remove only the
+        # <link>s Page._render() appends at the END of <body>. Remove only the
         # app-owned nodes (injected component <style>s + the marked component
         # roots), move the shadow app in, then re-append the non-app siblings
         # AFTER it so the user stylesheet still loads last (the "your CSS comes

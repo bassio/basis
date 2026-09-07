@@ -115,10 +115,9 @@ def test_serialize_initial_state_includes_subclass_constructor_state():
 
 
 # ---------------------------------------------------------------------------
-# Page.load page-store reconstruction
+# Page._load page-store reconstruction
 # ---------------------------------------------------------------------------
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_page_load_reconstructs_entrypoint_store_subclass():
     from basis.shared.page import Page
 
@@ -128,13 +127,14 @@ def test_page_load_reconstructs_entrypoint_store_subclass():
         stores = ["ssr_entry"]
 
     Store._registry.clear()
-    EntryPage.load()
+    EntryPage._load()
 
     store = Store._registry.get("ssr_entry")
     assert isinstance(store, CounterStore)
     assert store.count == 0
 
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_page_load_reconstructs_entrypoint_store_with_constructor_args():
     """
@@ -150,7 +150,7 @@ def test_page_load_reconstructs_entrypoint_store_with_constructor_args():
         stores = ["ssr_arg_entry"]
 
     Store._registry.clear()
-    ArgPage.load()
+    ArgPage._load()
 
     store = Store._registry.get("ssr_arg_entry")
     assert isinstance(store, ArgStore)

@@ -1,5 +1,4 @@
 import json
-import warnings
 
 from basis.shared.component import Component, IS_CLIENT
 from basis.shared.element import Element, DocumentType
@@ -45,18 +44,6 @@ button, a, input, select, textarea, [role="button"] {
     touch-action: manipulation;
 }
 """
-
-#: True while the framework's render pipeline (``render_page`` /
-#: ``PageResponse.from_page``) runs, so ``Page.load()`` / ``Page.render()`` do
-#: not warn on their internal calls.
-_render_pipeline_active = False
-
-
-def _set_render_pipeline(active: bool) -> None:
-    """Internal: mark whether we're inside the framework's render pipeline."""
-    global _render_pipeline_active
-    _render_pipeline_active = active
-
 
 def page_aware_config_url(base_url: str, request) -> str:
     """Append ``?url=<route>`` to the framework's own ``pyscript.json`` config URL.
@@ -201,7 +188,7 @@ class Page(Component):
     pyscript_src: str = "/pyscript"
     pyscript_json_url: str = "/pyscript.json"
     initial_state_json: str = "{}"
-    render_mode: str = "csr"
+    render_mode: str = "ssr"
     # Mobile viewport policy. The default is the
     # mobile-correct layout viewport: ``viewport-fit=cover`` opts into
     # ``env(safe-area-inset-*)`` on notched devices, and
@@ -218,11 +205,7 @@ class Page(Component):
     #: it can be overridden per-page; defaults to the neutral ``_VIEWPORT_BASE_CSS``.
     viewport_base_css: str = _VIEWPORT_BASE_CSS
     #: Dev-mode marker rendered as an in-tree ``<meta name="basis-mode">`` via an
-    #: ``if``-binding (category 2/1 — no comment anchor). The SSR/CSR engines set
-    #: it from the request at mount time (True only when the HMR dev watcher runs,
-    #: mirroring ``basis dev --hmr`` → ``BASIS_HMR=1``); on the client it stays
-    #: False, so the served dev meta is adopted as static head content (re-point
-    #: never hides live nodes).
+    #: ``if``-binding.
     basis_dev_mode: bool = False
     root_component = None
     stores = []
@@ -230,7 +213,7 @@ class Page(Component):
     #: body-mounted app and the ``<head>`` component styles — so they load later
     #: in the document and win the cascade at equal specificity (the "your CSS
     #: comes later" rule). The base ``Page.template()`` body carries a
-    #: ``<!-- basis:user-stylesheets -->`` anchor there; :meth:`Page.render`
+    #: ``<!-- basis:user-stylesheets -->`` anchor there; :meth:`Page._render`
     #: replaces it with these ``<link rel="stylesheet">`` elements at assembly
     #: time. This is the framework-native home for a user override stylesheet
     #: (e.g. a generated ``static/app.css``).
@@ -251,11 +234,10 @@ class Page(Component):
         the main stylesheet, else the ``@extra_style`` name) and ``css`` (the
         formatted stylesheet). The set/order comes from
         ``BaseComponent._ordered_style_sources`` — the same producer that once
-        fed ``mount_app``'s legacy body injection — so the in-tree and injected
-        homes could never diverge. Since §4.1 P5 every boot path goes through a
-        Page (synthesized ``@app.page`` shells included), so component styles
-        always render in-tree here and the legacy ``mount_app`` body injection
-        is gone.
+        fed the legacy body injection — so the in-tree and injected homes could
+        never diverge. Since §4.1 P5 every boot path goes through a Page
+        (synthesized ``@app.page`` shells included), so component styles always
+        render in-tree here and the legacy body injection is gone.
 
         Server vs client parity is guaranteed by making the SERVED page head
         authoritative, not by enumerating a shared registry: the server renders
@@ -283,14 +265,10 @@ class Page(Component):
         ]
 
     @classmethod
-    def load(cls, request=None):
-        if not _render_pipeline_active:
-            warnings.warn(
-                "Page.load() is deprecated for direct use — serve pages via "
-                "PageResponse.from_page() (or render_page()).",
-                DeprecationWarning,
-                stacklevel=2,
-            )
+    def _load(cls, request=None):
+        """Mount this Page class into a fresh ``<html>`` shell and return the
+        instance. Internal — the SSR/CSR engines call it; the blessed serving
+        API is ``PageResponse.from_page`` / ``render_page``."""
         # Instantiate the page's stores — its explicit ``stores`` subset, or all
         # auto-discovered stores when empty — so they exist before the server
         # renders and serialize cleanly into the initial state. Runs for both SSR
@@ -362,7 +340,8 @@ class Page(Component):
         template child uses), so the app is ONE owned node of the Page's tree,
         ordered deterministically before the trailing user-stylesheet ``<link>``s
         with no imperative relocation. ``@include_store``/``@include_model``
-        providers mount ahead of it exactly as ``mount_app`` mounted them.
+        providers mount ahead of it exactly as :meth:`BaseComponent.mount_with_providers`
+        mounts them.
 
         The host tag is the root's declared hyphenated ``__tag__`` when it has
         one; otherwise it is kebab-derived from the root class name, and the
@@ -404,7 +383,7 @@ class Page(Component):
 
         # Providers first (appended), then the root host, then relocate the
         # whole block to the app-root slot and drop the marker comment — the
-        # legacy mount_app ordering, minus the comment.
+        # legacy imperative page-mount ordering, minus the comment.
         ref = _container_last_child(body)
         anchor = _find_anchor_comment(body, "basis:app-root")
         providers = _mount_root_providers(root_component, body)
@@ -437,14 +416,6 @@ class Page(Component):
                 pass
         return app
 
-    def head(self):
-        """Override to add custom head content."""
-        return ""
-
-    def body(self):
-        """Override to add main page content."""
-        return ""
-
     def template(self):
         """
 <html>
@@ -452,6 +423,8 @@ class Page(Component):
         <meta charset="UTF-8" />
         <meta name="viewport" content="{viewport}" />
         <meta name="basis-render-mode" content="{render_mode}" />
+        <meta name="basis-mode" content="dev" if="{basis_dev_mode}" />
+
         <title>{title}</title>
 
         <!-- PyScript bundle -->
@@ -463,37 +436,17 @@ class Page(Component):
         <!-- PyScript entry point: mounts/hydrates the application -->
         <script type="py" src="{entry_module}" config="{pyscript_json_url}"></script>
 
-        <!-- Basis SSR: initial store state for client hydration -->
+        <!-- Initial store state -->
         <script id="basis-initial-state" type="application/json">
             {initial_state_json}
         </script>
 
-        <!-- P3/P4 in-tree chrome: component styles (keyed loop over
-             component_style_items), the framework viewport base CSS (computed
-             text-content) and the dev-mode meta (an if-binding over
-             Page.basis_dev_mode). These were once server-appended by
-             Page.render()/mount_app; they are now OWNED reactive nodes of the
-             Page template, so they sit inside the h: hydration surface and
-             nothing fights the tree afterwards. -->
-        <style text-content="{item['css']}" for="item" in="{component_style_items()}" key="uid" data-component-class="{item['name']}" data-extra-style="{item['extra']}"></style>
         <style id="basis-viewport" text-content="{viewport_base_css}"></style>
-        <meta name="basis-mode" content="dev" if="{basis_dev_mode}" />
+
+        <!-- component styles -->
+        <style text-content="{item['css']}" for="item" in="{component_style_items()}" key="uid" data-component-class="{item['name']}" data-extra-style="{item['extra']}"></style>
+        
     </head>
-    <!-- The app mounts as a direct child of body (SSR pre-renders it here; a
-         CSR page ships an empty body region and the client fills it), so SSR
-         and CSR produce the same page tree — only the basis-render-mode meta
-         differs. The root component mounts at the basis:app-root anchor (a
-         comment the mount treats as its insertion point), so template content
-         that FOLLOWS the anchor — the user stylesheet <link>s at the very END
-         of body — stays after the app and wins the cascade (the "your CSS
-         comes later" rule). The basis:user-stylesheets anchor is replaced by
-         Page.render() with the declared stylesheet links.
-         NOTE (§4.1 P4 finding, 2026-09-07): user links CANNOT yet be an in-tree
-         body <link> loop — an engine-mounted app and a declarative loop at the
-         same trailing slot race (browser-verified: the loop item lands before
-         the app → b:0:1 mismatch). The clean fix is the final architecture,
-         where the APP is a declarative template child; until then the links
-         stay server-assembled at this anchor. -->
     <body>
         <!-- basis:app-root -->
         <!-- basis:user-stylesheets -->
@@ -527,12 +480,35 @@ class Page(Component):
     # <head> bindings are kept alive by real hydration instead of being
     # server-frozen. CSR adopts the served shell (head h: + body b: chrome) and
     # client-renders the app into <body>; SSR hydrates the whole served document
-    # in place (head h: + body b: incl. the pre-rendered app). These are
-    # client-only entry points (the server never calls them); on the server they
-    # are inert no-ops.
+    # in place (head h: + body b: incl. the pre-rendered app). Client-only —
+    # the server never calls these (they are inert no-ops there).
 
     @classmethod
-    def mount_document_csr(cls, document=None):
+    def mount_document(cls, document=None):
+        """Client-only: mount this Page into the live document.
+
+        The single public client mount entry (its only caller is
+        ``basis.client.entrypoint``). The served document already declares its
+        own mode in ``<meta name="basis-render-mode">``, so this reads it once
+        and dispatches: SSR hydrates the WHOLE served document in place; CSR
+        keeps the served head static and client-renders the body region.
+        """
+        if not IS_CLIENT:
+            return None
+        from pyscript import document as _document
+
+        doc = document if document is not None else _document
+        meta = doc.querySelector('meta[name="basis-render-mode"]')
+        is_ssr = (
+            meta is not None
+            and getattr(meta, "getAttribute", lambda _: "")("content") == "ssr"
+        )
+        if is_ssr:
+            return cls._mount_document_ssr(doc)
+        return cls._mount_document_csr(doc)
+
+    @classmethod
+    def _mount_document_csr(cls, document=None):
         """Client-only: mount the page for a CSR document.
 
         CSR head half-hydration (§4.1 P2): the served static shell is kept
@@ -585,7 +561,7 @@ class Page(Component):
         return staged_page
 
     @classmethod
-    def mount_document_ssr(cls, document=None):
+    def _mount_document_ssr(cls, document=None):
         """Client-only: hydrate the WHOLE served SSR document in place.
 
         The Page's OWN bindings (head ``h:`` region: title / viewport meta /
@@ -603,28 +579,21 @@ class Page(Component):
 
         return _hydrate_page_document_ssr(cls)
 
-    def render(self, request, initial_state_json=None):
+    def _render(self, request, initial_state_json=None, *, stamp_hydration=False, body_app=None):
         """Assemble the full HTML document (shell + initial state + head/body).
 
-        This is the single server-side page-render funnel — both the SSR and CSR
-        engines end in this method. It is internal: serve pages via
-        ``PageResponse.from_page()`` / ``render_page()``. Calling it (or
-        ``Page.load()``) directly is the legacy pattern and is deprecated.
+        Internal — the single server-side page-render funnel both the SSR and
+        CSR engines end in; serve pages via ``PageResponse.from_page()`` /
+        ``render_page()`` instead. ``stamp_hydration`` asks for the whole-page
+        hydration pass (SSR only), with ``body_app`` the declaratively-mounted
+        root app whose subtree joins the ``b:`` walk.
         """
-        if not _render_pipeline_active:
-            warnings.warn(
-                "Page.render() (and Page.load()) are deprecated for direct use — "
-                "serve pages via PageResponse.from_page() (or render_page()).",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
         # Page-aware PyScript config: the per-page manifest is served at
         # ?url=<route> (the endpoint injects this page's bootstrap under
-        # basis.bootstrap). Computed here because render() always has the request
-        # — covering SSR, CSR, and hand-rolled routes that call Page.load()
-        # without one. The assignment re-renders the config attribute (verified)
-        # and page_aware_config_url is idempotent.
+        # basis.bootstrap). Computed here because _render() always has the
+        # request — covering SSR, CSR, and hand-rolled routes that call
+        # Page._load() without one. The assignment re-renders the config
+        # attribute (verified) and page_aware_config_url is idempotent.
         self.pyscript_json_url = page_aware_config_url(self.pyscript_json_url, request)
 
         # Self-register the route → page mapping so /pyscript.json?url=<route>
@@ -708,10 +677,10 @@ class Page(Component):
         # document carries the whole head+body surface the client keeps alive.
         # CSR leaves this off (its shell is served static; the client half-
         # hydrates and client-renders instead).
-        if getattr(self, "_stamp_page_hydration", False):
+        if stamp_hydration:
             from basis.shared.hydration import apply_hydration_to_page
 
-            apply_hydration_to_page(self)
+            apply_hydration_to_page(self, body_app=body_app)
 
         return self.doctype.__html__() + "\n" + self.__element__.outerHTML
 
@@ -734,11 +703,12 @@ def _synthesize_page(
     real ``Page`` subclass — in-tree ``<head>`` component styles, a declarative
     root child under its (declared or derived) host tag, whole-document ``h:``/
     ``b:`` stamping — on both the server and the client. The per-page manifest
-    does not emit it as the client ``entrypoint`` (the client boots from the
-    component file itself, reconstructing the same shell in the ``Basis.page``
-    shim and mounting it through ``mount_document_*``).
+    lists it under its root COMPONENT name, so it boots through the SAME single
+    client driver as a real Page (P0): the driver imports the component module
+    (whose client ``@app.page`` decoration registered the shell inputs) and
+    rebuilds this class before mounting.
 
-    Because of that client boot path, page-level ``stores`` cannot reach the
+    Because the decoration takes no page-level ``stores``, they cannot reach the
     browser here — a shell that declares its own ``root_component`` or ``stores``
     is a complete page and belongs in ``app.include_page`` instead.
     """

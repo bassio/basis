@@ -127,8 +127,8 @@ class HMRClient:
 
         # Re-resolve the component's live <style> tags by selector and rewrite
         # them in place. Styles live in-tree in the Page <head> (the
-        # component_style_items loop, §4.1 P3) — there is no mount_app body
-        # injection to track (that machinery is gone, §4.1 P5), so a selector
+        # component_style_items loop, §4.1 P3) — there is no body injection to
+        # track (that machinery is gone, §4.1 P5), so a selector
         # re-resolution at update time is the single source of truth and never
         # trusts a stale element reference across a loop reconciliation.
         for se in document.querySelectorAll(

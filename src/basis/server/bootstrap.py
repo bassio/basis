@@ -96,7 +96,23 @@ def page_bootstrap(app, page_cls=None) -> dict:
             if page_store_names:
                 bootstrap["page_stores"] = page_store_names
 
-        if not getattr(page_cls, "__synthesized__", False):
+        if getattr(page_cls, "__app_page__", False):
+            # A synthesized @app.page shell — booted through the SAME single
+            # client driver as a real Page (HYDRATION-WHOLEPAGE.md P0). The
+            # entrypoint lists the root COMPONENT (its name is getattr-able from
+            # its module); importing that module runs the client @app.page
+            # decoration (which annotates the component with its shell recipe)
+            # and the driver rebuilds the shell. (Plugin-synthesized pages —
+            # _synthesize_page without @app.page —
+            # are NOT listed: their module carries no client registration to
+            # rebuild from, so they keep their own entry_module boot.)
+            root = getattr(page_cls, "root_component", None)
+            module_file = (
+                app.vfs.component_module_name(root) if root is not None else None
+            )
+            if module_file:
+                bootstrap["entrypoint"] = {root.__name__: module_file}
+        else:
             module_file = app.vfs.component_module_name(page_cls)
             if module_file and module_file != "basis.shared.page":
                 bootstrap["entrypoint"] = {page_cls.__name__: module_file}

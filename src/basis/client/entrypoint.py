@@ -25,15 +25,10 @@ install_error_sink()
 
 print("[Basis] Running Python version:", sys.version)
 
-# The page shell carries <meta name="basis-render-mode" content="ssr"> on
-# server-rendered pages (a reactive template binding); "csr" (the default)
-# selects the plain client mount.
-render_meta = document.querySelector('meta[name="basis-render-mode"]')
-is_ssr = (
-    render_meta is not None
-    and getattr(render_meta, "getAttribute", lambda _: "")("content") == "ssr"
-)
-print(f"[Basis] Zero-Config Entrypoint started (mode: {'SSR' if is_ssr else 'CSR'}).")
+# Page.mount_document reads the served <meta name="basis-render-mode"> and
+# dispatches SSR (hydrate the whole document in place) vs CSR (keep the served
+# head static and render the body region).
+print("[Basis] Zero-Config Entrypoint started.")
 
 # ── Data plane: every store exists before any component module is imported ──
 
@@ -87,7 +82,17 @@ for module_name in headless_modules:
     except Exception as e:
         print(f"[Basis] Error importing headless component module {module_name}: {e}")
 
-# ── View plane: import the page component and mount it ──
+# ── View plane: import the page and mount it (the ONE boot driver) ──
+# Every page — real Page subclasses AND synthesized @app.page shells — is
+# listed in the manifest entrypoint and boots through here (P0). Each entry
+# names a module attribute: a real Page subclass for a Page module, or a root
+# COMPONENT decorated with @app.page (which carries its synthesized-shell recipe
+# on the class itself — _synthesized_page_args, in its OWN __dict__ — set by the
+# client decoration when the module was imported). Page.mount_document reads the
+# served render-mode meta and dispatches; there is no legacy body-only mount
+# path left.
+from basis.shared.page import _synthesize_page
+
 modules_dict = bootstrap.get("entrypoint", {})
 print(f"[Basis] Importing component modules: {modules_dict}")
 for component_name, module_path in modules_dict.items():
@@ -95,17 +100,15 @@ for component_name, module_path in modules_dict.items():
         module = importlib.import_module(module_path)
         print(f"[Basis] Loaded: {module_path}")
         page_cls = getattr(module, component_name)
-        # Whole-page mount (HYDRATION-WHOLEPAGE.md No.2 / Option A, §4.1 P5):
-        # the manifest only ever lists client-mountable Page classes, and every
-        # Page provides both mount_document_* classmethods (real subclasses and
-        # synthesized @app.page shells alike) — there is no legacy body-only
-        # mount path left. SSR hydrates the PAGE in place (its OWN <head>
-        # bindings included); CSR keeps the served head static and renders the
-        # body region.
-        if is_ssr:
-            page_cls.mount_document_ssr(document)
-        else:
-            page_cls.mount_document_csr(document)
+        # A synthesized @app.page shell carries its shell recipe on the class
+        # (own __dict__ only — never inherited). Rebuild the same Page the
+        # server built from those decoration inputs, then mount it through the
+        # identical whole-document path real Pages take. Real Page subclasses
+        # carry no annotation and mount directly.
+        recipe = vars(page_cls).get("_synthesized_page_args")
+        if recipe is not None:
+            page_cls = _synthesize_page(page_cls, **recipe)
+        page_cls.mount_document(document)
     except Exception as e:
         print(f"[Basis] Error loading {module_path}: {e}")
 

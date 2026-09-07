@@ -156,10 +156,10 @@ def test_main_style_interpolates_class_attrs():
     assert ".x { background: #222; }" in C._get_style_string()
 
 
-def test_mount_app_no_longer_injects_component_styles():
-    """§4.1 P5: ``mount_app`` is a plain low-level mount — it no longer injects
-    component ``<style>`` elements into the container (styles live in-tree in
-    the Page ``<head>`` ``component_style_items`` loop)."""
+def test_mount_with_providers_no_longer_injects_component_styles():
+    """§4.1 P5: ``mount_with_providers`` is a plain low-level mount — it no
+    longer injects component ``<style>`` elements into the container (styles
+    live in-tree in the Page ``<head>`` ``component_style_items`` loop)."""
     class MountExtraStyleComp(Component):
         __tag__ = "mount-extra"
 
@@ -174,7 +174,7 @@ def test_mount_app_no_longer_injects_component_styles():
             """.x { color: blue; }"""
 
     container = Element("div", {}, [])
-    MountExtraStyleComp.mount_app(container, replace=False)
+    MountExtraStyleComp.mount_with_providers(container, replace=False)
 
     def _is_style(el):
         return getattr(el, "tagName", "") == "style"

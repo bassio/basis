@@ -324,8 +324,8 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
 
         ``@app.page`` decorates a *root component* (a ``Component`` subclass) —
         never a ``Page``. It is the "quick and dirty" path: page-level ``stores``
-        are NOT supported here (the client boots from the component file, so it
-        cannot hydrate page stores). To declare page stores, write a ``Page``
+        are NOT supported here (the decoration takes no ``stores``; a
+        synthesized shell has none). To declare page stores, write a ``Page``
         subclass and register it with ``@app.include_page(path)`` or
         ``app.include_page(path, page_cls=MyPage)``.
 
@@ -374,19 +374,24 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
         # (the component file is inside no registered component dir) falls back
         # to the "/" mount.
         covered_module = self.vfs.component_module_name(component_cls)
-        if covered_module:
-            entry_module = self.vfs.component_url(component_file)
-        else:
-            entry_module = f"/{component_file.name}"
 
-        # Synthesize the page shell carrying this component as its root.
+        # Synthesize the page shell carrying this component as its root. The
+        # shell keeps the base entry_module (/basis/client/entrypoint.py): the
+        # synthesized page boots through the SAME single client driver as a real
+        # Page (P0) — the manifest lists it under the component name and the
+        # driver imports this module (whose client @app.page decoration annotates
+        # the component with its shell recipe), rebuilds the shell, and mounts.
         synthesized = _synthesize_page(
             component_cls,
             page_cls=page_cls,
             title=title,
-            entry_module=entry_module,
             pyscript_src=pyscript_src,
         )
+        # @app.page shells are driver-bootable: the component module runs the
+        # client @app.page decoration (which annotates the component with its
+        # shell recipe) when the driver imports it, so page_bootstrap lists it
+        # in the manifest entrypoint (P0).
+        synthesized.__app_page__ = True
 
         # Register the page for this component
         self.include_page(

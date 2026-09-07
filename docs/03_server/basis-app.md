@@ -106,11 +106,11 @@ app.serve("/lite", render_mode="csr")(HomePage)
 - `"ssr"` (default) — server-renders the page (and its root component), then hydrates it in the browser.
 - `"csr"` — sends the client-rendered shell plus the serialized initial state; the unified client entrypoint mounts the page from scratch.
 
-Resolution order: explicit `render_mode=` argument → an explicit `Page.render_mode` class override → `"ssr"`. (The base `Page.render_mode = "csr"` default only applies to the deprecated direct `Page.load()` / `Page.render()` path; see below.)
+Resolution order: explicit `render_mode=` argument → the page class's `render_mode` (base default `"ssr"`).
 
 The response is built by `PageResponse` — an `HTMLResponse` subclass you can also return from a hand-rolled FastAPI endpoint: `return await PageResponse.from_page(HomePage, request)`. See [The Page Component](../04_components/page-component.md).
 
-**Canonical serving path.** Every page is served through `PageResponse.from_page` → `render_page` → `Page.render` (the single funnel that assembles the page HTML, per-page PyScript config, initial state and stylesheets). `render_page` resolves `render_mode` and dispatches to the private SSR/CSR engines. `@app.serve`, `@app.page` and `app.include_page` are the blessed route decorators over it. Direct `Page.load()` + `Page.render()` are deprecated.
+**Canonical serving path.** Every page is served through `PageResponse.from_page` → `render_page` → `Page._render` (the single internal funnel that assembles the page HTML, per-page PyScript config, initial state and stylesheets). `render_page` resolves `render_mode` and dispatches to the private SSR/CSR engines. `@app.serve`, `@app.page` and `app.include_page` are the blessed route decorators over it; `Page._load()` / `Page._render()` are internal.
 
 ---
 

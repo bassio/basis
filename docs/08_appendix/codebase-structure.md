@@ -7,7 +7,7 @@ src/basis/
 ├── cli/                  # Developer CLI commands (dev, init, plugin)
 │   └── commands/         # dev.py, init.py, plugin.py
 ├── client/               # Browser-side (PyScript) runtime
-│   ├── component.py      # Client Component: hydration (mount_document_*), mount_app
+│   ├── component.py      # Client Component: hydration (mount_document)
 │   ├── entrypoint.py     # single PyScript entry (SSR-hydrated or CSR mount)
 │   ├── actions.py        # RPC client — call_action by canonical path
 │   ├── plugin.py         # Client-side BasisPlugin shim
@@ -27,7 +27,7 @@ src/basis/
 │   ├── responses.py      # PageResponse (HTMLResponse subclass): renders a Page recipe — SSR or CSR
 │   ├── rpc.py            # RPC pipeline: canonical-path dispatch, store binding, response/error handling
 │   ├── render.py         # page rendering (render_page: SSR + CSR engines, hydration IDs)
-│   ├── tree_builder.py   # HTML → Element tree builder (r:0:1 path IDs)
+│   ├── tree_builder.py   # HTML → Element tree builder (b:0:1 path IDs)
 │   ├── ast_utils.py      # @server_action AST body stripper
 │   ├── static.py         # BasisStaticFiles / BasisStaticFilesPyc
 │   ├── plugin.py         # Server-side BasisPlugin

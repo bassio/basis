@@ -96,9 +96,9 @@ def _move_after(container, ref, anchor):
     """Move every node that currently follows ``ref`` (both direct children of
     ``container``) to sit immediately after ``anchor``, preserving order.
 
-    Used by :meth:`BaseComponent.mount_app` to relocate its newly-appended
-    mount nodes to the ``basis:app-root`` anchor. Duck-typed across the server
-    ``Element`` tree and the browser DOM (``nextSibling`` walking +
+    Used by :meth:`Page.mount_root_app` to relocate the just-mounted root block
+    to the ``basis:app-root`` slot. Duck-typed across the server ``Element``
+    tree and the browser DOM (``nextSibling`` walking +
     ``insertBefore(node, referenceNode)``).
     """
     try:
@@ -125,11 +125,11 @@ def _mount_root_providers(cls, container):
     """Mount every ``@include_store`` / ``@include_model`` provider that the
     root class ``cls`` registry sweep declares, as siblings ahead of the root.
 
-    This is the legacy ``mount_app`` provider step, extracted (unchanged) so the
-    Page's declarative root mount (HYDRATION-WHOLEPAGE.md §4.1 S1 — the root as
-    a nested ``ChildBinding`` under its hyphenated ``__tag__``) shares the exact
-    same provider sweep instead of forking it. Returns the mounted provider
-    list (each already appended to ``container``).
+    This is the provider step shared by :meth:`BaseComponent.mount_with_providers`
+    and the Page's declarative root mount (HYDRATION-WHOLEPAGE.md §4.1 S1 — the
+    root as a nested ``ChildBinding`` under its hyphenated ``__tag__``), so both
+    use the exact same provider sweep instead of forking it. Returns the mounted
+    provider list (each already appended to ``container``).
     """
     mounted_stores = set()
     mounted_models = set()
@@ -1281,8 +1281,8 @@ class BaseComponent(ReactiveObject):
 
         Exposes the component *class* too (not just name/css), so a Page's
         in-tree component-style loop can filter by class module while sharing
-        the exact same set/order that ``mount_app``'s legacy body injection
-        once produced (§4.1 P3 — in-tree chrome superseded the injection).
+        the exact same set/order the legacy body injection once produced
+        (§4.1 P3 — in-tree chrome superseded the injection).
         """
         sources: list[tuple] = []
         mains: list[tuple] = []
@@ -1298,21 +1298,16 @@ class BaseComponent(ReactiveObject):
         return sources
 
     @classmethod
-    def mount_app(cls, container, replace=False):
-        """Mount a root component (plus its store/model providers) into
-        ``container``.
+    def mount_with_providers(cls, container, replace=False):
+        """Mount a component (plus its store/model providers) into ``container``.
 
         Low-level helper for mounting a component outside a Page (direct
-        component mounts in tests/plugins). It mounts the ``@include_store`` /
-        ``@include_model`` providers as siblings, then the component itself.
-
-        §4.1 P5: the legacy responsibilities are gone —
-        * no component ``<style>`` body injection (styles live in-tree in the
-          Page ``<head>`` ``component_style_items`` loop for every page root;
-          a bare component mount has no document chrome to own),
-        * no ``basis:app-root`` anchor relocation (the Page's declarative root
-          mount — :meth:`Page.mount_root_app` — owns the app slot; ``mount_app``
-          is never a page mount).
+        component mounts in tests, or an imperative mount into a live
+        container). It mounts the ``@include_store`` / ``@include_model``
+        providers as siblings, then the component itself — the bare,
+        container-level primitive underneath the Page's declarative root mount
+        (:meth:`Page.mount_root_app`). Distinct from the plain
+        :meth:`mount`, which mounts a component without its provider sweep.
         """
         mounted_providers = _mount_root_providers(cls, container)
         new_instance = cls.mount(container, replace)

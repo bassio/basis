@@ -14,7 +14,7 @@ Covers:
 * ``Basis._auto_import_stores`` — imports ``stores/`` modules (registering
   blueprints) and returns their dotted names.
 * ``Store.all_names`` / ``Store.resolve``.
-* ``Page.load`` name-list + default-to-all store resolution.
+* ``Page._load`` name-list + default-to-all store resolution.
 * ``@app.page`` isomorphism — a component inside a discovered dir gets NO legacy
   ``"/"`` mount and an isomorphic entry URL; a bare single-file app keeps it.
 * The isomorphism guard warns on a non-isomorphic mount.
@@ -191,7 +191,7 @@ def test_auto_import_stores_imports_modules_and_registers_blueprints(tmp_path, m
 
 
 # ---------------------------------------------------------------------------
-# Store.all_names / Store.resolve / Page.load
+# Store.all_names / Store.resolve / Page._load
 # ---------------------------------------------------------------------------
 
 def test_store_all_names_and_resolve():
@@ -223,7 +223,7 @@ def test_page_load_resolves_name_list():
     class P(Page):
         stores = ["name_list_store"]
 
-    P.load()
+    P._load()
     store = Store._registry.get("name_list_store")
     assert isinstance(store, CStore)
     assert store.v == 1
@@ -239,7 +239,7 @@ def test_page_load_defaults_to_all_stores():
     class P(Page):
         pass  # stores defaults to [] → "all auto-discovered"
 
-    P.load()
+    P._load()
     assert "dummy_all" in Store._registry
 
 
@@ -261,7 +261,7 @@ def test_page_load_rejects_instance_list():
         stores = [InstStore("inst_list", label="kept")]
 
     with pytest.raises(TypeError, match="must be store names"):
-        P.load()
+        P._load()
 
 
 # ---------------------------------------------------------------------------
@@ -296,8 +296,12 @@ def test_page_decorator_covered_component_no_root_mount(tmp_path, monkeypatch):
     client = TestClient(app)
     resp = client.get("/")
     assert resp.status_code == 200
-    # The isomorphic PyScript entry URL, not the bare "/hello.py".
-    assert 'src="/covapp/components/hello.py"' in resp.text
+    # The client driver (entrypoint.py) is the PyScript entry; the covered
+    # component's isomorphic module name is listed in the manifest so the
+    # driver can import it (P0) — no bare "/hello.py" script anywhere.
+    assert 'src="/basis/client/entrypoint.py"' in resp.text
+    bootstrap = client.get("/pyscript.json?url=/").json()["basis"]["bootstrap"]
+    assert bootstrap["entrypoint"] == {"Hello": "covapp.components.hello"}
 
 
 def test_page_decorator_single_file_keeps_root_mount(tmp_path, monkeypatch):

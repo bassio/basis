@@ -8,12 +8,13 @@ The single canonical entry is :func:`render_page`, which resolves
 
 * ``_render_page_ssr`` — server-renders the page *and* its root component
   (server_load, hydration IDs, serialized initial state), then calls
-  ``Page.render``.
+  ``Page._render``.
 * ``_render_page_csr`` — sends the client-rendered shell plus the serialized
   initial state; the unified client entrypoint mounts the root component.
 
-Both engines end in ``Page.render`` (→ shell assembly), the single server-side
-funnel every rendered page passes through. The blessed public serving API is
+Both engines end in ``Page._render`` (→ shell assembly), the single
+server-side funnel every rendered page passes through. The blessed public
+serving API is
 ``PageResponse.from_page`` (``basis.server.responses``); ``render_page`` is the
 lower-level render function it wraps, and the route decorators (``@app.serve``,
 ``@app.page``, ``app.include_page``) build on both.
@@ -134,17 +135,12 @@ def _serialize_initial_state(all_stores: dict[str, Store], errors=None) -> str:
 def _resolve_render_mode(page_cls, render_mode: str | None) -> str:
     """Resolve how a page should be rendered.
 
-    Precedence: an explicit ``render_mode`` argument > a ``render_mode`` the
-    page class explicitly overrides on itself > ``"ssr"`` (the default for
-    page-serving). The base ``Page.render_mode = "csr"`` default only applies to
-    the legacy direct ``Page.load()`` + ``Page.render()`` path (deprecated).
+    Precedence: an explicit ``render_mode`` argument > the page class's
+    ``render_mode``. The base ``Page.render_mode`` default is ``"ssr"``.
     """
     if render_mode is not None:
         return render_mode
-    explicit = getattr(page_cls, "__dict__", {}).get("render_mode")
-    if explicit is not None:
-        return explicit
-    return "ssr"
+    return page_cls.render_mode
 
 
 async def render_page(
@@ -190,7 +186,7 @@ async def _render_page_ssr(
     the shell assembly to ``Page.render``. Internal — use ``render_page`` /
     ``PageResponse.from_page``.
     """
-    from basis.shared.page import Page as PageBase, _set_render_pipeline
+    from basis.shared.page import Page as PageBase
     from basis.shared.router import Route
 
     if page_cls is None:
@@ -217,151 +213,139 @@ async def _render_page_ssr(
     BaseComponent._pending_subscriptions.clear()
     Route._route_registry.clear()
 
-    # Suppress the load()/render() deprecation warnings for our internal calls.
-    _set_render_pipeline(True)
+    # 1. Setup Page instance
+    page_instance = page_cls._load(request=request)
+    page_instance.render_mode = "ssr"
+    page_instance.title = title
+    page_instance.entry_module = entry_module
+    page_instance.pyscript_src = pyscript_src
+
+    # Keep the router's current path in sync with the request URL.
+    router_store = Store._registry.get("router")
+    if router_store is not None and hasattr(request, "url"):
+        router_store.current_path = request.url.path
+
+    # 2. Collect stores
+    all_stores = _get_all_stores(
+        page_cls, root_component, None, global_stores, request_app=request.app
+    )
+
+    # Attach the request app to any app-bound store already in the registry
+    # (Page._load creates every blueprint store; a caller that renders a Page
+    # directly without ``global_stores`` only picks them up via the later
+    # registry sweep — attach here so components render a refreshed projection).
+    _attach_app_to_store_bound_stores(Store._registry, request.app)
+
+    # Request-pref hook: a store may opt in by defining ``apply_request(request)``
+    # to read a persisted pref (e.g. ``$theme``'s ``basis_theme`` cookie) so the
+    # SSR first paint is already themed — no flash of the default theme.
+    for store in Store._registry.values():
+        apply_request = getattr(store, "apply_request", None)
+        if callable(apply_request):
+            try:
+                apply_request(request)
+            except Exception:
+                pass
+
+    # 3. The root app mounts inside the Page's own <body> region via
+    #    Page.mount_root_app() (§4.1 S1/S3) — no engine-side mount-region
+    #    lookup is needed; the Page locates its <body> itself.
+
+    # 4. Optional DB session for the request (DBAppMixin apps)
+    session_token = None
+    session_generator = None
+    if hasattr(request, "app") and hasattr(request.app, "get_session") and request.app.get_session is not None:
+        import inspect
+        from basis.shared.context import db_session_var
+        get_session_func = request.app.get_session
+
+        if inspect.isgeneratorfunction(get_session_func):
+            session_generator = get_session_func()
+            try:
+                db_session = next(session_generator)
+            except StopIteration:
+                db_session = None
+        else:
+            db_session = get_session_func()
+
+        if db_session is not None:
+            session_token = db_session_var.set(db_session)
+
+    # Collect every binding-evaluation error raised during this SSR render so
+    # it can be surfaced in the client overlay.  With the sink installed,
+    # safe_eval returns an empty value instead of "[Error: ...]".
+    error_collector = ErrorCollector()
+    _prev_sink = get_error_sink()
+    set_error_sink(error_collector)
     try:
-        # 1. Setup Page instance
-        page_instance = page_cls.load(request=request)
-        page_instance.render_mode = "ssr"
-        page_instance.title = title
-        page_instance.entry_module = entry_module
-        page_instance.pyscript_src = pyscript_src
+        # 5. Mount the root component (if any — static pages have none).
+        #    §4.1 S1/S3 declarative root mount: the Page owns its root as a
+        #    nested ChildBinding under a hyphenated host tag in its <body>
+        #    app slot ("the root is just another component"). Every page
+        #    root gets a host tag — the root's declared hyphenated __tag__
+        #    or one kebab-derived from its class name — so ALL boot paths
+        #    (real Page subclasses AND synthesized @app.page shells) unify
+        #    here. Component styles live in-tree in the <head> (every Page
+        #    renders the component_style_items loop), so nothing is
+        #    re-injected; the legacy imperative body-injection path is gone
+        #    (§4.1 P5).
+        mounted_apps = []
+        if root_component is not None:
+            app = page_instance.mount_root_app()
+            if app is not None:
+                mounted_apps.append(app)
 
-        # Keep the router's current path in sync with the request URL.
-        router_store = Store._registry.get("router")
-        if router_store is not None and hasattr(request, "url"):
-            router_store.current_path = request.url.path
+        # 6. Collect every component for the server_load preload phase
+        all_components = []
+        for app in mounted_apps:
+            child_bindings = list(app.get_child_bindings(recursive=True))
+            child_components = [cb.childinstance for cb in child_bindings]
+            all_components.extend([app] + child_components)
+            if hasattr(app, '_mounted_providers'):
+                for provider in app._mounted_providers:
+                    if provider not in all_components:
+                        all_components.append(provider)
 
-        # 2. Collect stores
-        all_stores = _get_all_stores(
-            page_cls, root_component, None, global_stores, request_app=request.app
-        )
+        # 7. Run server_load hooks concurrently; re-check stores created by them
+        preload_tasks = []
+        for comp in all_components:
+            if hasattr(comp, 'server_load') and asyncio.iscoroutinefunction(comp.server_load):
+                preload_tasks.append(comp.server_load())
 
-        # Attach the request app to any app-bound store already in the registry
-        # (Page.load creates every blueprint store; a caller that renders a Page
-        # directly without ``global_stores`` only picks them up via the later
-        # registry sweep — attach here so components render a refreshed projection).
-        _attach_app_to_store_bound_stores(Store._registry, request.app)
+        if preload_tasks:
+            await asyncio.gather(*preload_tasks)
 
-        # Request-pref hook: a store may opt in by defining ``apply_request(request)``
-        # to read a persisted pref (e.g. ``$theme``'s ``basis_theme`` cookie) so the
-        # SSR first paint is already themed — no flash of the default theme.
-        for store in Store._registry.values():
-            apply_request = getattr(store, "apply_request", None)
-            if callable(apply_request):
-                try:
-                    apply_request(request)
-                except Exception:
-                    pass
-
-        # 3. The root app mounts inside the Page's own <body> region via
-        #    Page.mount_root_app() (§4.1 S1/S3) — no engine-side mount-region
-        #    lookup is needed; the Page locates its <body> itself.
-
-        # 4. Optional DB session for the request (DBAppMixin apps)
-        session_token = None
-        session_generator = None
-        if hasattr(request, "app") and hasattr(request.app, "get_session") and request.app.get_session is not None:
-            import inspect
-            from basis.shared.context import db_session_var
-            get_session_func = request.app.get_session
-
-            if inspect.isgeneratorfunction(get_session_func):
-                session_generator = get_session_func()
-                try:
-                    db_session = next(session_generator)
-                except StopIteration:
-                    db_session = None
-            else:
-                db_session = get_session_func()
-
-            if db_session is not None:
-                session_token = db_session_var.set(db_session)
-
-        # Collect every binding-evaluation error raised during this SSR render so
-        # it can be surfaced in the client overlay.  With the sink installed,
-        # safe_eval returns an empty value instead of "[Error: ...]".
-        error_collector = ErrorCollector()
-        _prev_sink = get_error_sink()
-        set_error_sink(error_collector)
-        try:
-            # 5. Mount the root component (if any — static pages have none).
-            #    §4.1 S1/S3 declarative root mount: the Page owns its root as a
-            #    nested ChildBinding under a hyphenated host tag in its <body>
-            #    app slot ("the root is just another component"). Every page
-            #    root gets a host tag — the root's declared hyphenated __tag__
-            #    or one kebab-derived from its class name — so ALL boot paths
-            #    (real Page subclasses AND synthesized @app.page shells) unify
-            #    here. Component styles live in-tree in the <head> (every Page
-            #    renders the component_style_items loop), so nothing is
-            #    re-injected; the legacy imperative mount_app body path is gone
-            #    (§4.1 P5).
-            mounted_apps = []
-            if root_component is not None:
-                app = page_instance.mount_root_app()
-                if app is not None:
-                    mounted_apps.append(app)
-
-            # 6. Collect every component for the server_load preload phase
-            all_components = []
-            for app in mounted_apps:
-                child_bindings = list(app.get_child_bindings(recursive=True))
-                child_components = [cb.childinstance for cb in child_bindings]
-                all_components.extend([app] + child_components)
-                if hasattr(app, '_mounted_providers'):
-                    for provider in app._mounted_providers:
-                        if provider not in all_components:
-                            all_components.append(provider)
-
-            # 7. Run server_load hooks concurrently; re-check stores created by them
-            preload_tasks = []
-            for comp in all_components:
-                if hasattr(comp, 'server_load') and asyncio.iscoroutinefunction(comp.server_load):
-                    preload_tasks.append(comp.server_load())
-
-            if preload_tasks:
-                await asyncio.gather(*preload_tasks)
-
-                for store_name, store_instance in Store._registry.items():
-                    if store_name not in all_stores:
-                        all_stores[store_name] = store_instance
-
-            # 8. Hydration markers are stamped by Page.render →
-            #    apply_hydration_to_page (§4.1 P4): head region h: + body
-            #    region b: rooted at <body>, covering the declaratively-mounted
-            #    app subtree. Carry the mounted app on the page instance for
-            #    that stamp. (The separate app-rooted r: walk served only
-            #    synthesized @app.page shells; P5 removed it — every shell is a
-            #    whole-document page now.)
-            if mounted_apps:
-                page_instance._hydrate_body_app = mounted_apps[0]
-
-            # 9. Final render: serialize all stores into the initial state
             for store_name, store_instance in Store._registry.items():
                 if store_name not in all_stores:
                     all_stores[store_name] = store_instance
-            initial_state_json = _serialize_initial_state(all_stores, errors=error_collector)
-        finally:
-            set_error_sink(_prev_sink)
-            if session_token is not None:
-                from basis.shared.context import db_session_var
-                db_session_var.reset(session_token)
-            if session_generator is not None:
-                try:
-                    next(session_generator)
-                except StopIteration:
-                    pass
 
-        # Whole-page hydration (HYDRATION-WHOLEPAGE.md No.2 / Option A): tell
-        # Page.render to stamp the Page's OWN <head> bindings (h: region) right
-        # before serialization — after render() has appended the trailing head
-        # nodes — so the served SSR document carries the whole head+body
-        # hydration surface for the client to keep alive. CSR leaves this off
-        # (its head is served static).
-        page_instance._stamp_page_hydration = True
-        return page_instance.render(request=request, initial_state_json=initial_state_json)
+        # 8. Final render: serialize all stores into the initial state
+        for store_name, store_instance in Store._registry.items():
+            if store_name not in all_stores:
+                all_stores[store_name] = store_instance
+        initial_state_json = _serialize_initial_state(all_stores, errors=error_collector)
     finally:
-        _set_render_pipeline(False)
+        set_error_sink(_prev_sink)
+        if session_token is not None:
+            from basis.shared.context import db_session_var
+            db_session_var.reset(session_token)
+        if session_generator is not None:
+            try:
+                next(session_generator)
+            except StopIteration:
+                pass
+
+    # Whole-page hydration (HYDRATION-WHOLEPAGE.md No.2 / Option A): stamp the
+    # Page's OWN hydration surface (head h: + body b:) right here, passing the
+    # declaratively-mounted body app into the b: walk — the served SSR document
+    # then carries the whole head+body surface the client keeps alive. CSR
+    # leaves this off (its head is served static).
+    return page_instance._render(
+        request,
+        initial_state_json=initial_state_json,
+        stamp_hydration=True,
+        body_app=(mounted_apps[0] if mounted_apps else None),
+    )
 
 
 def _render_page_csr(
@@ -376,18 +360,12 @@ def _render_page_csr(
     Internal — use ``render_page`` / ``PageResponse.from_page``.
     ``global_stores`` is accepted for signature symmetry with the SSR engine.
     """
-    from basis.shared.page import _set_render_pipeline
+    page_instance = page_cls._load(request=request)
+    # Same default expansion as the SSR engine: the shell's core.js/css
+    # point at the content-addressed offline bundle root.
+    if getattr(page_instance, "pyscript_src", None) == "/pyscript":
+        from basis.server.static import offline_pyscript_url
 
-    _set_render_pipeline(True)
-    try:
-        page_instance = page_cls.load(request=request)
-        # Same default expansion as the SSR engine: the shell's core.js/css
-        # point at the content-addressed offline bundle root.
-        if getattr(page_instance, "pyscript_src", None) == "/pyscript":
-            from basis.server.static import offline_pyscript_url
-
-            page_instance.pyscript_src = offline_pyscript_url()
-        page_instance.render_mode = "csr"
-        return page_instance.render(request=request)
-    finally:
-        _set_render_pipeline(False)
+        page_instance.pyscript_src = offline_pyscript_url()
+    page_instance.render_mode = "csr"
+    return page_instance._render(request)

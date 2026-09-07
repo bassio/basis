@@ -23,8 +23,14 @@ NODE POLICY (what counts toward hydration paths)
   the tree but are ignored for numbering, so indentation or comments around a
   binding can never shift an ID.
 
-Paths are ``"r:" + ":".join(ints)``, e.g. ``r:0:1:2``.  The root element is
-``r:0``.
+Paths are ``"<prefix>:" + ":".join(ints)``, e.g. ``b:0:1:2``.  The root
+of a walk is ``<prefix>:0``.  A Page is stamped as two disjoint regions so
+head and body ids never collide: ``<head>`` under ``h`` (``h:0`` is the
+``<head>`` element) and ``<body>`` under ``b`` (``b:0`` is the ``<body>``
+element, root of the app region).  The default prefix is ``"b"`` — the
+body/app region — which is what a standalone (non-Page) subtree walk gets.
+The legacy single-root ``r:`` scheme was removed when whole-page hydration
+migrated the body region to ``b:``.
 
 Text nodes cannot carry attributes, so reactive text is addressed via a
 deterministic *text ordinal* stamped on the parent element (``data-hydration-text``
@@ -121,16 +127,15 @@ def normalized_children(node):
         yield child
 
 
-def iter_tree_paths(root, prefix="r"):
+def iter_tree_paths(root, prefix="b"):
     """Yield ``(node, path_str)`` for every countable node, depth-first
-    pre-order.  The root is ``<prefix>:0`` (default ``r:0``); children are
-    numbered 0..N over ``normalized_children``.
+    pre-order.  The root is ``<prefix>:0`` (default ``b:0`` — the body/app
+    region); children are numbered 0..N over ``normalized_children``.
 
     ``prefix`` names the walk's root region (HYDRATION-WHOLEPAGE.md No.2):
     each mounted/hydrated region supplies its own root with a distinct prefix
-    (e.g. ``h`` for the head island, ``b`` for the body app), so paths stay
-    globally unique when more than one region shares a document. The default
-    ``"r"`` is byte-compatible with every existing caller.
+    (``h`` for the Page's ``<head>``, ``b`` for its ``<body>``/app region), so
+    paths stay globally unique when more than one region shares a document.
     """
     stack = [(root, [0])]
     while stack:
@@ -146,7 +151,7 @@ def iter_tree_paths(root, prefix="r"):
 # Marker stamping
 # ---------------------------------------------------------------------------
 
-def apply_hydration_markers(root, binding_nodes, component_nodes, prefix="r"):
+def apply_hydration_markers(root, binding_nodes, component_nodes, prefix="b"):
     """Stamp ``data-hydration-id`` / ``data-component-hydration-id``.
 
     * membership is set-based (O(nodes) instead of O(nodes x bindings));
@@ -155,8 +160,8 @@ def apply_hydration_markers(root, binding_nodes, component_nodes, prefix="r"):
 
     ``binding_nodes`` and ``component_nodes`` are iterables of element nodes
     (binding targets from ``marked_for_hydration()`` and component roots).
-    ``prefix`` names the walk's root region (see ``iter_tree_paths``): the app
-    subtree uses the default ``"r"``, and a Page's ``<head>`` region uses
+    ``prefix`` names the walk's root region (see ``iter_tree_paths``): the body/app
+    subtree uses the default ``"b"``, and a Page's ``<head>`` region uses
     ``"h"``, keeping ids across regions differentiated.
 
     Returns a ``dict`` mapping path -> ``{"binding": bool, "component": bool}``
@@ -180,7 +185,7 @@ def apply_hydration_markers(root, binding_nodes, component_nodes, prefix="r"):
     return report
 
 
-def build_hydration_map(root, prefix="r"):
+def build_hydration_map(root, prefix="b"):
     """Return ``{data-hydration-id value: node}`` for every countable node under
     ``root`` that carries the marker.
 
@@ -459,7 +464,7 @@ def _collect_component_hydration(app):
     return binding_nodes, text_nodes, component_nodes
 
 
-def apply_hydration_to_page(page):
+def apply_hydration_to_page(page, body_app=None):
     """Stamp the whole-document hydration surface over the Page's OWN regions —
     ``<head>`` (``h:``) and ``<body>`` (``b:``) — in one coordinated pass
     (HYDRATION-WHOLEPAGE.md §4.1 P4).
@@ -475,11 +480,9 @@ def apply_hydration_to_page(page):
       whole document hydrates against ONE map (``h:`` + ``b:``), replacing the
       old separate app-rooted ``r:`` body walk (migrate-always).
 
-    The SSR engine mounts the root component into ``<body>`` before calling
-    ``Page.render`` and carries that app on ``page._hydrate_body_app``, so its
-    subtree's binding targets / component roots participate in the ``b:`` walk.
-    When no body app is present (static pages), only the head region is
-    stamped.
+    ``body_app`` is the declaratively-mounted root app (when the page has one);
+    its subtree's binding targets / component roots join the ``b:`` walk. When
+    it is ``None`` (static page), only the head region is stamped.
 
     ``page`` is the mounted ``Page`` instance (``__element__`` = the ``<html>``
     root). Returns the marker report (path -> flags) for diagnostics.
@@ -519,7 +522,6 @@ def apply_hydration_to_page(page):
 
     # ── BODY region (b:) ────────────────────────────────────────────────────
     if body_node is not None:
-        body_app = getattr(page, "_hydrate_body_app", None)
         body_binding_nodes = list(page_binding_nodes)
         body_text_nodes = list(page_text_nodes)
         body_component_nodes = []

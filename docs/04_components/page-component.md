@@ -51,10 +51,10 @@ The `Page` shell is itself a component whose `<head>` and `<body>` both carry
 bindings — `<title>{title}</title>`, the viewport / `basis-render-mode` meta,
 the `initial_state_json` script in `<head>`; the root-component host in
 `<body>`. Whole-page hydration keeps both regions alive: the client mounts the
-page (`Page.mount_document_ssr`) and re-points its bindings at the live
-document (`h:` head + `b:` body regions, one map); on CSR it half-hydrates the
-served `<head>` and renders the body region (`Page.mount_document_csr`). See
-`docs/05_reactivity/ssr-hydration.md`.
+page (`Page.mount_document`) and re-points its bindings at the live document
+(`h:` head + `b:` body regions, one map) — SSR hydrates the whole served
+document in place; CSR half-hydrates the served `<head>` and renders the body
+region. See `docs/05_reactivity/ssr-hydration.md`.
 
 ---
 
@@ -107,7 +107,7 @@ Each route that serves a Page chooses how it is served:
 - `render_mode="ssr"` (default) — server-renders the page (and its root component), then hydrates it in the browser.
 - `render_mode="csr"` — sends the client-rendered shell plus the serialized initial state; the unified client entrypoint mounts the page from scratch.
 
-The mode is resolved by `render_page`: the `render_mode=` argument → an explicit `Page.render_mode` class override → `"ssr"`. The base `Page.render_mode = "csr"` default only applies to the deprecated direct `Page.load()` + `Page.render()` path.
+The mode is resolved by `render_page`: the `render_mode=` argument → the page class's `render_mode` (base default `"ssr"`).
 
 ```python
 @app.serve("/full")                            # SSR (default)

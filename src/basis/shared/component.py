@@ -14,62 +14,35 @@ if IS_CLIENT:
 
     class Basis(object):
         def page(self, component, **kwargs):
-            # §4.1 P5 (HYDRATION-WHOLEPAGE.md): a synthesized ``@app.page``
-            # shell is no longer a body-only ``r:`` mount. The server builds the
-            # Page shell at import time via ``type()``; the client reconstructs
-            # the SAME shell here (same base, title, stores, pyscript_src) from
-            # the decoration the module is running, then mounts the WHOLE
-            # document through ``Page.mount_document_*`` — the exact path real
-            # Page subclasses take via the unified entrypoint. Every boot path
-            # is a Page now; the legacy ``mount_app_ssr``/``r:`` shim is gone.
-            from basis.shared.page import Page as _PageBase, _synthesize_page
+            # A real Page subclass never reaches this shim on the client (it
+            # boots through the manifest's basis.bootstrap.entrypoint); if one
+            # does, leave it alone rather than annotate it.
+            from basis.shared.page import Page as _PageBase
 
-            base = kwargs.get("page_cls") or _PageBase
             if isinstance(component, type) and issubclass(component, _PageBase):
-                # A real Page never reaches this shim on the client (it boots
-                # through the manifest's basis.bootstrap.entrypoint); if one
-                # does, leave it alone rather than double-mount.
                 return component
-            page_cls = _synthesize_page(
-                component,
-                page_cls=base,
-                title=kwargs.get("title"),
-                stores=kwargs.get("stores"),
-                pyscript_src=kwargs.get("pyscript_src"),
-            )
-            try:
-                from pyscript import document
-            except Exception:
-                return component
-            try:
-                meta = document.querySelector('meta[name="basis-render-mode"]')
-                is_ssr = (
-                    meta is not None
-                    and getattr(meta, "getAttribute", lambda _: "")("content")
-                    == "ssr"
-                )
-                if is_ssr:
-                    page_cls.mount_document_ssr(document)
-                else:
-                    page_cls.mount_document_csr(document)
-            except Exception as exc:
-                print(f"[Basis] Error mounting synthesized page for {component.__name__}: {exc}")
-            # Decorator form: return the DECORATED component class (mounting is a
-            # side effect).
+            # Annotate the decorated root component with its synthesized-shell
+            # recipe (the same decoration inputs the server used). This follows
+            # the file's decorator idiom (``__is_py_event__`` / ``__scoped__`` /
+            # ``__extra_style__``): metadata travels with the object, never in a
+            # module global. Mounting is NOT a side effect — the client driver
+            # (client/entrypoint.py) reads the annotation off the class and
+            # calls Page.mount_document. Writing into the class's OWN __dict__
+            # (vars) keeps the annotation from leaking down to subclasses.
+            component.__dict__["_synthesized_page_args"] = {
+                k: kwargs[k]
+                for k in ("page_cls", "title", "stores", "pyscript_src")
+                if k in kwargs
+            }
+            # Decorator form: return the DECORATED component class.
             return component
 
         def serve(self, *args, **kwargs):
             # Client-side: ``@app.serve`` on a root Component (the single-file
-            # quickstart) behaves exactly like ``@app.page`` — the component file
-            # is the boot module, so mounting it hydrates/renders the whole
-            # document through the reconstructed Page shell. Page subclasses
-            # never reach this shim (the client boots from the page module via
-            # the manifest's basis.bootstrap.entrypoint, not from app.py).
+            # quickstart) behaves exactly like ``@app.page`` — annotate the
+            # class; the driver mounts. Page subclasses never reach this shim.
             component = args[0] if args else kwargs.get("page_cls")
             return self.page(component, **kwargs)
-
-        # Deprecated alias (pre-terminology-cleanup name).
-        entrypoint = page
 
     Basis = Basis
 
@@ -87,7 +60,7 @@ from basis.shared.base_component import include_store, include_model
 
 
 # While the client stages a Page for whole-document SSR hydration
-# (``mount_document_ssr`` → ``_hydrate_page_document_ssr``) components live in a
+# (``Page.mount_document`` → ``_hydrate_page_document_ssr``) components live in a
 # detached staged tree that will be re-pointed at the live document. Dynamic
 # mounters (e.g. ``<ui-region>``) read this to defer real work to
 # ``on_hydrated``. Always ``False`` on the server (SSR render mounts normally).

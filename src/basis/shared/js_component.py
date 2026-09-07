@@ -215,7 +215,7 @@ class JsComponent(Component):
 
         On SSR pages every component — including hidden-if children — mounts
         into the detached staged tree during whole-document hydration
-        (``Page.mount_document_ssr``). Visible components get a matching SSR
+        (``Page.mount_document``). Visible components get a matching SSR
         node, so ``on_hydrated`` boots them. Hidden components (e.g. a tab the
         server didn't select) have no SSR node, so ``on_hydrated`` never fires
         and ``on_mounted`` will not re-run when the controlling ``if`` later

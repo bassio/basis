@@ -222,7 +222,7 @@ def test_plain_loop_exposes_body_bindings_for_hydration():
     assert lb.component_children() == []            # plain loop: no component roots
 
     # Simulate a hydration re-point of one body binding to its SSR node.
-    ssr_node = Element("div", attrs={"data-hydration-id": "r:0:0"}, children=[])
+    ssr_node = Element("div", attrs={"data-hydration-id": "b:0:0"}, children=[])
     tb = next(b for b in body if b.__class__.__name__ == "TextBinding")
     old = tb.node
     tb.node = ssr_node

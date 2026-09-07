@@ -69,10 +69,10 @@ The server walks the component tree and stamps attributes that act as the bridge
 
 ### `data-hydration-id`
 
-Written on every element that participates in a binding (a `{expression}` text node, an attribute, an event, an `if`, a child component, a loop). The value is the node's path in the element tree, e.g. `r:0:1:2`.
+Written on every element that participates in a binding (a `{expression}` text node, an attribute, an event, an `if`, a child component, a loop). The value is the node's path in the element tree, e.g. `b:0:1:2`.
 
 ```html
-<span data-hydration-id="r:0:1">Score: 0</span>
+<span data-hydration-id="b:0:1">Score: 0</span>
 ```
 
 ### `data-component-hydration-id`
@@ -80,7 +80,7 @@ Written on every element that participates in a binding (a `{expression}` text n
 Written on the root element of each component instance, marking component boundaries.
 
 ```html
-<user-card data-component-hydration-id="r:0:2">...</user-card>
+<user-card data-component-hydration-id="b:0:2">...</user-card>
 ```
 
 ### `data-hydration-text`
@@ -89,26 +89,28 @@ Written on the **parent** of reactive text nodes: a comma-separated list of the 
 
 ```html
 <!-- "Score: 0" is the 0th reactive text child of the span -->
-<span data-hydration-id="r:0:1" data-hydration-text="0">Score: 0</span>
+<span data-hydration-id="b:0:1" data-hydration-text="0">Score: 0</span>
 ```
 
 ---
 
 ## The path algorithm
 
-Each countable node is identified by a path string `r:` + one segment per depth, where the segment is the node's index among the parent's normalized children, in document order. The root is `r:0`.
+Each countable node is identified by a path string `b:` + one segment per depth, where the segment is the node's index among the parent's normalized children, in document order. The root is `b:0`.
 
 ```html
-<div>                     r:0
-  <span>Score: 0</span>   r:0:0   (element, index 0)
-  <p>{body}</p>           r:0:1   (element, index 1)
+<div>                     b:0
+  <span>Score: 0</span>   b:0:0   (element, index 0)
+  <p>{body}</p>           b:0:1   (element, index 1)
 </div>
 ```
 
-There is exactly **one** address *algorithm*. A page carries **two disjoint regions** (HYDRATION-WHOLEPAGE.md), each a named root so the client and server agree on where every node lives; the generic `r:` default above applies only to standalone component walks, never to a served page:
+There is exactly **one** address *algorithm*. A page carries **two disjoint regions** (HYDRATION-WHOLEPAGE.md), each a named root so the client and server agree on where every node lives:
 
 - `<head>` content is numbered `h:` (root `h:0` is the `<head>` element).
 - `<body>` content is numbered `b:` (root `b:0` is the `<body>` element).
+
+The examples above use `b:` — the default prefix `iter_tree_paths` gives a standalone (non-Page) subtree walk, which is the same namespace the page's `<body>` region uses.
 
 The client runs the *same* `iter_tree_paths` algorithm over its own staged template tree and stamps `data-hydration-id` on it too — so a client node at canonical path `P` hydrates the SSR node at canonical path `P`.
 
@@ -116,13 +118,13 @@ The client runs the *same* `iter_tree_paths` algorithm over its own staged templ
 
 The Page shell — the whole `<html>` document — is itself a component whose template carries bindings in BOTH regions (`<title>{title}</title>`, the viewport / `basis-render-mode` meta, the `<script id="basis-initial-state">` body in `<head>`; the body region holds the root component). Whole-page hydration (HYDRATION-WHOLEPAGE.md No.2 / §4.1 P4) makes both regions reactive surfaces so those bindings are kept alive instead of server-frozen:
 
-- The **`<head>` region** (`h:`) covers the Page's own head bindings — stamped by `shared/hydration.apply_hydration_to_page` inside `Page.render` (SSR only) and full-stamped client-side from the staged template.
+- The **`<head>` region** (`h:`) covers the Page's own head bindings — stamped by `shared/hydration.apply_hydration_to_page` inside `Page._render` (SSR only) and full-stamped client-side from the staged template.
 - The **`<body>` region** (`b:`) is rooted at the `<body>` element. The root component mounts as a **declarative nested child** of the Page — a `ChildBinding` under a hyphenated host tag (`Page._declarative_root_tag()` + `Page.mount_root_app()`). The host tag is the root's declared `__tag__`, or one kebab-derived from the class name, so **every** page root (real `Page` subclass or a synthesized `@app.page` shell) mounts declaratively — there is no imperative engine mount left (§4.1 P5). The host is the body's first countable child (`b:0:0`); the app's own root sits inside it (`b:0:0:0`…).
 - Page chrome is **in-tree** (HYDRATION-WHOLEPAGE.md §4.1 P3): the per-component style loop, the viewport `<style id="basis-viewport">` (a `text-content` node), the dev-mode meta and the user stylesheet `<link>`s (at a body comment anchor) all live as owned nodes/comment anchors of the `Page` template — there are no post-serialization appends.
-- On the client a Page subclass hydrates the WHOLE served document in one pass (`Page.mount_document_ssr` → `_hydrate_page_document_ssr`): it stages the Page in a detached fragment (a browser `<template>` parse would drop the `<html>/<head>/<body>` wrappers, so the client rebuilds the document structure programmatically via `DOMParser`), mounts the root declaratively into the staged `<body>`, full-stamps the staged `<head>` (`h:`) and `<body>` (`b:`), then re-points the Page's bindings AND every app component at the live document against ONE map (`document.head` under `h:` + `document.body` under `b:`). Nothing is ever inserted into the live document — the SSR tree is adopted in place.
-- CSR keeps the served `<head>` static (no FOUC / double head), half-hydrates it (`_hydrate_page_head` — re-point never writes, so title/meta bindings become live), and client-renders the body through the same declarative root mount (`Page.mount_document_csr`).
+- On the client a Page subclass hydrates the WHOLE served document in one pass (`Page.mount_document` → `_hydrate_page_document_ssr`): it stages the Page in a detached fragment (a browser `<template>` parse would drop the `<html>/<head>/<body>` wrappers, so the client rebuilds the document structure programmatically via `DOMParser`), mounts the root declaratively into the staged `<body>`, full-stamps the staged `<head>` (`h:`) and `<body>` (`b:`), then re-points the Page's bindings AND every app component at the live document against ONE map (`document.head` under `h:` + `document.body` under `b:`). Nothing is ever inserted into the live document — the SSR tree is adopted in place.
+- CSR keeps the served `<head>` static (no FOUC / double head), half-hydrates it (`_hydrate_page_head` — re-point never writes, so title/meta bindings become live), and client-renders the body through the same declarative root mount (`Page.mount_document`).
 
-Every page boot path goes through `mount_document_*` now: `basis.client.entrypoint` mounts the Page classes the manifest lists (real `Page` subclasses), and synthesized `@app.page` shells — which boot by importing their own module — reconstruct the same shell in the client `Basis.page` shim and call the same `mount_document_*` classmethods. The old body-only `mount_app_ssr`/`r:` path is gone (§4.1 P5).
+Every page boots through ONE client driver — `basis.client.entrypoint`: the manifest lists real `Page` subclasses AND synthesized `@app.page` shells (the latter under their root component name); the driver imports each module and calls the single `Page.mount_document` classmethod, which reads the served `basis-render-mode` meta and dispatches SSR (hydrate in place) vs CSR (render the body). Client `@app.page`/`@app.serve` decoration only annotates the decorated root component with its shell recipe (`_synthesized_page_args`, in the class's own `__dict__` so it is never inherited) — mounting is never a decorator side effect. The old body-only `mount_app_ssr`/`r:` path is gone (§4.1 P5).
 
 ---
 
@@ -130,7 +132,7 @@ Every page boot path goes through `mount_document_*` now: `basis.client.entrypoi
 
 1. **Read initial state** — `Store` constructors read `<script id="basis-initial-state">` and pre-populate from the server's serialized state.
 
-2. **Stage a client mount** — `mount_document_ssr()` mounts the whole Page (with the root component as a declarative body child) into a *detached* staging tree, then stamps `data-hydration-id` on every countable node of both regions (`h:`/`b:`) using the *same* `iter_tree_paths` algorithm the server uses. This staging tree is used only to discover bindings and paths; it is discarded once hydration completes.
+2. **Stage a client mount** — `Page.mount_document()` (SSR mode) mounts the whole Page (with the root component as a declarative body child) into a *detached* staging tree, then stamps `data-hydration-id` on every countable node of both regions (`h:`/`b:`) using the *same* `iter_tree_paths` algorithm the server uses. This staging tree is used only to discover bindings and paths; it is discarded once hydration completes.
 
 3. **Match components** — For each component instance, the client finds the corresponding SSR subtree by matching the component root's `data-hydration-id` against the SSR tree's `data-hydration-id`s.
 

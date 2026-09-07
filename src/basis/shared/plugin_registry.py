@@ -109,7 +109,7 @@ def ensure_plugin_registry() -> PluginRegistryStore:
     Called by the client entrypoints so ``$plugins`` resolves on every page.
     On SSR pages the store hydrates from ``#basis-initial-state`` (the listing
     is already present); on CSR pages the page shell embeds the authoritative
-    listing the same way (see ``Page.render``). No client fetch is
+    listing the same way (see ``Page._render``). No client fetch is
     needed — ``refresh()`` exists for on-demand re-sync.
     """
     from basis.shared.store import ensure_store

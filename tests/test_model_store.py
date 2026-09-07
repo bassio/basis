@@ -314,7 +314,7 @@ def test_reactive_model_relationships():
         async def run_test():
             # Mount the component. This will initialize the ModelStoreProvider and evaluate bindings.
             # Since we are on client (sys.modules has pyodide), it will call fetch_data
-            comp = PatientVisitsComponent.mount_app(container)
+            comp = PatientVisitsComponent.mount_with_providers(container)
 
             await asyncio.sleep(0.1)
             # Verify that pyfetch was called with patient_id=1
@@ -425,7 +425,7 @@ def test_provider_no_dom_orphan():
         def template(self):
             """<div>Hello World</div>"""
 
-    comp = DummyComponent.mount_app(container)
+    comp = DummyComponent.mount_with_providers(container)
 
     child_tags = [getattr(child, "tagName", None) for child in container.children]
     assert "slot" not in child_tags
