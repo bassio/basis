@@ -50,5 +50,9 @@ DEFAULT_DEFINITION = ThemeDefinition(
     id="basis",
     name="Basis Default",
     data_theme="basis",
+    # Browser/OS chrome color (theme-color): the page background in each mode,
+    # so the phone's browser UI blends with the app (Decision C).
+    theme_color_light="#f6f6f7",
+    theme_color_dark="#1b2029",
     tokens=DEFAULT_TOKENS,
 )

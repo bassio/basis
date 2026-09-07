@@ -221,6 +221,135 @@ def test_csr_initial_state_applies_persisted_cookie():
     assert state["theme"]["dark_mode"] is True
 
 
+# --- theme-color → $meta (ROADMAP-MOBILE M1.1 / MOBILE-M1.1-PLAN B.9) -------
+
+def test_resolve_theme_color_prefers_explicit_fields():
+    """Decision C: a definition's theme_color_light/dark are authoritative."""
+    from basis.plugins.theme.schema import ThemeDefinition, resolve_theme_color
+    d = ThemeDefinition(theme_color_light="#111111", theme_color_dark="#222222")
+    assert resolve_theme_color(d, dark=False) == "#111111"
+    assert resolve_theme_color(d, dark=True) == "#222222"
+
+
+def test_resolve_theme_color_falls_back_to_bg_parse_then_default():
+    from basis.plugins.theme.schema import (
+        DEFAULT_THEME_COLOR_DARK,
+        DEFAULT_THEME_COLOR_LIGHT,
+        ThemeDefinition,
+        ThemeTokens,
+        resolve_theme_color,
+    )
+    # No explicit field → best-effort light-dark() parse of bg_primary.
+    d = ThemeDefinition(tokens=ThemeTokens(bg_primary="light-dark(#aabbcc, #ddeeff)"))
+    assert resolve_theme_color(d, dark=False) == "#aabbcc"
+    assert resolve_theme_color(d, dark=True) == "#ddeeff"
+    # A light-dark() pair containing rgba() parses too (top-level split).
+    d2 = ThemeDefinition(
+        tokens=ThemeTokens(bg_primary="light-dark(rgba(0, 0, 0, 0.9), #112233)")
+    )
+    assert resolve_theme_color(d2, dark=False) == "rgba(0, 0, 0, 0.9)"
+    # Neither field nor bg_primary → the spec default.
+    d3 = ThemeDefinition()
+    assert resolve_theme_color(d3, dark=False) == DEFAULT_THEME_COLOR_LIGHT
+    assert resolve_theme_color(d3, dark=True) == DEFAULT_THEME_COLOR_DARK
+
+
+def _initial_state_of(html: str) -> dict:
+    return json.loads(
+        html.split('id="basis-initial-state"')[1].split(">", 1)[1].split("</script>")[0]
+    )
+
+
+def test_ssr_theme_color_follows_theme_and_mode_into_head():
+    """theme-color is contributed into $meta and rendered into the SSR head as a
+    keyed loop item, following the cookie-applied theme + mode (no cookie → the
+    basis default, light)."""
+    app, _ = _themed_page()
+    client = TestClient(app)
+
+    # no cookie → basis default, light
+    html = client.get("/demo").text
+    assert 'name="theme-color" content="#f6f6f7"' in html
+    assert 'data-item-key="name:theme-color"' in html
+    state = _initial_state_of(html)
+    assert state["meta"]["items"] == [
+        {"key": "name:theme-color", "name": "theme-color", "content": "#f6f6f7"}
+    ]
+
+    # basis, dark cookie → basis dark chrome color
+    html = client.get(
+        "/demo",
+        cookies={"basis_theme": json.dumps({"active_theme": "basis", "dark_mode": True})},
+    ).text
+    assert 'name="theme-color" content="#1b2029"' in html
+
+    # ambient, light cookie → ambient light chrome color
+    html = client.get(
+        "/demo",
+        cookies={"basis_theme": json.dumps({"active_theme": "ambient", "dark_mode": False})},
+    ).text
+    assert 'name="theme-color" content="#f6f5f0"' in html
+
+    # ambient, dark cookie → ambient dark chrome color
+    html = client.get(
+        "/demo",
+        cookies={"basis_theme": json.dumps({"active_theme": "ambient", "dark_mode": True})},
+    ).text
+    assert 'name="theme-color" content="#171b24"' in html
+
+
+def test_csr_theme_color_in_serialized_state_and_head():
+    """CSR first paint: the cookie-applied theme contributes theme-color into the
+    serialized $meta state (the client hydrates it; the served head carries it)."""
+    import asyncio
+    from basis.server.render import render_page
+
+    app, page_cls = _themed_page()
+    html = asyncio.run(render_page(
+        SimpleNamespace(
+            app=app,
+            cookies={"basis_theme": json.dumps({"active_theme": "basis", "dark_mode": True})},
+        ),
+        page_cls,
+        render_mode="csr",
+    ))
+    assert 'name="theme-color" content="#1b2029"' in html
+    state = _initial_state_of(html)
+    assert state["meta"]["items"][0]["content"] == "#1b2029"
+
+
+def test_theme_mode_and_theme_flips_sync_theme_color_into_meta():
+    """A client-side flip (set_mode / toggle_dark_mode / set_theme) re-upserts
+    theme-color into $meta so the head <meta for> loop reconciles the live
+    <meta> node (the dogfood path — no imperative head_sync)."""
+    from basis.shared.meta import ensure_meta_store
+    from basis.shared.store import Store
+
+    app = Basis()
+    app.bootstrap()
+    # Page._load / the client entrypoint guarantee $meta on real pages.
+    ensure_meta_store()
+    theme = Store._registry["theme"]
+    meta = Store._registry["meta"]
+
+    def color() -> str:
+        return meta.items_for()[0]["content"]
+
+    # Normalize (a prior direct test may have left state in the registry).
+    theme.set_theme("basis")
+    theme.set_mode("light")
+    assert color() == "#f6f6f7"
+
+    theme.set_mode("dark")
+    assert color() == "#1b2029"
+
+    theme.toggle_dark_mode()  # back to light
+    assert color() == "#f6f6f7"
+
+    theme.set_theme("ambient")  # keeps the current (light) mode
+    assert color() == "#f6f5f0"
+
+
 # --- shared RegistryManager: the theme picker -------------------------------
 
 def test_theme_picker_renders_catalog():

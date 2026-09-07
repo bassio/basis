@@ -44,6 +44,16 @@ try:
 except Exception as e:
     print(f"[Basis] Error initializing framework stores: {e}")
 
+# The $meta document-meta store (a Page-level default like $plugins). Guarantee
+# it exists before any component mounts so the page head loop binds it; empty by
+# default (empty items → nothing renders).
+try:
+    from basis.shared.meta import ensure_meta_store
+
+    ensure_meta_store()
+except Exception as e:
+    print(f"[Basis] Error initializing $meta store: {e}")
+
 # 2. App-level stores (stores/). Their module-scope instances self-hydrate from
 # #basis-initial-state, so Page.stores name-lists and default-to-all resolution
 # find them in Store._registry.

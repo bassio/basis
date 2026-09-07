@@ -23,6 +23,9 @@ definition = ThemeDefinition(
     ),
     data_theme="ambient",
     color_scheme="auto",
+    # Browser/OS chrome color (theme-color) — ambient's page backgrounds.
+    theme_color_light="#f6f5f0",
+    theme_color_dark="#171b24",
     tokens=ThemeTokens(
         # Background — warm paper light / deep blue-black dark
         bg_primary="light-dark(#F6F5F0, #171B24)",

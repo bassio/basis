@@ -17,9 +17,13 @@ app attached, not an ``AppStateStore``.
 """
 
 from basis.shared.cookie_store import CookieStore
-from basis.shared.store import IS_CLIENT
+from basis.shared.store import IS_CLIENT, Store
 from basis.plugins.theme.default import DEFAULT_DEFINITION, DEFAULT_TOKENS
-from basis.plugins.theme.schema import ThemeDefinition, TOKEN_SLOTS
+from basis.plugins.theme.schema import (
+    ThemeDefinition,
+    TOKEN_SLOTS,
+    resolve_theme_color,
+)
 
 #: The cookie name for persisted theme prefs (active_theme / dark_mode / accent).
 PREFS_COOKIE = "basis_theme"
@@ -103,6 +107,7 @@ class ThemeStore(CookieStore):
         self.active_theme = theme_id
         self._mark_dirty()
         self._flush_cookie()
+        self._sync_meta_color()
         return f"applied {theme_id}"
 
     def set_mode(self, mode: str) -> str:
@@ -114,6 +119,7 @@ class ThemeStore(CookieStore):
         self.dark_mode = mode == "dark"
         self._mark_dirty()
         self._flush_cookie()
+        self._sync_meta_color()
         return f"mode {mode}"
 
     def set_accent(self, value: str) -> str:
@@ -232,3 +238,32 @@ class ThemeStore(CookieStore):
         self.dark_mode = not self.dark_mode
         self._mark_dirty()
         self._flush_cookie()
+        self._sync_meta_color()
+
+    # ── $meta theme-color contribution (ROADMAP-MOBILE M1.1 / B.9) ─────────
+
+    def _sync_meta_color(self) -> None:
+        """Upsert the active theme's browser-chrome color into the ``$meta``
+        document store.
+
+        ``$meta`` is a Page-guaranteed core store (never theme-registered) — the
+        theme merely CONTRIBUTES the resolved ``theme-color`` item, and the page
+        head ``<meta for>`` loop (kept alive by whole-page hydration) renders /
+        reconciles it live. No-op when ``$meta`` isn't registered yet (guarded:
+        ``Page._load`` / the client entrypoint ensure it before any page
+        renders, but a bare ``ThemeStore`` construction may precede it).
+        """
+        meta = Store._registry.get("meta")
+        if meta is None:
+            return
+        definition = self.__dict__.get("_definition") or DEFAULT_DEFINITION
+        dark = bool(getattr(self, "dark_mode", False))
+        meta.upsert("theme-color", resolve_theme_color(definition, dark=dark))
+
+    def apply_request(self, request) -> None:
+        """Server-only per-request hook: apply the ``basis_theme`` cookie (the
+        no-FOUC SSR/CSR first paint) then sync the theme-color contribution into
+        ``$meta`` so the head loop and the serialized state carry it. Runs even
+        with no cookie (default theme → its default chrome color)."""
+        super().apply_request(request)
+        self._sync_meta_color()

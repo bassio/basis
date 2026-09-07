@@ -280,7 +280,14 @@ class Page(Component):
                 store_instance = Store.resolve(name)
                 if name == "router" and request is not None and hasattr(request, "url"):
                     store_instance.current_path = request.url.path
+        # Framework document-meta store ($meta): a Page-level default exactly
+        # like the plugin registry — guaranteed to exist at mount so the base
+        # template's head `<meta for>` loop always binds it. It is empty by
+        # default (empty ``items`` → the loop renders nothing). FRAMEWORK_
+        # STORE_NAMES also serializes it on strict ``Page.stores`` pages.
+        from basis.shared.meta import ensure_meta_store
 
+        ensure_meta_store()
         container = Element("html", {}, list())
         
         attributes = {"title": cls.title,
@@ -445,7 +452,13 @@ class Page(Component):
 
         <!-- component styles -->
         <style text-content="{item['css']}" for="item" in="{component_style_items()}" key="uid" data-component-class="{item['name']}" data-extra-style="{item['extra']}"></style>
-        
+
+        <!-- document meta ($meta): live, name-keyed <meta> tags contributed by
+             plugins/stores (e.g. theme-color follows $theme). A Page-owned keyed
+             LoopBinding kept alive by whole-page hydration — an empty store
+             renders nothing (byte-stable), and $meta is a Page-guaranteed
+             default like the plugin registry (MOBILE-M1.1-PLAN.md B.9). -->
+        <meta for="m" in="{$meta.items}" key="key" name="{m['name']}" content="{m['content']}" />
     </head>
     <body>
         <!-- basis:app-root -->
@@ -616,6 +629,15 @@ class Page(Component):
             # Framework control-plane stores ($plugins, $regions) must hydrate on
             # every page regardless of the page's store subset.
             names |= set(FRAMEWORK_STORE_NAMES)
+
+            # Phase 1 — attach app-bound stores and run every store's per-request
+            # pref hook (``apply_request``, e.g. ``$theme`` reads its
+            # ``basis_theme`` cookie) BEFORE any store is serialized. A request
+            # hook that CONTRIBUTES to another store (``$theme`` →
+            # ``$meta`` theme-color, ROADMAP-MOBILE M1.1) must have run before
+            # that store serializes — two-phase keeps it deterministic
+            # regardless of set-iteration order (the SSR engine already sweeps
+            # apply_request ahead of serialization).
             for name in names:
                 instance = Store._registry.get(name) or Store.resolve(name)
                 # App-bound stores (``_requires_app``, e.g. ``$plugins``) hold a
@@ -624,15 +646,16 @@ class Page(Component):
                 # recompute or the initial state serializes empty (the client
                 # then hydrates a stale/empty view).
                 attach_app_to_store(instance, request.app)
-                # Request-pref hook: a store may opt in by defining
-                # ``apply_request(request)`` (e.g. ``$theme`` reads its
-                # ``basis_theme`` cookie) so the CSR initial state is themed.
                 apply_request = getattr(instance, "apply_request", None)
                 if callable(apply_request):
                     try:
                         apply_request(request)
                     except Exception:
                         pass
+
+            # Phase 2 — serialize all stores (request hooks already applied).
+            for name in names:
+                instance = Store._registry.get(name) or Store.resolve(name)
                 initial_state[name] = instance.serialize()
             if initial_state:
                 # Script-safe JSON for embedding in <script type="application/json">.

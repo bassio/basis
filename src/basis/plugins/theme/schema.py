@@ -162,6 +162,14 @@ class ThemeDefinition:
     description: str | None = None
     data_theme: str = "basis"          # value for :root[data-theme=...] (app CSS hooks)
     color_scheme: str = "auto"         # "light" | "dark" | "auto"
+    #: Browser/OS chrome color (``theme-color`` meta) per color mode (Decision
+    #: C — MOBILE-M1.1-PLAN.md). Optional, manifest-level DESIGN data, NOT token
+    #: slots / CSS vars: a theme's browser-chrome color is a real design
+    #: decision, never a string-parsed side effect. When unset,
+    #: :func:`resolve_theme_color` falls back to a best-effort ``light-dark()``
+    #: parse of ``tokens.bg_primary``, then to the spec default.
+    theme_color_light: str | None = None
+    theme_color_dark: str | None = None
     tokens: ThemeTokens = field(default_factory=ThemeTokens)
     css: str | None = None             # optional extra stylesheet path (theme plugin static file)
     fonts: list[str] = field(default_factory=list)
@@ -199,6 +207,10 @@ class ThemeDefinition:
                 f"color_scheme {self.color_scheme!r} must be one of "
                 f"'auto', 'system', 'light', 'dark'"
             )
+        for mode in ("theme_color_light", "theme_color_dark"):
+            value = getattr(self, mode)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                problems.append(f"{mode} must be a color string when set")
         for slot, kind in TOKEN_SLOTS.items():
             value = getattr(self.tokens, slot, None)
             if value is None:
@@ -211,3 +223,74 @@ class ThemeDefinition:
                 + "\n  - ".join(problems)
             )
         return self
+
+
+# ---------------------------------------------------------------------------
+# Browser/OS chrome color resolution (Decision C — MOBILE-M1.1-PLAN.md)
+# ---------------------------------------------------------------------------
+
+#: Spec-default chrome colors used when a definition declares no
+#: ``theme_color_*`` field AND its ``bg_primary`` carries no parseable
+#: ``light-dark()`` pair.
+DEFAULT_THEME_COLOR_LIGHT = "#f5f5f7"
+DEFAULT_THEME_COLOR_DARK = "#1e1e2e"
+
+
+def _split_top_level(value: str, sep: str = ",") -> list[str]:
+    """Split ``value`` on *sep*, ignoring separators inside parentheses (so an
+    ``rgba(...)`` inside a ``light-dark(...)`` pair is not split)."""
+    parts: list[str] = []
+    cur: list[str] = []
+    depth = 0
+    for ch in value:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        if ch == sep and depth == 0:
+            parts.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    if cur:
+        parts.append("".join(cur).strip())
+    return parts
+
+
+def _parse_light_dark(value: str | None) -> tuple[str, str] | None:
+    """Best-effort parse of a ``light-dark(<light>, <dark>)`` token value into
+    its two CSS colors. ``None`` when the value isn't that shape."""
+    import re
+
+    if not value:
+        return None
+    m = re.search(r"light-dark\((.*)\)", value)
+    if not m:
+        return None
+    parts = _split_top_level(m.group(1))
+    if len(parts) >= 2:
+        return parts[0], parts[1]
+    return None
+
+
+def resolve_theme_color(definition: "ThemeDefinition", dark: bool) -> str:
+    """The browser/OS chrome color (``theme-color`` meta) for *definition* in
+    the given color mode.
+
+    Precedence (Decision C — theme-color is explicit theme data, never derived
+    by string-parsing):
+    1. the definition's ``theme_color_light`` / ``theme_color_dark`` field (the
+       real design decision);
+    2. a best-effort ``light-dark()`` parse of ``tokens.bg_primary`` (for
+       themes that don't declare the field yet);
+    3. the spec default (:data:`DEFAULT_THEME_COLOR_LIGHT` /
+       :data:`DEFAULT_THEME_COLOR_DARK`).
+    """
+    explicit = definition.theme_color_dark if dark else definition.theme_color_light
+    if explicit:
+        return explicit
+    bg = getattr(getattr(definition, "tokens", None), "bg_primary", None) or ""
+    pair = _parse_light_dark(bg)
+    if pair:
+        return pair[1] if dark else pair[0]
+    return DEFAULT_THEME_COLOR_DARK if dark else DEFAULT_THEME_COLOR_LIGHT
