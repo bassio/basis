@@ -68,7 +68,8 @@ Because `destroy()` walks the *binding tree*, it unmounts the whole subtree it o
 - **Regions** — when a `<ui-region>` contribution is removed (e.g. a plugin is disabled and its contribution vanishes from `$regions`), the region destroys it; destroying the region itself destroys its remaining contributions (see [Regions & dynamic UI](#regions-and-live-plugin-ui)).
 - **Subtree teardown** — destroying a root component cascades through `ChildBinding`s, `LoopBinding`s and nested components automatically.
 - **You** — imperative code that mounts a component and later wants it gone.
-- The client `mount_app_ssr()` now returns the mounted root, so a future page/SPA teardown has a handle to `destroy()`.
+- The whole-document mount returns the staged Page (whose declarative root is a
+  normal child binding), so a future page/SPA teardown has a handle to `destroy()`.
 
 ### The internal seams (not user API)
 

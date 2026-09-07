@@ -205,3 +205,80 @@ def test_repoint_unmatched_key_reports():
 
     assert not report.is_clean
     assert any(u["binding_type"] == "LoopItem" for u in report.unmatched_bindings)
+
+
+def test_hidden_inner_loop_reports_nothing():
+    """An inner loop nested inside an if-hidden branch of a (visible) outer
+    loop item is legitimately absent from the SSR tree — re-pointing the outer
+    loop must NOT report it as a mismatch.
+
+    Mirrors the jotter WorkspaceCentral quirk (a ``for/in`` loop inside an
+    ``if``-gated tab whose branch is hidden at SSR render): the inner loop's
+    parent was removed from the client item's own subtree too, so there is no
+    relative path to resolve and no SSR counterpart to re-point — the inner
+    loop is dormant (kept alive for when its branch reveals), not a genuine
+    server/client divergence.
+    """
+    class Owner(Component):
+        show_sub = False
+        groups = [{"g": "A"}, {"g": "B"}]
+        sub_items = [{"n": "a1"}, {"n": "a2"}]
+
+        def template(self):
+            """
+            <div>
+                <div for="grp" in="{groups}" key="g">
+                    <span>{grp['g']}</span>
+                    <div if="{show_sub}">
+                        <div for="sub" in="{sub_items}" key="n">{sub['n']}</div>
+                    </div>
+                </div>
+            </div>
+            """
+
+    client = Owner.mount(Element("div", attrs={}, children=[]))
+    outer = _loop(client)
+    inner_loops = [
+        b for it in outer.instances.values()
+        for b in it.bindings if b.__class__.__name__ == "LoopBinding"
+    ]
+    # Every outer item carries a dormant inner loop: eager instances exist (so
+    # reveal can insert them) but its ``if``-parent is detached.
+    assert len(inner_loops) == 2
+    for il in inner_loops:
+        assert il.instances
+        assert il.parent is not None and il.parent.parentNode is None
+
+    # A genuine mismatch in the SAME position is still reported (regression
+    # guard: we only suppress the hidden case, never real divergences).
+    client_b = Owner.mount(Element("div", attrs={}, children=[]))
+    outer_b = _loop(client_b)
+    outer_item_b = next(iter(outer_b.instances.values()))
+    inner_b = next(b for b in outer_item_b.bindings
+                   if b.__class__.__name__ == "LoopBinding")
+    # Force the inner loop visible: re-attach its if-parent under the item so
+    # the client item tree contains it.
+    if_parent = inner_b.parent
+    outer_item_b.node.children.append(if_parent)
+
+    ssr = Owner.mount(Element("div", attrs={}, children=[]))
+    report = HydrationReport()
+    outer.repoint_to_ssr(ssr.__element__, report=report)
+    assert report.is_clean, report.to_dict()
+
+    # Hidden inner loops stayed untouched (still bound to client nodes) and the
+    # visible outer items were re-pointed onto the SSR tree.
+    for il in inner_loops:
+        assert il.parent.parentNode is None
+    for it in outer.instances.values():
+        assert it.node.parentNode is ssr.__element__
+
+    # The visible-on-client / absent-on-SSR variant DOES report.
+    report2 = HydrationReport()
+    outer_b.repoint_to_ssr(ssr.__element__, report=report2)
+    assert not report2.is_clean
+    assert any(
+        u["binding_type"] == "LoopBinding"
+        and u["reason"].startswith("inner loop parent not found")
+        for u in report2.unmatched_bindings
+    )

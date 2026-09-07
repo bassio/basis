@@ -1200,7 +1200,7 @@ class LoopBinding(NodeBinding):
         return [n for n in nodes if n is not None]
 
     def text_binding_nodes(self):
-        """Body TextBinding nodes (for data-basis-text ordinal stamping)."""
+        """Body TextBinding nodes (for data-hydration-text ordinal stamping)."""
         return [b.node for b in self._plain_body_bindings()
                 if type(b).__name__ == "TextBinding"]
 

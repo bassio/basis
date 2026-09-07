@@ -50,16 +50,141 @@ def include_model(model: type, name: str, one: bool = False, target: str = "item
     return decorator
 
 
+def _container_last_child(container):
+    """The container's last child node (or ``None``) across both tree
+    representations (server ``Element`` / browser DOM NodeList)."""
+    try:
+        child_nodes = getattr(container, "childNodes", None)
+        if child_nodes is None:
+            child_nodes = getattr(container, "children", None)
+        if child_nodes is None:
+            return None
+        if len(child_nodes) == 0:
+            return None
+        return child_nodes[len(child_nodes) - 1]
+    except Exception:
+        return None
+
+
+def _find_anchor_comment(container, anchor_data):
+    """The ``<!-- anchor_data -->`` comment child of ``container``, or ``None``.
+
+    Duck-typed across the server ``Comment`` node (``nodeName == "#comment"`` +
+    ``data``) and the browser DOM comment (same ``nodeName`` / ``data``).
+    Comments are never hydration targets, so they are safe inert markers for
+    whole-page in-tree chrome (§4.1 P3).
+    """
+    try:
+        child_nodes = getattr(container, "childNodes", None)
+        if child_nodes is None:
+            child_nodes = getattr(container, "children", None)
+        if child_nodes is None:
+            return None
+        for i in range(len(child_nodes)):
+            node = child_nodes[i]
+            if (
+                getattr(node, "nodeName", "") == "#comment"
+                and getattr(node, "data", "") == anchor_data
+            ):
+                return node
+    except Exception:
+        return None
+    return None
+
+
+def _move_after(container, ref, anchor):
+    """Move every node that currently follows ``ref`` (both direct children of
+    ``container``) to sit immediately after ``anchor``, preserving order.
+
+    Used by :meth:`BaseComponent.mount_app` to relocate its newly-appended
+    mount nodes to the ``basis:app-root`` anchor. Duck-typed across the server
+    ``Element`` tree and the browser DOM (``nextSibling`` walking +
+    ``insertBefore(node, referenceNode)``).
+    """
+    try:
+        nodes = []
+        n = getattr(ref, "nextSibling", None)
+        while n is not None:
+            nodes.append(n)
+            n = getattr(n, "nextSibling", None)
+        if not nodes:
+            return
+        parent = anchor.parentNode
+        if parent is None:
+            return
+        # Every node is inserted before the SAME reference (the anchor's
+        # original next sibling), so relative order is preserved.
+        target = getattr(anchor, "nextSibling", None)
+        for node in nodes:
+            parent.insertBefore(node, target)
+    except Exception:
+        pass
+
+
+def _mount_root_providers(cls, container):
+    """Mount every ``@include_store`` / ``@include_model`` provider that the
+    root class ``cls`` registry sweep declares, as siblings ahead of the root.
+
+    This is the legacy ``mount_app`` provider step, extracted (unchanged) so the
+    Page's declarative root mount (HYDRATION-WHOLEPAGE.md §4.1 S1 — the root as
+    a nested ``ChildBinding`` under its hyphenated ``__tag__``) shares the exact
+    same provider sweep instead of forking it. Returns the mounted provider
+    list (each already appended to ``container``).
+    """
+    mounted_stores = set()
+    mounted_models = set()
+    mounted_providers = []
+
+    all_component_classes = [cls] + list(cls._registry.values())
+
+    for comp_cls in all_component_classes:
+        # Handle @include_store decorators
+        if hasattr(comp_cls, '__basis_stores__'):
+            try:
+                from basis.shared.store_provider import StoreProvider
+                for store_cfg in comp_cls.__basis_stores__:
+                    name = store_cfg['name']
+                    if name not in mounted_stores:
+                        mounted_stores.add(name)
+                        provider = StoreProvider.mount(
+                            container,
+                            name=name,
+                            url=store_cfg['url'],
+                            target=store_cfg.get('target'),
+                        )
+                        mounted_providers.append(provider)
+            except ImportError:
+                pass
+
+        # Handle @include_model decorators
+        if hasattr(comp_cls, '__basis_models__'):
+            try:
+                from basis.shared.store_provider import ModelStoreProvider
+                for model_cfg in comp_cls.__basis_models__:
+                    name = model_cfg['name']
+                    if name not in mounted_models:
+                        mounted_models.add(name)
+                        provider = ModelStoreProvider.mount(
+                            container,
+                            name=name,
+                            model=model_cfg['model'],
+                            one=model_cfg['one'],
+                            target=model_cfg['target'],
+                            **model_cfg['kwargs'],
+                        )
+                        mounted_providers.append(provider)
+            except ImportError:
+                pass
+
+    return mounted_providers
+
+
 class BaseComponent(ReactiveObject):
 
     _registry = {}
     _instance_registry = ContextVarProxyDict("component_instance_registry")
     _live_instances = weakref.WeakSet()
     _pending_subscriptions = ContextVarProxyDict("component_pending_subscriptions")
-    # Client-only: class name -> [<style> elements injected by mount_app]. Used by
-    # HMR to live-update a component's CSS even when the <style> lives inside a
-    # shadow root (where document.querySelectorAll cannot reach it).
-    _style_elements = {}
     # Identity for `#name` cross-component references. When set, the component
     # registers under this name in the instance registry instead of relying on
     # the root element's `id`. Default: the root element's `id`.
@@ -1148,85 +1273,50 @@ class BaseComponent(ReactiveObject):
 
 
     @classmethod
+    def _ordered_style_sources(cls):
+        """``[(comp_cls, class_name, extra_name_or_None, css)]`` for every
+        registered component, in the in-tree component-style loop's DOM order
+        (main stylesheets reversed-registration at the front, then
+        ``@extra_style`` blocks in registration order).
+
+        Exposes the component *class* too (not just name/css), so a Page's
+        in-tree component-style loop can filter by class module while sharing
+        the exact same set/order that ``mount_app``'s legacy body injection
+        once produced (§4.1 P3 — in-tree chrome superseded the injection).
+        """
+        sources: list[tuple] = []
+        mains: list[tuple] = []
+        for _tag, c in cls._registry.items():
+            if hasattr(c, "style"):
+                css = c._get_style_string()
+                if css:
+                    mains.append((c, c.__name__, None, css))
+        sources.extend(reversed(mains))
+        for _tag, c in cls._registry.items():
+            for extra_name, extra_css in c._get_extra_styles():
+                sources.append((c, c.__name__, extra_name, extra_css))
+        return sources
+
+    @classmethod
     def mount_app(cls, container, replace=False):
-        # 1. Collect all stores/models from all registered components
-        mounted_stores = set()
-        mounted_models = set()
-        mounted_providers = []
+        """Mount a root component (plus its store/model providers) into
+        ``container``.
 
-        all_component_classes = [cls] + list(cls._registry.values())
+        Low-level helper for mounting a component outside a Page (direct
+        component mounts in tests/plugins). It mounts the ``@include_store`` /
+        ``@include_model`` providers as siblings, then the component itself.
 
-        for comp_cls in all_component_classes:
-            # Handle @include_store decorators
-            if hasattr(comp_cls, '__basis_stores__'):
-                try:
-                    from basis.shared.store_provider import StoreProvider
-                    for store_cfg in comp_cls.__basis_stores__:
-                        name = store_cfg['name']
-                        if name not in mounted_stores:
-                            mounted_stores.add(name)
-                            provider = StoreProvider.mount(container, 
-                                              name=name, 
-                                              url=store_cfg['url'],
-                                              target=store_cfg.get('target'))
-                            mounted_providers.append(provider)
-                except ImportError:
-                    pass
-                    
-            # Handle @include_model decorators
-            if hasattr(comp_cls, '__basis_models__'):
-                try:
-                    from basis.shared.store_provider import ModelStoreProvider
-                    for model_cfg in comp_cls.__basis_models__:
-                        name = model_cfg['name']
-                        if name not in mounted_models:
-                            mounted_models.add(name)
-                            provider = ModelStoreProvider.mount(container,
-                                                   name=name,
-                                                   model=model_cfg['model'],
-                                                   one=model_cfg['one'],
-                                                   target=model_cfg['target'],
-                                                   **model_cfg['kwargs'])
-                            mounted_providers.append(provider)
-                except ImportError:
-                    pass
-
+        §4.1 P5: the legacy responsibilities are gone —
+        * no component ``<style>`` body injection (styles live in-tree in the
+          Page ``<head>`` ``component_style_items`` loop for every page root;
+          a bare component mount has no document chrome to own),
+        * no ``basis:app-root`` anchor relocation (the Page's declarative root
+          mount — :meth:`Page.mount_root_app` — owns the app slot; ``mount_app``
+          is never a page mount).
+        """
+        mounted_providers = _mount_root_providers(cls, container)
         new_instance = cls.mount(container, replace)
         new_instance._mounted_providers = mounted_providers
-
-        #client
-        for c_tag, c in cls._registry.items():
-            if hasattr(c, 'style'):
-                style_content = c._get_style_string()
-                
-                if style_content:
-                    style_elem = cls._create_element("style")
-                    style_elem.setAttribute("data-component-class", c.__name__)
-                    style_elem.textContent = style_content
-                    container.prepend(style_elem)
-
-                    # Track the element so HMR can update it (works inside shadow roots).
-                    try:
-                        cls._style_elements.setdefault(c.__name__, []).append(style_elem)
-                    except Exception:
-                        pass
-
-            # Additive @extra_style blocks — their own <style> elements, APPENDED
-            # (not prepended) so they land after the main stylesheet and win the
-            # cascade at equal specificity without copying the whole style().
-            for extra_name, extra_css in c._get_extra_styles():
-                extra_elem = cls._create_element("style")
-                extra_elem.setAttribute("data-component-class", c.__name__)
-                extra_elem.setAttribute("data-extra-style", extra_name)
-                extra_elem.textContent = extra_css
-                container.appendChild(extra_elem)
-                # Track for HMR alongside the main style element (the data-extra-style
-                # attribute distinguishes them).
-                try:
-                    cls._style_elements.setdefault(c.__name__, []).append(extra_elem)
-                except Exception:
-                    pass
-
         return new_instance
 
     def _capture_state(self):

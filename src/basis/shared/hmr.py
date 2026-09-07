@@ -115,7 +115,7 @@ class HMRClient:
 
         style_content = cls._get_style_string() or content
         # @extra_style blocks keep their own content — a .css edit only affects
-        # the main stylesheet, so re-derive them for the tracked elements.
+        # the main stylesheet, so re-derive them for the matching elements.
         extra_styles = dict(cls._get_extra_styles())
         updated = 0
 
@@ -125,18 +125,12 @@ class HMRClient:
             except Exception:
                 return ""
 
-        # Update styles recorded by mount_app (works inside shadow roots) AND any
-        # matching light-DOM style element — a mount's staging shadow can hold a
-        # copy that must not mask the visible one.
-        for se in getattr(BaseComponent, "_style_elements", {}).get(cls.__name__, []):
-            name = _extra_name(se)
-            if name:
-                if name in extra_styles:
-                    se.textContent = extra_styles[name]
-                    updated += 1
-            else:
-                se.textContent = style_content
-                updated += 1
+        # Re-resolve the component's live <style> tags by selector and rewrite
+        # them in place. Styles live in-tree in the Page <head> (the
+        # component_style_items loop, §4.1 P3) — there is no mount_app body
+        # injection to track (that machinery is gone, §4.1 P5), so a selector
+        # re-resolution at update time is the single source of truth and never
+        # trusts a stale element reference across a loop reconciliation.
         for se in document.querySelectorAll(
             f'style[data-component-class="{cls.__name__}"]:not([data-extra-style])'
         ):

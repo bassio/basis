@@ -214,15 +214,16 @@ class JsComponent(Component):
         """Boot when the element joins the live document (push, no polling).
 
         On SSR pages every component — including hidden-if children — mounts
-        into the detached shadow during ``mount_app_ssr``. Visible components
-        get a matching SSR node, so ``on_hydrated`` boots them. Hidden
-        components (e.g. a tab the server didn't select) have no SSR node, so
-        ``on_hydrated`` never fires and ``on_mounted`` will not re-run when the
-        controlling ``if`` later reveals them — booting into the detached
-        shadow would mount the widget into a node that dies. The custom
-        element's ``connectedCallback`` dispatches a generic ``basis:connected``
-        event when the node is (re-)inserted into the live document — exactly
-        the reveal moment — so we register a one-shot listener (see
+        into the detached staged tree during whole-document hydration
+        (``Page.mount_document_ssr``). Visible components get a matching SSR
+        node, so ``on_hydrated`` boots them. Hidden components (e.g. a tab the
+        server didn't select) have no SSR node, so ``on_hydrated`` never fires
+        and ``on_mounted`` will not re-run when the controlling ``if`` later
+        reveals them — booting into the detached staged tree would mount the
+        widget into a node that dies. The custom element's
+        ``connectedCallback`` dispatches a generic ``basis:connected`` event
+        when the node is (re-)inserted into the live document — exactly the
+        reveal moment — so we register a one-shot listener (see
         :func:`basis.client.js_bridge.wait_connected`, which listens on
         ``document`` for the bubbled event and fires when this component's
         element reports ``isConnected``) and boot on it. Idempotent via

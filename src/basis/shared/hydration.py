@@ -27,7 +27,7 @@ Paths are ``"r:" + ":".join(ints)``, e.g. ``r:0:1:2``.  The root element is
 ``r:0``.
 
 Text nodes cannot carry attributes, so reactive text is addressed via a
-deterministic *text ordinal* stamped on the parent element (``data-basis-text``
+deterministic *text ordinal* stamped on the parent element (``data-hydration-text``
 = comma-separated 0-based ordinals of its reactive text children, computed over
 the *normalized* children).  See ``stamp_text_ordinals`` / ``text_ordinal``.
 
@@ -42,7 +42,7 @@ from collections import defaultdict
 # Marker attribute names shared by both sides.
 HYDRATION_ID_ATTR = "data-hydration-id"
 COMPONENT_HYDRATION_ID_ATTR = "data-component-hydration-id"
-TEXT_ORDINALS_ATTR = "data-basis-text"
+TEXT_ORDINALS_ATTR = "data-hydration-text"
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +146,7 @@ def iter_tree_paths(root, prefix="r"):
 # Marker stamping
 # ---------------------------------------------------------------------------
 
-def apply_hydration_markers(root, binding_nodes, component_nodes):
+def apply_hydration_markers(root, binding_nodes, component_nodes, prefix="r"):
     """Stamp ``data-hydration-id`` / ``data-component-hydration-id``.
 
     * membership is set-based (O(nodes) instead of O(nodes x bindings));
@@ -155,6 +155,9 @@ def apply_hydration_markers(root, binding_nodes, component_nodes):
 
     ``binding_nodes`` and ``component_nodes`` are iterables of element nodes
     (binding targets from ``marked_for_hydration()`` and component roots).
+    ``prefix`` names the walk's root region (see ``iter_tree_paths``): the app
+    subtree uses the default ``"r"``, and a Page's ``<head>`` region uses
+    ``"h"``, keeping ids across regions differentiated.
 
     Returns a ``dict`` mapping path -> ``{"binding": bool, "component": bool}``
     for every stamped node (an audit trail for mismatch diagnostics).
@@ -163,7 +166,7 @@ def apply_hydration_markers(root, binding_nodes, component_nodes):
     component_ids = {id(n) for n in component_nodes}
     report: dict[str, dict] = {}
 
-    for node, path in iter_tree_paths(root):
+    for node, path in iter_tree_paths(root, prefix=prefix):
         is_binding = id(node) in binding_ids
         is_component = id(node) in component_ids
         if not (is_binding or is_component):
@@ -177,16 +180,18 @@ def apply_hydration_markers(root, binding_nodes, component_nodes):
     return report
 
 
-def build_hydration_map(root):
+def build_hydration_map(root, prefix="r"):
     """Return ``{data-hydration-id value: node}`` for every countable node under
     ``root`` that carries the marker.
 
     Duck-typed (server ``Element`` and browser DOM).  This is the SSR-side
     lookup table the client uses to match bindings by canonical path in O(1),
     instead of scanning the tree with a ``querySelector`` per binding.
+    ``prefix`` must match the prefix the region was stamped under (e.g. ``"h"``
+    when building the map over a Page's live ``<head>``).
     """
     result = {}
-    for node, _ in iter_tree_paths(root):
+    for node, _ in iter_tree_paths(root, prefix=prefix):
         if is_element(node) and node.hasAttribute(HYDRATION_ID_ATTR):
             hid = node.getAttribute(HYDRATION_ID_ATTR)
             if hid:
@@ -302,12 +307,21 @@ def repoint_loop_to_ssr(binding, ssr_parent, report=None):
                 inner_path = _find_node_path(client_paths, b.parent)
                 inner_ssr_parent = ssr_paths.get(inner_path) if inner_path else None
                 if inner_ssr_parent is None:
-                    if report is not None:
+                    # When the inner loop's parent is NOT part of the client
+                    # item's own subtree (``inner_path`` is None) it sits inside
+                    # an if-hidden branch that the SSR item also omitted — the
+                    # inner loop is DORMANT until that branch is revealed, not a
+                    # hydration mismatch (mirrors how the enclosing IfBinding
+                    # below treats a hidden if-node as legitimately absent).
+                    # Only an inner loop whose parent IS in the client item yet
+                    # missing from the SSR item is a genuine divergence worth
+                    # reporting.
+                    if report is not None and inner_path:
                         report.add_unmatched_binding(
                             _loop_owner_name(binding.component_instance),
                             "LoopBinding",
-                            client_id=inner_path or "?",
-                            expected_ssr_id=inner_path or "?",
+                            client_id=inner_path,
+                            expected_ssr_id=inner_path,
                             reason="inner loop parent not found in SSR item",
                         )
                     continue
@@ -375,7 +389,7 @@ def text_ordinal(parent, text_node) -> int | None:
 
 
 def stamp_text_ordinals(root, text_nodes):
-    """Stamp ``data-basis-text='i,j'`` on each parent that owns reactive text.
+    """Stamp ``data-hydration-text='i,j'`` on each parent that owns reactive text.
 
     ``text_nodes`` are the live text nodes of each ``TextBinding`` (server:
     ElementString; client: DOM Text node).  The ordinal is computed over
@@ -416,12 +430,16 @@ def stamp_text_ordinals(root, text_nodes):
 # Entry point used by both SSR renderers
 # ---------------------------------------------------------------------------
 
-def apply_hydration_to_component(app, root_component_plus_child_components):
-    """Canonical marker + text-ordinal stamping for a mounted app.
+def _collect_component_hydration(app):
+    """Every hydration target owned by the subtree rooted at ``app``.
 
-    ``app`` is the mounted root component; ``root_component_plus_child_components``
-    is the list of component instances whose root elements get stamped
-    ``data-component-hydration-id``.  Returns the marker report (path -> flags).
+    Returns ``(binding_nodes, text_nodes, component_nodes)``:
+    * ``binding_nodes`` — every marked-for-hydration node across the app's
+      recursive bindings (incl. loop item wrappers / loop-body bindings);
+    * ``text_nodes`` — every ``TextBinding`` node plus loop-body text binding
+      nodes (exposed for ordinal stamping);
+    * ``component_nodes`` — the root element of ``app`` plus every recursively
+      mounted child component's root (custom-element loop children included).
     """
     binding_nodes = []
     text_nodes = []
@@ -433,13 +451,95 @@ def apply_hydration_to_component(app, root_component_plus_child_components):
             # Loop body TextBindings live in LoopItem.bindings (not reachable
             # via get_bindings recursion) — expose them for ordinal stamping.
             text_nodes.extend(b.text_binding_nodes())
-    component_nodes = [
-        comp.__element__ for comp in root_component_plus_child_components
-    ]
-    report = apply_hydration_markers(
-        app.__element__, binding_nodes, component_nodes
+    component_nodes = [app.__element__]
+    component_nodes.extend(
+        cb.childinstance.__element__
+        for cb in app.get_child_bindings(recursive=True)
     )
-    stamp_text_ordinals(app.__element__, text_nodes)
+    return binding_nodes, text_nodes, component_nodes
+
+
+def apply_hydration_to_page(page):
+    """Stamp the whole-document hydration surface over the Page's OWN regions —
+    ``<head>`` (``h:``) and ``<body>`` (``b:``) — in one coordinated pass
+    (HYDRATION-WHOLEPAGE.md §4.1 P4).
+
+    The Page is the whole-``<html>`` document shell. Under whole-page hydration
+    BOTH regions are Page-owned:
+
+    * the **``<head>`` region** (prefix ``h:``) covers the Page's head bindings
+      — ``<title>{title}``, the viewport / ``basis-render-mode`` meta, the
+      initial-state script, the in-tree component-style loop;
+    * the **``<body>`` region** (prefix ``b:``) roots at the ``<body>`` element
+      and covers the Page's body bindings AND the mounted app subtree, so the
+      whole document hydrates against ONE map (``h:`` + ``b:``), replacing the
+      old separate app-rooted ``r:`` body walk (migrate-always).
+
+    The SSR engine mounts the root component into ``<body>`` before calling
+    ``Page.render`` and carries that app on ``page._hydrate_body_app``, so its
+    subtree's binding targets / component roots participate in the ``b:`` walk.
+    When no body app is present (static pages), only the head region is
+    stamped.
+
+    ``page`` is the mounted ``Page`` instance (``__element__`` = the ``<html>``
+    root). Returns the marker report (path -> flags) for diagnostics.
+    """
+    html_root = page.__element__
+    head_node = None
+    body_node = None
+    for child in html_root.children:
+        tag = getattr(child, "tagName", "").lower()
+        if tag == "head":
+            head_node = child
+        elif tag == "body":
+            body_node = child
+    report = {}
+
+    # Page-owned binding nodes + text nodes (head AND body bindings). Passing
+    # every node to each region's membership set is safe: a region's walk only
+    # stamps the nodes it actually visits, so a body node never leaks into the
+    # ``h:`` report (and vice-versa).
+    page_binding_nodes = []
+    page_text_nodes = []
+    for b in getattr(page, "__bindings__", ()):
+        page_binding_nodes.extend(b.marked_for_hydration() or ())
+        if type(b).__name__ == "TextBinding":
+            page_text_nodes.append(b.node)
+
+    # ── HEAD region (h:) ────────────────────────────────────────────────────
+    if head_node is not None:
+        # Stamp <head> itself as the h: region root so a head LoopBinding (the
+        # component_style_items loop, §4.1 P3) can re-point its parent — <head>
+        # belongs to no component, so it would never otherwise be stamped.
+        head_node.setAttribute(HYDRATION_ID_ATTR, "h:0")
+        report.update(
+            apply_hydration_markers(head_node, page_binding_nodes, [], prefix="h")
+        )
+        stamp_text_ordinals(head_node, page_text_nodes)
+
+    # ── BODY region (b:) ────────────────────────────────────────────────────
+    if body_node is not None:
+        body_app = getattr(page, "_hydrate_body_app", None)
+        body_binding_nodes = list(page_binding_nodes)
+        body_text_nodes = list(page_text_nodes)
+        body_component_nodes = []
+        if body_app is not None:
+            app_bindings, app_texts, app_components = _collect_component_hydration(
+                body_app
+            )
+            body_binding_nodes.extend(app_bindings)
+            body_text_nodes.extend(app_texts)
+            body_component_nodes = app_components
+        # Stamp <body> itself as the b: region root (b:0) so a Page body
+        # LoopBinding (e.g. a user-stylesheet <link> loop) can re-point its
+        # parent — <body> belongs to no component, mirroring the h:0 rule.
+        body_node.setAttribute(HYDRATION_ID_ATTR, "b:0")
+        report.update(
+            apply_hydration_markers(
+                body_node, body_binding_nodes, body_component_nodes, prefix="b"
+            )
+        )
+        stamp_text_ordinals(body_node, body_text_nodes)
     return report
 
 

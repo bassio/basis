@@ -668,7 +668,7 @@ def test_ssr_collects_errors_and_never_renders_sentinel(monkeypatch):
     assert "[Error:" not in resp.text
 
     match = re.search(
-        r'<script id="basis-initial-state" type="application/json">\s*(.*?)\s*</script>',
+        r'<script id="basis-initial-state"[^>]*>\s*(.*?)\s*</script>',
         resp.text, re.S,
     )
     state = json.loads(match.group(1))

@@ -30,9 +30,9 @@ Basis has a single hydration model — **canonical** — used for both rendering
 
 - The server tree **preserves text/comments exactly** like the browser DOM (no whitespace stripping).
 - IDs are derived by **one single-source algorithm** shared between server and client.
-- Text bindings are matched by deterministic **text ordinals** (`data-basis-text`).
+- Text bindings are matched by deterministic **text ordinals** (`data-hydration-text`).
 
-The client needs no configuration: canonical pages carry a `data-basis-text` marker and match by ordinal.
+The client needs no configuration: canonical pages carry a `data-hydration-text` marker and match by ordinal.
 
 ---
 
@@ -83,13 +83,13 @@ Written on the root element of each component instance, marking component bounda
 <user-card data-component-hydration-id="r:0:2">...</user-card>
 ```
 
-### `data-basis-text`
+### `data-hydration-text`
 
 Written on the **parent** of reactive text nodes: a comma-separated list of the *ordinals* of its reactive text children (0-based, among the parent's normalized children). Because text nodes cannot carry attributes, this marker is how the client locates them deterministically.
 
 ```html
 <!-- "Score: 0" is the 0th reactive text child of the span -->
-<span data-hydration-id="r:0:1" data-basis-text="0">Score: 0</span>
+<span data-hydration-id="r:0:1" data-hydration-text="0">Score: 0</span>
 ```
 
 ---
@@ -105,7 +105,24 @@ Each countable node is identified by a path string `r:` + one segment per depth,
 </div>
 ```
 
-There is exactly **one** address scheme. The client runs the *same* `iter_tree_paths` algorithm over its own template tree and stamps `data-hydration-id` on it too — so a client node at canonical path `P` hydrates the SSR node at canonical path `P`.
+There is exactly **one** address *algorithm*. A page carries **two disjoint regions** (HYDRATION-WHOLEPAGE.md), each a named root so the client and server agree on where every node lives; the generic `r:` default above applies only to standalone component walks, never to a served page:
+
+- `<head>` content is numbered `h:` (root `h:0` is the `<head>` element).
+- `<body>` content is numbered `b:` (root `b:0` is the `<body>` element).
+
+The client runs the *same* `iter_tree_paths` algorithm over its own staged template tree and stamps `data-hydration-id` on it too — so a client node at canonical path `P` hydrates the SSR node at canonical path `P`.
+
+### Two regions: the Page's `<head>` and `<body>` are one owned document
+
+The Page shell — the whole `<html>` document — is itself a component whose template carries bindings in BOTH regions (`<title>{title}</title>`, the viewport / `basis-render-mode` meta, the `<script id="basis-initial-state">` body in `<head>`; the body region holds the root component). Whole-page hydration (HYDRATION-WHOLEPAGE.md No.2 / §4.1 P4) makes both regions reactive surfaces so those bindings are kept alive instead of server-frozen:
+
+- The **`<head>` region** (`h:`) covers the Page's own head bindings — stamped by `shared/hydration.apply_hydration_to_page` inside `Page.render` (SSR only) and full-stamped client-side from the staged template.
+- The **`<body>` region** (`b:`) is rooted at the `<body>` element. The root component mounts as a **declarative nested child** of the Page — a `ChildBinding` under a hyphenated host tag (`Page._declarative_root_tag()` + `Page.mount_root_app()`). The host tag is the root's declared `__tag__`, or one kebab-derived from the class name, so **every** page root (real `Page` subclass or a synthesized `@app.page` shell) mounts declaratively — there is no imperative engine mount left (§4.1 P5). The host is the body's first countable child (`b:0:0`); the app's own root sits inside it (`b:0:0:0`…).
+- Page chrome is **in-tree** (HYDRATION-WHOLEPAGE.md §4.1 P3): the per-component style loop, the viewport `<style id="basis-viewport">` (a `text-content` node), the dev-mode meta and the user stylesheet `<link>`s (at a body comment anchor) all live as owned nodes/comment anchors of the `Page` template — there are no post-serialization appends.
+- On the client a Page subclass hydrates the WHOLE served document in one pass (`Page.mount_document_ssr` → `_hydrate_page_document_ssr`): it stages the Page in a detached fragment (a browser `<template>` parse would drop the `<html>/<head>/<body>` wrappers, so the client rebuilds the document structure programmatically via `DOMParser`), mounts the root declaratively into the staged `<body>`, full-stamps the staged `<head>` (`h:`) and `<body>` (`b:`), then re-points the Page's bindings AND every app component at the live document against ONE map (`document.head` under `h:` + `document.body` under `b:`). Nothing is ever inserted into the live document — the SSR tree is adopted in place.
+- CSR keeps the served `<head>` static (no FOUC / double head), half-hydrates it (`_hydrate_page_head` — re-point never writes, so title/meta bindings become live), and client-renders the body through the same declarative root mount (`Page.mount_document_csr`).
+
+Every page boot path goes through `mount_document_*` now: `basis.client.entrypoint` mounts the Page classes the manifest lists (real `Page` subclasses), and synthesized `@app.page` shells — which boot by importing their own module — reconstruct the same shell in the client `Basis.page` shim and call the same `mount_document_*` classmethods. The old body-only `mount_app_ssr`/`r:` path is gone (§4.1 P5).
 
 ---
 
@@ -113,13 +130,13 @@ There is exactly **one** address scheme. The client runs the *same* `iter_tree_p
 
 1. **Read initial state** — `Store` constructors read `<script id="basis-initial-state">` and pre-populate from the server's serialized state.
 
-2. **Stage a client mount** — `mount_app_ssr()` mounts the whole app into a *detached* shadow root, then `_stamp_hydration_ids()` stamps `data-hydration-id` on every countable node using the *same* `iter_tree_paths` algorithm the server uses. This staging tree is used only to discover bindings and paths; it is discarded once hydration completes.
+2. **Stage a client mount** — `mount_document_ssr()` mounts the whole Page (with the root component as a declarative body child) into a *detached* staging tree, then stamps `data-hydration-id` on every countable node of both regions (`h:`/`b:`) using the *same* `iter_tree_paths` algorithm the server uses. This staging tree is used only to discover bindings and paths; it is discarded once hydration completes.
 
 3. **Match components** — For each component instance, the client finds the corresponding SSR subtree by matching the component root's `data-hydration-id` against the SSR tree's `data-hydration-id`s.
 
 4. **Match bindings** (`initialize_ssr`) — Before matching, the client builds **one** SSR lookup map, `{path: node}`, from every `data-hydration-id` in the tree (`build_hydration_map`). Each binding is then repointed from its staging node to the matching SSR node with two O(1) lookups:
    - **Element bindings** (events, attributes, `if`, child components, loops) are found by reading the staging node's `data-hydration-id` — which *is* the canonical path — and looking it up in the SSR map. The path is read from the stamped DOM attribute (not from proxy identity, so it is safe across Pyodide's `JsProxy` wrappers), and it is the same value on both sides by construction. Loops are the one structural special case: item wrappers and loop-body bindings are re-pointed by `data-item-key` + *relative* canonical paths (`shared/hydration.repoint_loop_to_ssr`), which also handles nested loops and custom-element loop children.
-   - **Text bindings** are matched by **ordinal**: the client computes the text node's ordinal among its parent's normalized children, reads the SSR parent's `data-basis-text`, and adopts the SSR text node at that ordinal. Whitespace and comments around the binding cannot shift it.
+   - **Text bindings** are matched by **ordinal**: the client computes the text node's ordinal among its parent's normalized children, reads the SSR parent's `data-hydration-text`, and adopts the SSR text node at that ordinal. Whitespace and comments around the binding cannot shift it.
    - Bindings that cannot be matched are recorded in the hydration report (below) rather than silently left stale.
 
 5. **DAG activation** — Once every binding points at a live SSR node, state mutations propagate through the `DependencyGraph` and update only the affected nodes.
@@ -130,7 +147,7 @@ The result: the SSR DOM is reused in place — no flash of content, no layout sh
 
 ## Diagnostics
 
-Hydration is fail-loud. On the client, `mount_app_ssr()` builds a `HydrationReport` that records:
+Hydration is fail-loud. On the client, the whole-document hydration driver builds a single `HydrationReport` that records:
 
 - **Unmatched bindings** — which binding type (e.g. `TextBinding`, `EventBinding`, `IfBinding`) and which client path failed to match.
 - **Unhydrated components** — component roots present on the client but absent from the SSR tree (unless they are legitimately hidden by an `if`).
@@ -158,7 +175,7 @@ The page stays fully reactive even though that load sacrificed SSR. Because the 
 
 ## Compatibility
 
-- Hydration is always **canonical** (preserved-text tree, text ordinals, `data-basis-text`).
+- Hydration is always **canonical** (preserved-text tree, text ordinals, `data-hydration-text`).
 - The client needs no configuration — every SSR page carries the canonical markers.
 - The fallback re-render remains available and default-on; disable with `BASIS_HYDRATION_FALLBACK=0` (or `set_hydration_fallback(False)` in code).
 

@@ -95,14 +95,17 @@ for component_name, module_path in modules_dict.items():
         module = importlib.import_module(module_path)
         print(f"[Basis] Loaded: {module_path}")
         page_cls = getattr(module, component_name)
-        root_component = getattr(page_cls, "root_component", None)
-        if root_component is not None:
-            if is_ssr:
-                # SSR: hydrate in place — the app is a direct <body> child (no
-                # #basis-ssr-root wrapper), so the whole <body> is the tree.
-                root_component.mount_app_ssr(document.body)
-            else:
-                root_component.mount_app(document.body)
+        # Whole-page mount (HYDRATION-WHOLEPAGE.md No.2 / Option A, §4.1 P5):
+        # the manifest only ever lists client-mountable Page classes, and every
+        # Page provides both mount_document_* classmethods (real subclasses and
+        # synthesized @app.page shells alike) — there is no legacy body-only
+        # mount path left. SSR hydrates the PAGE in place (its OWN <head>
+        # bindings included); CSR keeps the served head static and renders the
+        # body region.
+        if is_ssr:
+            page_cls.mount_document_ssr(document)
+        else:
+            page_cls.mount_document_csr(document)
     except Exception as e:
         print(f"[Basis] Error loading {module_path}: {e}")
 

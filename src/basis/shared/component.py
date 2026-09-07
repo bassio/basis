@@ -14,15 +14,57 @@ if IS_CLIENT:
 
     class Basis(object):
         def page(self, component, **kwargs):
-            component.mount_app_ssr()
+            # §4.1 P5 (HYDRATION-WHOLEPAGE.md): a synthesized ``@app.page``
+            # shell is no longer a body-only ``r:`` mount. The server builds the
+            # Page shell at import time via ``type()``; the client reconstructs
+            # the SAME shell here (same base, title, stores, pyscript_src) from
+            # the decoration the module is running, then mounts the WHOLE
+            # document through ``Page.mount_document_*`` — the exact path real
+            # Page subclasses take via the unified entrypoint. Every boot path
+            # is a Page now; the legacy ``mount_app_ssr``/``r:`` shim is gone.
+            from basis.shared.page import Page as _PageBase, _synthesize_page
+
+            base = kwargs.get("page_cls") or _PageBase
+            if isinstance(component, type) and issubclass(component, _PageBase):
+                # A real Page never reaches this shim on the client (it boots
+                # through the manifest's basis.bootstrap.entrypoint); if one
+                # does, leave it alone rather than double-mount.
+                return component
+            page_cls = _synthesize_page(
+                component,
+                page_cls=base,
+                title=kwargs.get("title"),
+                stores=kwargs.get("stores"),
+                pyscript_src=kwargs.get("pyscript_src"),
+            )
+            try:
+                from pyscript import document
+            except Exception:
+                return component
+            try:
+                meta = document.querySelector('meta[name="basis-render-mode"]')
+                is_ssr = (
+                    meta is not None
+                    and getattr(meta, "getAttribute", lambda _: "")("content")
+                    == "ssr"
+                )
+                if is_ssr:
+                    page_cls.mount_document_ssr(document)
+                else:
+                    page_cls.mount_document_csr(document)
+            except Exception as exc:
+                print(f"[Basis] Error mounting synthesized page for {component.__name__}: {exc}")
+            # Decorator form: return the DECORATED component class (mounting is a
+            # side effect).
             return component
 
         def serve(self, *args, **kwargs):
             # Client-side: ``@app.serve`` on a root Component (the single-file
             # quickstart) behaves exactly like ``@app.page`` — the component file
-            # is the boot module, so mounting it hydrates the SSR tree. Page
-            # subclasses never reach this shim (the client boots from the page
-            # module via the manifest's basis.bootstrap.entrypoint, not from app.py).
+            # is the boot module, so mounting it hydrates/renders the whole
+            # document through the reconstructed Page shell. Page subclasses
+            # never reach this shim (the client boots from the page module via
+            # the manifest's basis.bootstrap.entrypoint, not from app.py).
             component = args[0] if args else kwargs.get("page_cls")
             return self.page(component, **kwargs)
 
@@ -44,16 +86,18 @@ else:
 from basis.shared.base_component import include_store, include_model
 
 
-# While the client mounts for SSR hydration (``mount_app_ssr``) components live
-# in a detached shadow that will be re-pointed at the live SSR tree. Dynamic
+# While the client stages a Page for whole-document SSR hydration
+# (``mount_document_ssr`` → ``_hydrate_page_document_ssr``) components live in a
+# detached staged tree that will be re-pointed at the live document. Dynamic
 # mounters (e.g. ``<ui-region>``) read this to defer real work to
 # ``on_hydrated``. Always ``False`` on the server (SSR render mounts normally).
 _SSR_HYDRATION = False
 
 
 def in_ssr_hydration() -> bool:
-    """True while the client is inside ``mount_app_ssr`` (the SSR-hydration
-    mount). False on the server and during plain CSR mounts."""
+    """True while the client is inside whole-document SSR hydration (the staged
+    Page mount before re-point). False on the server and during plain CSR
+    mounts."""
     return _SSR_HYDRATION
 
 

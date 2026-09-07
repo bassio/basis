@@ -437,15 +437,15 @@ def test_stamp_text_ordinals_is_deterministic():
 
     stamp_text_ordinals(root, [text_a, text_c])
 
-    assert root.getAttribute("data-basis-text") == "0,2"
+    assert root.getAttribute("data-hydration-text") == "0,2"
     # The ordinals are stable no matter how the template is indented.
     padded = html_to_element(
         "<div>\n\n    {a}\n\n    <b>{b}</b>\n\n    {c}\n</div>"
     )
-    assert padded.getAttribute("data-basis-text") is None
+    assert padded.getAttribute("data-hydration-text") is None
     stamp_text_ordinals(padded, [find_text_nodes(padded, "{a}")[0],
                                  find_text_nodes(padded, "{c}")[0]])
-    assert padded.getAttribute("data-basis-text") == "0,2"
+    assert padded.getAttribute("data-hydration-text") == "0,2"
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +501,7 @@ def test_build_hydration_map_ignores_unmarked_nodes():
 
 def test_ssr_emits_markers_and_text_ordinals():
     """Full SSR render must emit hydration markers AND the deterministic
-    ``data-basis-text`` ordinal, with text preserved."""
+    ``data-hydration-text`` ordinal, with text preserved."""
     from fastapi.testclient import TestClient
     from basis.server.app import Basis
     from basis.shared.page import _synthesize_page
@@ -531,12 +531,15 @@ def test_ssr_emits_markers_and_text_ordinals():
     resp = client.get("/")
     assert resp.status_code == 200
 
-    # Root is both a SelfBinding node and a component root.
-    assert 'data-hydration-id="r:0"' in resp.text
-    assert 'data-component-hydration-id="r:0"' in resp.text
+    # §4.1 P5: synthesized @app.page shells are whole-document pages now — the
+    # root mounts declaratively under a kebab-derived host tag (here `root`, the
+    # host is the Page's ChildBinding node → b:0:0), and the root's own element
+    # is a stamped component child of the host (b:0:0:0).
+    assert 'data-hydration-id="b:0:0"' in resp.text
+    assert 'data-component-hydration-id="b:0:0:0"' in resp.text
     # Deterministic text ordinal: {message} is normalized-child #1 of the div
-    # (the <span> is #0), so the parent carries data-basis-text="1".
-    assert 'data-basis-text="1"' in resp.text
+    # (the <span> is #0), so the parent carries data-hydration-text="1".
+    assert 'data-hydration-text="1"' in resp.text
     # Canonical tree preserves the authored whitespace between the elements
     # (the successful binding renders "Hello" inside that preserved run).
     assert "<span>Ready</span>\n    " in resp.text
@@ -544,7 +547,7 @@ def test_ssr_emits_markers_and_text_ordinals():
 
 
 def test_ssr_stamps_loop_body_nodes_and_text_ordinals():
-    """A plain loop's body nodes carry data-hydration-id AND data-basis-text in
+    """A plain loop's body nodes carry data-hydration-id AND data-hydration-text in
     the SSR output, so the client's hydration pass (via ``all_body_bindings()``)
     can match and re-point them — making plain loop bodies reactive on /ssr."""
     from fastapi.testclient import TestClient
@@ -569,17 +572,19 @@ def test_ssr_stamps_loop_body_nodes_and_text_ordinals():
     resp = client.get("/")
     assert resp.status_code == 200
 
-    # Loop item wrappers are stamped with canonical hydration ids.
-    assert 'data-hydration-id="r:0:0"' in resp.text
-    assert 'data-hydration-id="r:0:1"' in resp.text
+    # §4.1 P5: synthesized pages are whole-document pages — the root sits under
+    # its derived `<root>` host (b:0:0 → content div b:0:0:0), so the loop item
+    # wrappers are children of that content div (b:0:0:0:0 / b:0:0:0:1).
+    assert 'data-hydration-id="b:0:0:0:0"' in resp.text
+    assert 'data-hydration-id="b:0:0:0:1"' in resp.text
     # Each item body parent carries the text ordinal for its {it['name']} node.
-    assert 'data-basis-text="0"' in resp.text
+    assert 'data-hydration-text="0"' in resp.text
     assert "Alpha" in resp.text and "Beta" in resp.text
 
 
 def test_ssr_stamps_nested_loop_body_nodes_and_text_ordinals():
     """Phase 5-extension (server side): a NESTED loop's INNER item wrappers and
-    body nodes carry data-hydration-id AND data-basis-text in the SSR output
+    body nodes carry data-hydration-id AND data-hydration-text in the SSR output
     (the recursion in ``marked_for_hydration`` / ``text_binding_nodes``), so
     the client's structural matcher can re-point inner loop bodies on /ssr."""
     from fastapi.testclient import TestClient
@@ -608,16 +613,18 @@ def test_ssr_stamps_nested_loop_body_nodes_and_text_ordinals():
     resp = client.get("/")
     assert resp.status_code == 200
 
+    # §4.1 P5: the root sits under its derived `<root>` host (content div
+    # b:0:0:0), so every loop path is prefixed by that content div.
     # Outer item wrappers.
-    assert 'data-hydration-id="r:0:0"' in resp.text   # outer A
-    assert 'data-hydration-id="r:0:1"' in resp.text   # outer B
-    # Inner item wrappers (children of outer A: span at :0, items a1/a2 at :1/:2;
-    # outer B's single inner item at r:0:1:1).
-    assert 'data-hydration-id="r:0:0:1"' in resp.text  # inner a1
-    assert 'data-hydration-id="r:0:0:2"' in resp.text  # inner a2
-    assert 'data-hydration-id="r:0:1:1"' in resp.text  # inner b1
+    assert 'data-hydration-id="b:0:0:0:0"' in resp.text   # outer A
+    assert 'data-hydration-id="b:0:0:0:1"' in resp.text   # outer B
+    # Inner item wrappers (children of outer A: span at :0, items a1/a2 at
+    # :1/:2; outer B's single inner item at b:0:0:0:1:1).
+    assert 'data-hydration-id="b:0:0:0:0:1"' in resp.text  # inner a1
+    assert 'data-hydration-id="b:0:0:0:0:2"' in resp.text  # inner a2
+    assert 'data-hydration-id="b:0:0:0:1:1"' in resp.text  # inner b1
     # Inner bodies + span labels carry text ordinals for their reactive text.
-    assert resp.text.count('data-basis-text="0"') >= 5
+    assert resp.text.count('data-hydration-text="0"') >= 5
     # Everything renders.
     for needle in ("A:", "B:", "a1", "a2", "b1"):
         assert needle in resp.text
@@ -682,14 +689,14 @@ def test_client_text_ordinal_matching_on_dom_like_nodes():
     assert text_ordinal(div, texts[1]) == 2
     assert text_ordinal(b, b.childNodes[0]) == 0
 
-    # SSR tree (same structure) with the canonical data-basis-text marker.
+    # SSR tree (same structure) with the canonical data-hydration-text marker.
     ssr_div = _fake_element("div")
     ssr_div.appendChild(_fake_text("\n    {a}\n    "))
     ssr_b = _fake_element("b")
     ssr_div.appendChild(ssr_b)
     ssr_b.appendChild(_fake_text("{b}"))
     ssr_div.appendChild(_fake_text("\n    {c}\n"))
-    ssr_div.setAttribute("data-basis-text", "0,2")
+    ssr_div.setAttribute("data-hydration-text", "0,2")
 
     # Reproduce the client branch in initialize_ssr for the {c} text binding.
     own = text_ordinal(div, texts[1])

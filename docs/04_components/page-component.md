@@ -31,15 +31,30 @@ Here is the template `Page` renders, showing the actual structure from `page.py`
             {initial_state_json}
         </script>
     </head>
-    <body></body>
+    <body>
+        <!-- basis:app-root (the root component mounts here) -->
+        <!-- basis:user-stylesheets (replaced with your stylesheet <link>s) -->
+    </body>
 </html>
 ```
 
-Your reactive components mount as a **direct child of `<body>`** — server-side
-rendering (SSR) pre-renders them there, and a client-side-rendered (CSR) page
-ships an empty `<body>` that the client fills. Both modes therefore produce the
-same page tree; only the `<meta name="basis-render-mode">` value differs. (There
-is no `#basis-ssr-root` wrapper — see `HYDRATION-WHOLEPAGE.md`.)
+Your reactive root component is a **declarative nested child of `<body>`**: the
+Page mounts it under a hyphenated host tag (`Page.mount_root_app` — the root's
+declared `__tag__`, or one kebab-derived from the class name, so every root
+mounts this way). Server-side rendering (SSR) pre-renders the host + root
+there, and a client-side-rendered (CSR) page ships an empty body region that
+the client fills with the same host + root. Both modes therefore produce the
+same page tree; only the `<meta name="basis-render-mode">` value differs.
+(There is no `#basis-ssr-root` wrapper — see `HYDRATION-WHOLEPAGE.md`.)
+
+The `Page` shell is itself a component whose `<head>` and `<body>` both carry
+bindings — `<title>{title}</title>`, the viewport / `basis-render-mode` meta,
+the `initial_state_json` script in `<head>`; the root-component host in
+`<body>`. Whole-page hydration keeps both regions alive: the client mounts the
+page (`Page.mount_document_ssr`) and re-points its bindings at the live
+document (`h:` head + `b:` body regions, one map); on CSR it half-hydrates the
+served `<head>` and renders the body region (`Page.mount_document_csr`). See
+`docs/05_reactivity/ssr-hydration.md`.
 
 ---
 
@@ -113,7 +128,7 @@ async def home(request: Request):
     return await PageResponse.from_page(HomePage, request)
 ```
 
-To add a stylesheet override layer, set `Page.stylesheets` to a tuple of URLs — Basis links them at the **end of `<body>`**, after the SSR root where the framework injects component `<style>` elements, so they land later in the document and win the cascade at equal specificity:
+To add a stylesheet override layer, set `Page.stylesheets` to a tuple of URLs — Basis assembles them at the **end of `<body>`** (replacing the `basis:user-stylesheets` anchor that follows the `basis:app-root` mount point), so they load after the app and after the in-tree component `<style>` elements in `<head>`, and win the cascade at equal specificity:
 
 ```python
 class HomePage(Page):

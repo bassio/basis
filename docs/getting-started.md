@@ -60,7 +60,7 @@ The `Basis` class extends FastAPI. It handles serving your components, managing 
 ### 2. The `@app.page` Decorator
 This single decorator handles the entire application lifecycle:
 - **On the Server**: It registers the component for Server-Side Rendering (SSR) and sets up a page route (default `/`).
-- **In the Browser**: It automatically triggers the hydration process (`mount_app_ssr()`), waking up the static HTML without any extra code.
+- **In the Browser**: It automatically triggers the whole-document hydration/render (`Page.mount_document_*` via the client `Basis.page` shim), waking up the static HTML without any extra code.
 
 ## Running the App
 

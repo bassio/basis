@@ -1,27 +1,37 @@
 import json
 import warnings
 
-from basis.shared.component import Component
-from basis.shared.element import Element, ElementString, DocumentType
+from basis.shared.component import Component, IS_CLIENT
+from basis.shared.element import Element, DocumentType
 from basis.shared.store import Store, attach_app_to_store, FRAMEWORK_STORE_NAMES
 from basis.shared.serialization import json_dumps_script_safe
+
+#: The client builds a Page's whole-document blueprint by parsing the template
+#: with a structure-preserving document parser (``DOMParser`` keeps
+#: ``<html>/<head>/<body>``; see ``client/component.py::
+#: _build_html_document_blueprint``). No string splitting of the raw template is
+#: needed or used — a browser ``<template>.innerHTML`` parse (the generic
+#: component path) would drop the document wrappers, and an ``XMLSerializer``
+#: round-trip would double-encode raw-text (``<script>``/``<style>``) entities.
+
+
 
 #: M1.1 (ROADMAP-MOBILE.md) — framework mobile viewport base CSS.
 #:
 #: Document-level rules only. Component styles live in shadow roots and can
 #: never reach ``html``/``body``, so the handful of page-level mobile rules ship
-#: as a light-DOM ``<style id="basis-viewport">`` injected into ``<head>`` by
-#: :meth:`Page.render` (both SSR and CSR end there). The block is deliberately
-#: neutral and theme-agnostic — safe for the fixed-viewport workbench *and* the
-#: document-flow site paradigm.
+#: as a light-DOM ``<style id="basis-viewport">`` in ``<head>``. The block is
+#: deliberately neutral and theme-agnostic — safe for the fixed-viewport
+#: workbench *and* the document-flow site paradigm.
 #:
-#: It is NOT inlined in ``Page.template()``: text inside a raw-text
-#: ``<style>``/``<script>`` is binding-parsed (the page already resolves
-#: ``{initial_state_json}`` inside a ``<script>``), so CSS braces would be
-#: misread as ``{expr}`` fields. (The theme provider sidesteps the same hazard
-#: by binding ``tokens_css`` through a ``text-content`` attribute instead of
-#: inlining the CSS.) Constructing the element here with a literal
-#: ``ElementString`` bypasses template analysis entirely.
+#: In-tree home (HYDRATION-WHOLEPAGE.md §4.1 P3 / category 2): the base
+#: ``Page.template()`` declares ``<style id="basis-viewport"
+#: text-content="{viewport_base_css}"></style>`` (see the ``viewport_base_css``
+#: class attribute). The CSS travels as runtime DATA through the
+#: ``text-content`` attribute binding (the proven ``ThemeProvider.tokens_css``
+#: pattern) — never as inline template text — so its ``{``/``}`` braces are
+#: never misread as ``{expr}`` fields, and both SSR and CSR render the block
+#: from the same constant.
 _VIEWPORT_BASE_CSS = """\
 /* basis mobile viewport base */
 html {
@@ -71,6 +81,47 @@ def page_aware_config_url(base_url: str, request) -> str:
     return base_url
 
 
+def _served_head_component_style_names():
+    """Client-only: the ``data-component-class`` names of the served page head's
+    component-style LOOP items, or ``None`` when unavailable (server).
+
+    The served ``<head>`` is the source of truth for page chrome: the server
+    renders it, so whatever it lists is the canonical component-style set for
+    THIS page. Reading it back lets the client render exactly that set instead
+    of re-deriving from its own process-global component registry.
+
+    Only styles that carry ``data-item-key`` count — those are the keyed-loop
+    items the server rendered. Standalone chrome a component self-injects at
+    boot (e.g. the dev ``ErrorOverlay``'s own ``<style data-component-class>``,
+    appended to ``<head>`` by ``mount_error_overlay``) has NO ``data-item-key``:
+    it is deliberately not part of the loop, so it must not make the client
+    believe the server loop shipped that component.
+    """
+    try:
+        from pyscript import document
+    except Exception:
+        return None
+    try:
+        names = set()
+        for el in document.head.querySelectorAll(
+            "style[data-component-class][data-item-key]"
+        ):
+            n = el.getAttribute("data-component-class")
+            if n:
+                names.add(str(n))
+        return names
+    except Exception:
+        return None
+
+
+def _filter_style_sources(sources, served_names):
+    """Keep only the ordered style sources whose component name appears in
+    ``served_names`` (the served head's set); no filtering when ``None``."""
+    if served_names is None:
+        return list(sources)
+    return [s for s in sources if s[1] in served_names]
+
+
 def _page_store_names(stores) -> list[str]:
     """Normalize ``Page.stores`` to a list of store names.
 
@@ -94,6 +145,55 @@ def _page_store_names(stores) -> list[str]:
     return names
 
 
+def _hyphen_tag(name: str) -> str:
+    """Kebab-case a class name into a hyphenated host tag (``HelloBasis`` →
+    ``hello-basis``, ``AppContainer`` → ``app-container``).
+
+    Used by :meth:`Page._declarative_root_tag` to derive a deterministic
+    declarative host tag for a root component that does not declare a
+    hyphenated ``__tag__`` (§4.1 P5: every boot path through a Page). Both the
+    server and the client derive it from the same class name, so hydration
+    paths match.
+    """
+    import re
+
+    s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1-\2", name)
+    s2 = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", s1)
+    return s2.replace("_", "-").lower()
+
+
+def _replace_comment_anchors(html_root, anchor_data, elements):
+    """Replace every ``<!-- anchor_data -->`` comment node under the server tree
+    ``html_root`` with ``elements`` (each a detached ``Element``).
+
+    Comment anchors are the §4.1 P3 category-1 mechanism: they pin where
+    assembly-time chrome belongs in the Page template — the user stylesheet
+    ``<link>``s at the very END of ``<body>``. The anchors are inert (comments
+    never count toward hydration numbering), so replacing them before the
+    stamping pass can never shift an ``h:``/``b:`` path.
+
+    When ``elements`` is empty the anchor comment is removed too, so prod
+    output carries no stray marker. Returns whether any anchor was found.
+    """
+    # Collect first — mutating the tree while iterating descendants is unsafe.
+    targets = []
+    for node in html_root.descendants:
+        if type(node).__name__ == "Comment" and node.data == anchor_data:
+            targets.append(node)
+    for comment in targets:
+        parent = comment.parentNode
+        if elements:
+            for el in elements:
+                parent.insertBefore(el, comment)
+        if parent is not None:
+            try:
+                parent.children.remove(comment)
+            except ValueError:
+                pass
+        comment.parent = None
+    return bool(targets)
+
+
 class Page(Component):
     doctype: DocumentType = DocumentType("html")
     title: str = "Basis App"
@@ -112,14 +212,75 @@ class Page(Component):
         "width=device-width, initial-scale=1.0, viewport-fit=cover, "
         "interactive-widget=resizes-content"
     )
+    #: The framework mobile viewport base CSS rendered into
+    #: ``<style id="basis-viewport">`` in the base template's ``<head>`` (via a
+    #: ``text-content`` binding — category 2, §4.1 P3). Kept as a data field so
+    #: it can be overridden per-page; defaults to the neutral ``_VIEWPORT_BASE_CSS``.
+    viewport_base_css: str = _VIEWPORT_BASE_CSS
+    #: Dev-mode marker rendered as an in-tree ``<meta name="basis-mode">`` via an
+    #: ``if``-binding (category 2/1 — no comment anchor). The SSR/CSR engines set
+    #: it from the request at mount time (True only when the HMR dev watcher runs,
+    #: mirroring ``basis dev --hmr`` → ``BASIS_HMR=1``); on the client it stays
+    #: False, so the served dev meta is adopted as static head content (re-point
+    #: never hides live nodes).
+    basis_dev_mode: bool = False
     root_component = None
     stores = []
-    # Stylesheet URLs appended to the END of <body> — i.e. AFTER the SSR root
-    # where the framework injects component <style> elements — so they land
-    # later in the document and win the cascade at equal specificity (the
-    # "your CSS comes later" rule). This is the framework-native home for a
-    # user override stylesheet (e.g. a generated ``static/app.css``).
+    #: User stylesheet URLs assembled at the very END of ``<body>`` — AFTER the
+    #: body-mounted app and the ``<head>`` component styles — so they load later
+    #: in the document and win the cascade at equal specificity (the "your CSS
+    #: comes later" rule). The base ``Page.template()`` body carries a
+    #: ``<!-- basis:user-stylesheets -->`` anchor there; :meth:`Page.render`
+    #: replaces it with these ``<link rel="stylesheet">`` elements at assembly
+    #: time. This is the framework-native home for a user override stylesheet
+    #: (e.g. a generated ``static/app.css``).
+    #:
+    #: §4.1 P4 note (2026-09-07): an in-tree body ``<link>`` LOOP is the clean
+    #: end-state but requires the APP to be a declarative template child — an
+    #: engine-mounted app and a declarative loop at the same trailing body slot
+    #: race (browser-verified). Until that final architecture lands, the links
+    #: are server-assembled at this anchor.
     stylesheets: tuple[str, ...] = ()
+
+    def component_style_items(self):
+        """Ordered component style items for the in-tree ``<head>``
+        component-style loop (HYDRATION-WHOLEPAGE.md §4.1 P3).
+
+        Each item is a dict the loop template reads: ``uid`` (stable
+        reconciliation key), ``name`` (component class), ``extra`` (``''`` for
+        the main stylesheet, else the ``@extra_style`` name) and ``css`` (the
+        formatted stylesheet). The set/order comes from
+        ``BaseComponent._ordered_style_sources`` — the same producer that once
+        fed ``mount_app``'s legacy body injection — so the in-tree and injected
+        homes could never diverge. Since §4.1 P5 every boot path goes through a
+        Page (synthesized ``@app.page`` shells included), so component styles
+        always render in-tree here and the legacy ``mount_app`` body injection
+        is gone.
+
+        Server vs client parity is guaranteed by making the SERVED page head
+        authoritative, not by enumerating a shared registry: the server renders
+        the full ordered set (the shell it ships defines the page's chrome), and
+        on the client this method returns only the sources whose component is
+        present in the served ``<head>``'s ``<style data-component-class>`` set.
+        So a client registry that also holds dormant client-only components
+        (e.g. the dev ``ErrorOverlay``, which the server never imports and which
+        self-injects its stylesheet when it mounts) can never introduce a head
+        item the server did not ship — no spurious "loop item not found"
+        mismatch, and no namespace heuristics.
+        """
+        sources = _filter_style_sources(
+            self.__class__._ordered_style_sources(),
+            _served_head_component_style_names(),
+        )
+        return [
+            {
+                "uid": f"{name}||{extra or 'main'}",
+                "name": name,
+                "extra": extra or "",
+                "css": css,
+            }
+            for (_cls, name, extra, css) in sources
+        ]
 
     @classmethod
     def load(cls, request=None):
@@ -150,12 +311,131 @@ class Page(Component):
                       "pyscript_json_url": cls.pyscript_json_url,
                       "initial_state_json": cls.initial_state_json,
                       "render_mode": cls.render_mode,
-                      "viewport": cls.viewport}
+                      "viewport": cls.viewport,
+                      # Dev-mode marker: bound at MOUNT time so the template's
+                      # basis_dev_mode if-binding evaluates once (no mid-render
+                      # re-insert) — True only when the HMR dev watcher runs.
+                      "basis_dev_mode": bool(
+                          request is not None
+                          and getattr(getattr(request, "app", None),
+                                      "_start_hmr_watcher", False)
+                      )}
 
         page_instance = cls.mount(container, replace=False, **attributes)
         page_instance.__element__ = container.children[0]
         
         return page_instance
+
+    @classmethod
+    def _declarative_root_tag(cls):
+        """The hyphenated host ``__tag__`` this Page mounts its root app under,
+        or ``None`` when the Page has no root (static page).
+
+        Declarative root mount (HYDRATION-WHOLEPAGE.md §4.1 S1 + S3): the Page
+        owns its root as a nested ``ChildBinding`` under a hyphenated host tag
+        in its ``<body>`` app slot — "the root is just another component". A
+        root that declares a hyphenated ``__tag__`` mounts under it (e.g. jotter
+        ``AppContainer.__tag__ = "app-container"``). A root that does NOT
+        declare one gets a kebab-case tag derived from its class name, so every
+        boot path (real ``Page`` subclasses AND synthesized ``@app.page``
+        shells) mounts declaratively through :meth:`Page.mount_root_app` — there
+        is no legacy imperative engine path left to fall back to (§4.1 P5).
+        """
+        root_component = getattr(cls, "root_component", None)
+        if root_component is None:
+            return None
+        tag = getattr(root_component, "__tag__", None)
+        if isinstance(tag, str) and "-" in tag:
+            return tag.lower()
+        # No declared hyphen tag → derive one deterministically so the root can
+        # still be mounted as a declarative child (both server and client derive
+        # it from the same class name, so hydration paths match).
+        return _hyphen_tag(root_component.__name__)
+
+    def mount_root_app(self):
+        """Declaratively mount this Page's root component into its ``<body>``
+        app slot as a real nested child (HYDRATION-WHOLEPAGE.md §4.1 S1/S3).
+
+        Replaces the inert ``<!-- basis:app-root -->`` slot marker with a live
+        ``<{root_tag}>`` element and mounts the root component into it via a
+        ``ChildBinding`` (the same light-DOM nested-component path every
+        template child uses), so the app is ONE owned node of the Page's tree,
+        ordered deterministically before the trailing user-stylesheet ``<link>``s
+        with no imperative relocation. ``@include_store``/``@include_model``
+        providers mount ahead of it exactly as ``mount_app`` mounted them.
+
+        The host tag is the root's declared hyphenated ``__tag__`` when it has
+        one; otherwise it is kebab-derived from the root class name, and the
+        host is given ``display: contents`` so a root that did not opt into the
+        declarative contract (e.g. a ``@app.page`` quickstart component whose
+        template is plain content) keeps its original layout — the host adds no
+        box. A root that DECLARES its tag styles its own host (the
+        ``ui-theme-provider { display: contents }`` pattern, e.g. jotter
+        ``AppContainer``).
+
+        Caller decides *when* (the engines: SSR mounts the app, CSR shells do
+        not) — this method never mounts into the live document by itself; it
+        acts on ``self.__element__`` (the server tree or the staged client
+        tree). Returns the mounted root instance, or ``None`` when the Page has
+        no root (static page).
+        """
+        root_component = self.__class__.root_component
+        if root_component is None:
+            return None
+        declared = getattr(root_component, "__tag__", None)
+        derived = not (isinstance(declared, str) and "-" in declared)
+        tag = self.__class__._declarative_root_tag()
+
+        from basis.shared.base_component import (
+            _container_last_child,
+            _find_anchor_comment,
+            _mount_root_providers,
+            _move_after,
+        )
+
+        html_root = self.__element__
+        body = None
+        for child in getattr(html_root, "children", ()):
+            if getattr(child, "nodeName", "").lower() == "body":
+                body = child
+                break
+        if body is None:
+            return None
+
+        # Providers first (appended), then the root host, then relocate the
+        # whole block to the app-root slot and drop the marker comment — the
+        # legacy mount_app ordering, minus the comment.
+        ref = _container_last_child(body)
+        anchor = _find_anchor_comment(body, "basis:app-root")
+        providers = _mount_root_providers(root_component, body)
+        host = self.__class__._create_element(tag)
+        if derived:
+            # A derived host must not add a box: the root did not declare a tag
+            # (so it has no `{tag} { display: contents }` stylesheet of its
+            # own). Deterministic on both server and client, so it never shifts
+            # a hydration path.
+            try:
+                host.setAttribute("style", "display: contents")
+            except Exception:
+                pass
+        body.appendChild(host)
+
+        from basis.shared.bindings import ChildBinding
+
+        binding = ChildBinding(
+            component_instance=self, node=host, childclass=root_component
+        )
+        self.add_binding(binding)
+        app = binding.childinstance
+        app._mounted_providers = providers
+
+        if anchor is not None and ref is not None:
+            _move_after(body, ref, anchor)
+            try:
+                getattr(anchor, "remove", lambda: None)()
+            except Exception:
+                pass
+        return app
 
     def head(self):
         """Override to add custom head content."""
@@ -174,13 +454,10 @@ class Page(Component):
         <meta name="basis-render-mode" content="{render_mode}" />
         <title>{title}</title>
 
-        <!-- PyScript offline bundle -->
+        <!-- PyScript bundle -->
         <link rel="stylesheet" href="{pyscript_src}/core.css" />
         <script type="module" src="{pyscript_src}/core.js" onload="window.pyscript = this.module;"></script>
         
-        <!-- Root-absolute (not ./basis/...): the script is resolved against the
-             document URL, so a relative path would break on nested routes
-             (e.g. /docs/{path} → /docs/basis/client/component.js → 404). -->
         <script src="/basis/client/component.js"></script>
 
         <!-- PyScript entry point: mounts/hydrates the application -->
@@ -190,16 +467,141 @@ class Page(Component):
         <script id="basis-initial-state" type="application/json">
             {initial_state_json}
         </script>
-        
+
+        <!-- P3/P4 in-tree chrome: component styles (keyed loop over
+             component_style_items), the framework viewport base CSS (computed
+             text-content) and the dev-mode meta (an if-binding over
+             Page.basis_dev_mode). These were once server-appended by
+             Page.render()/mount_app; they are now OWNED reactive nodes of the
+             Page template, so they sit inside the h: hydration surface and
+             nothing fights the tree afterwards. -->
+        <style text-content="{item['css']}" for="item" in="{component_style_items()}" key="uid" data-component-class="{item['name']}" data-extra-style="{item['extra']}"></style>
+        <style id="basis-viewport" text-content="{viewport_base_css}"></style>
+        <meta name="basis-mode" content="dev" if="{basis_dev_mode}" />
     </head>
-    <!-- The app mounts as a direct child of <body> (SSR pre-renders it here; a
-         CSR page ships this body empty and the client fills it), so SSR and CSR
-         produce the same page tree — only the basis-render-mode meta differs.
-         Declared stylesheets are appended at the END of <body> by Page.render()
-         so they load after the app's component <style> elements. -->
-    <body></body>
+    <!-- The app mounts as a direct child of body (SSR pre-renders it here; a
+         CSR page ships an empty body region and the client fills it), so SSR
+         and CSR produce the same page tree — only the basis-render-mode meta
+         differs. The root component mounts at the basis:app-root anchor (a
+         comment the mount treats as its insertion point), so template content
+         that FOLLOWS the anchor — the user stylesheet <link>s at the very END
+         of body — stays after the app and wins the cascade (the "your CSS
+         comes later" rule). The basis:user-stylesheets anchor is replaced by
+         Page.render() with the declared stylesheet links.
+         NOTE (§4.1 P4 finding, 2026-09-07): user links CANNOT yet be an in-tree
+         body <link> loop — an engine-mounted app and a declarative loop at the
+         same trailing slot race (browser-verified: the loop item lands before
+         the app → b:0:1 mismatch). The clean fix is the final architecture,
+         where the APP is a declarative template child; until then the links
+         stay server-assembled at this anchor. -->
+    <body>
+        <!-- basis:app-root -->
+        <!-- basis:user-stylesheets -->
+    </body>
 </html>
 """
+
+    @classmethod
+    def _initialize_blueprint(cls):
+        """Client/server Page blueprint build.
+
+        The server parses a Page template with its own HTML parser, which keeps
+        the ``<html>/<head>/<body>`` document elements — so the server uses the
+        generic path unchanged. A browser ``<template>.innerHTML`` parse, by
+        contrast, runs in *fragment* mode and DROPS the document-level wrappers,
+        flattening the head/body children into one list — which would destroy
+        the two-region structure whole-page hydration needs. On the client the
+        Page therefore parses its template with a structure-preserving document
+        parser (``DOMParser``) and keeps the resulting ``<html>`` as the
+        blueprint (see ``basis.client.component._build_html_document_blueprint``).
+        """
+        if not IS_CLIENT:
+            super()._initialize_blueprint()
+            return
+        from basis.client.component import _build_html_document_blueprint
+
+        setattr(cls, "__blueprint__", _build_html_document_blueprint(cls))
+
+    # ── Whole-page client mount (HYDRATION-WHOLEPAGE.md No.2 / Option A) ──────
+    # The client mounts the PAGE (not just the root component) so the Page's own
+    # <head> bindings are kept alive by real hydration instead of being
+    # server-frozen. CSR adopts the served shell (head h: + body b: chrome) and
+    # client-renders the app into <body>; SSR hydrates the whole served document
+    # in place (head h: + body b: incl. the pre-rendered app). These are
+    # client-only entry points (the server never calls them); on the server they
+    # are inert no-ops.
+
+    @classmethod
+    def mount_document_csr(cls, document=None):
+        """Client-only: mount the page for a CSR document.
+
+        CSR head half-hydration (§4.1 P2): the served static shell is kept
+        as-is (no FOUC / double head — the pyscript scripts are never
+        re-inserted), but the Page's OWN ``<head>`` bindings are staged and
+        re-pointed at the LIVE ``document.head`` (``h:`` region) — title,
+        viewport meta, render-mode meta, initial-state script, the
+        component-style loop and the dev-mode meta — so a title/meta a page
+        changes after load updates the real DOM in CSR mode too. (The
+        ``<body>`` chrome — the user stylesheet ``<link>``s — is NOT a Page
+        binding in CSR: it is server-assembled at the ``basis:user-stylesheets``
+        anchor and adopted as static body; only SSR re-points the whole
+        document.)
+
+        The app itself is client-RENDERED (not hydrated): every root mounts
+        declaratively (§4.1 S1/S3) — the staged Page's ``__element__`` already
+        re-points at the live ``<html>`` (set by ``_hydrate_page_head`` →
+        ``initialize_ssr`` → ``set_selfbinding``), so ``mount_root_app()``
+        mounts it into the LIVE ``document.body`` under its host tag (declared
+        or derived) — the SAME body shape SSR pre-renders (§2.1 equivalence).
+        Returns the mounted root component (or ``None`` for a static page).
+
+        ``document`` is the caller's PyScript ``document`` (this module is
+        server-importable, so it cannot import ``pyscript`` at module scope);
+        it is required on the client.
+        """
+        if not IS_CLIENT:
+            return None
+
+        from pyscript import document
+        from basis.client.component import _emit_hydration_report, _hydrate_page_head
+        from basis.shared.hydration import HydrationReport
+
+        report = HydrationReport(mode="canonical")
+        staged_page = _hydrate_page_head(cls, report=report, stamp_live=True)
+
+        root_component = getattr(cls, "root_component", None)
+        if root_component is not None:
+            # Component styles are rendered in-tree in the served <head> (the
+            # Page template's component_style_items loop, server-side) — so the
+            # body mount never re-injects them. Every root mounts declaratively
+            # under its host tag into the LIVE body (staged_page.__element__ ==
+            # the live <html> after the head pass).
+            mounted = staged_page.mount_root_app()
+            _emit_hydration_report(report)
+            return mounted
+        # Static page — surface the (head) report and keep the staged Page (its
+        # bindings point at the live head) from being collected.
+        _emit_hydration_report(report)
+        return staged_page
+
+    @classmethod
+    def mount_document_ssr(cls, document=None):
+        """Client-only: hydrate the WHOLE served SSR document in place.
+
+        The Page's OWN bindings (head ``h:`` region: title / viewport meta /
+        render-mode meta / initial-state script / component-style loop; body
+        ``b:`` region: the user-stylesheet ``<link>`` loop) plus the mounted app
+        subtree hydrate against one live map — see
+        ``basis.client.component._hydrate_page_document_ssr``. Nothing is ever
+        inserted into the document — the live SSR tree is adopted in place. The
+        single report is surfaced once (mismatches carry their region in the id
+        prefix).
+        """
+        if not IS_CLIENT:
+            return None
+        from basis.client.component import _hydrate_page_document_ssr
+
+        return _hydrate_page_document_ssr(cls)
 
     def render(self, request, initial_state_json=None):
         """Assemble the full HTML document (shell + initial state + head/body).
@@ -277,57 +679,39 @@ class Page(Component):
 
         self.initial_state_json = initial_state_json
 
-        # 2. Locate <head> once; append client-configuration nodes. The client
-        # pre-mount plan (stores/headless/entrypoint/page stores) no longer lives
-        # in the DOM — it is served per-page via /pyscript.json?url=<route> under
-        # ``basis.bootstrap`` and read from ``pyscript.config`` (see
-        # basis/server/bootstrap.py::page_bootstrap + client/entrypoint.py).
-        head_node = None
-        for node in self.__element__.descendants:
-            if hasattr(node, "tagName") and node.tagName.lower() == "head":
-                head_node = node
-                break
+        # 2. Assembly-time chrome — §4.1 P3/P4 in-tree: the viewport <style>
+        #    (computed text-content), the component-style loop and the dev-mode
+        #    meta (an if-binding over basis_dev_mode, set from the request at
+        #    mount) are OWNED reactive nodes of the Page template. Only the user
+        #    stylesheet <link>s are still assembled by replacing a trailing body
+        #    comment anchor here (category 1) — the clean in-tree <link> loop
+        #    must wait for the final architecture where the app is a declarative
+        #    template child (see the stylesheets docstring). The client
+        #    pre-mount plan (stores/headless/entrypoint/page stores) no longer
+        #    lives in the DOM — it is served per-page via
+        #    /pyscript.json?url=<route> under ``basis.bootstrap`` and read from
+        #    ``pyscript.config`` (see basis/server/bootstrap.py::page_bootstrap
+        #    + client/entrypoint.py).
+        _replace_comment_anchors(
+            self.__element__,
+            "basis:user-stylesheets",
+            [
+                Element("link", {"rel": "stylesheet", "href": href}, [])
+                for href in (getattr(self.__class__, "stylesheets", ()) or ())
+            ],
+        )
 
-        if head_node:
-            from basis.shared.element import Element
+        # Whole-page hydration (HYDRATION-WHOLEPAGE.md §4.1 P4): when the SSR
+        # engine asks, stamp the Page's OWN hydration surface on the fully
+        # assembled tree — the <head> region (h:) AND the <body> region (b:,
+        # rooted at <body> and covering the mounted app subtree) — so the served
+        # document carries the whole head+body surface the client keeps alive.
+        # CSR leaves this off (its shell is served static; the client half-
+        # hydrates and client-renders instead).
+        if getattr(self, "_stamp_page_hydration", False):
+            from basis.shared.hydration import apply_hydration_to_page
 
-            # 2b. M1.1 — framework mobile viewport base CSS. Document-level
-            # rules (component styles live in shadow roots and can't reach
-            # html/body). Injected here so it appears in BOTH SSR and CSR pages
-            # (both engines end in Page.render) and stays out of the
-            # binding-analyzed template (see _VIEWPORT_BASE_CSS above).
-            head_node.appendChild(
-                Element(
-                    "style",
-                    {"id": "basis-viewport"},
-                    [ElementString(_VIEWPORT_BASE_CSS)],
-                )
-            )
-
-            # 2c. Dev-mode marker read by client tooling (e.g. the error
-            # overlay).  Mirrors the HMR dev affordance: `basis dev --hmr`
-            # sets BASIS_HMR=1 on the server.
-            if getattr(request.app, "_start_hmr_watcher", False):
-                head_node.appendChild(
-                    Element("meta", {"name": "basis-mode", "content": "dev"}, [])
-                )
-
-        # 3. Declared stylesheets go at the END of <body> (after the SSR root),
-        # so they load after the framework's component <style> elements and win
-        # at equal specificity. Served for both SSR and CSR (this shell is
-        # emitted in either mode).
-        stylesheets = getattr(self.__class__, "stylesheets", ()) or ()
-        if stylesheets:
-            body_node = None
-            for node in self.__element__.descendants:
-                if hasattr(node, "tagName") and node.tagName.lower() == "body":
-                    body_node = node
-                    break
-            if body_node is not None:
-                for href in stylesheets:
-                    body_node.appendChild(
-                        Element("link", {"rel": "stylesheet", "href": href}, [])
-                    )
+            apply_hydration_to_page(self)
 
         return self.doctype.__html__() + "\n" + self.__element__.outerHTML
 
@@ -344,10 +728,15 @@ def _synthesize_page(
     """Build a synthesized Page subclass that carries ``component_cls`` as its root.
 
     Used by ``@app.page`` to turn a root
-    Component into a page without the developer writing a ``Page`` subclass. The
-    synthesized class is server-side shell config only; it is marked
-    ``__synthesized__`` so the per-page manifest never emits it as the client
-    ``entrypoint`` (the client boots from the component file instead).
+    Component into a page without the developer writing a ``Page`` subclass.
+    The synthesized class carries ``__synthesized__`` (informational only —
+    §4.1 P5 removed every behavioral fork on it): it is treated EXACTLY like a
+    real ``Page`` subclass — in-tree ``<head>`` component styles, a declarative
+    root child under its (declared or derived) host tag, whole-document ``h:``/
+    ``b:`` stamping — on both the server and the client. The per-page manifest
+    does not emit it as the client ``entrypoint`` (the client boots from the
+    component file itself, reconstructing the same shell in the ``Basis.page``
+    shim and mounting it through ``mount_document_*``).
 
     Because of that client boot path, page-level ``stores`` cannot reach the
     browser here — a shell that declares its own ``root_component`` or ``stores``

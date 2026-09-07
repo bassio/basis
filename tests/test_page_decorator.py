@@ -142,7 +142,8 @@ def test_include_page_declarative_root_from_page_cls():
     resp = client.get("/dec")
     assert resp.status_code == 200
     assert "Declarative root" in resp.text
-    assert "<title>Declarative</title>" in resp.text
+    # Whole-page hydration stamps the head: <title> now carries h: marker attrs.
+    assert "Declarative</title>" in resp.text
 
 
 def test_include_page_decorator_form():
@@ -167,7 +168,7 @@ def test_include_page_decorator_form():
     resp = client.get("/decorator")
     assert resp.status_code == 200
     assert "Decorator root" in resp.text
-    assert "<title>Decorator</title>" in resp.text
+    assert "Decorator</title>" in resp.text
 
 
 def test_page_defaults_are_abstract_shell():
@@ -229,8 +230,9 @@ def test_ssr_page_emits_render_mode_marker():
     assert resp.status_code == 200
     # The render-mode meta is a reactive template binding on the Page shell;
     # render_page stamps it "ssr" so the unified client entrypoint picks
-    # the SSR hydration mount. (Void elements self-close.)
-    assert '<meta name="basis-render-mode" content="ssr" />' in resp.text
+    # the SSR hydration mount. Whole-page hydration also stamps the meta with
+    # an h: hydration id (appended after content; void elements self-close).
+    assert 'name="basis-render-mode" content="ssr"' in resp.text
 
 
 def test_csr_page_renders_render_mode_csr():
@@ -409,7 +411,7 @@ def test_serve_decorates_page_and_serves_at_path():
     resp = client.get("/about")
     assert resp.status_code == 200
     assert "Served root" in resp.text
-    assert "<title>About</title>" in resp.text
+    assert "About</title>" in resp.text
 
 
 def test_serve_imperative_form():
@@ -514,7 +516,7 @@ def test_serve_render_mode_kwarg_overrides_class_override():
     a = client.get("/a")
     b = client.get("/b")
     assert '<meta name="basis-render-mode" content="csr" />' in a.text
-    assert '<meta name="basis-render-mode" content="ssr" />' in b.text
+    assert 'name="basis-render-mode" content="ssr"' in b.text
 
 
 def test_serve_same_page_two_urls_different_render_modes():
@@ -536,7 +538,7 @@ def test_serve_same_page_two_urls_different_render_modes():
     client = TestClient(app)
     full = client.get("/full")
     lite = client.get("/lite")
-    assert '<meta name="basis-render-mode" content="ssr" />' in full.text
+    assert 'name="basis-render-mode" content="ssr"' in full.text
     assert "dual root" in full.text
     assert '<meta name="basis-render-mode" content="csr" />' in lite.text
     assert "dual root" not in lite.text
@@ -572,7 +574,7 @@ def test_page_response_from_page_ssr_and_csr():
     ssr = client.get("/ssr-resp")
     csr = client.get("/csr-resp")
     assert ssr.status_code == 200
-    assert '<meta name="basis-render-mode" content="ssr" />' in ssr.text
+    assert 'name="basis-render-mode" content="ssr"' in ssr.text
     assert "resp root" in ssr.text
     assert csr.status_code == 200
     assert '<meta name="basis-render-mode" content="csr" />' in csr.text

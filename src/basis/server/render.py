@@ -29,7 +29,6 @@ from fastapi import Request
 
 from basis.shared.store import Store
 from basis.shared.base_component import BaseComponent
-from basis.shared.hydration import apply_hydration_to_component
 from basis.shared.errors import ErrorCollector, get_error_sink, set_error_sink
 from basis.shared.serialization import json_dumps_script_safe
 
@@ -130,15 +129,6 @@ def _serialize_initial_state(all_stores: dict[str, Store], errors=None) -> str:
     # Script-safe JSON: the page template escapes interpolated text, and
     # <script> content is not entity-decoded, so `<`/`>`/`&` must be \uXXXX.
     return json_dumps_script_safe(initial_state, indent=2)
-
-
-def _apply_hydration_logic(app, root_component_plus_child_components):
-    """Apply hydration IDs and component IDs to the DOM tree.
-
-    Delegates to the shared set-based algorithm in ``shared/hydration.py``,
-    which also stamps ``data-basis-text`` text ordinals.
-    """
-    apply_hydration_to_component(app, root_component_plus_child_components)
 
 
 def _resolve_render_mode(page_cls, render_mode: str | None) -> str:
@@ -264,17 +254,9 @@ async def _render_page_ssr(
                 except Exception:
                     pass
 
-        # 3. Locate the mount region in the page shell: the app mounts as a
-        #    DIRECT child of <body> (no #basis-ssr-root wrapper) so SSR and CSR
-        #    render the same tree — only the basis-render-mode meta differs
-        #    (HYDRATION-WHOLEPAGE.md No.1).
-        body_root = None
-        for node in page_instance.__element__.descendants:
-            if hasattr(node, 'tagName') and node.tagName.lower() == 'body':
-                body_root = node
-                break
-        if body_root is None:
-            body_root = page_instance.__element__.children[1]
+        # 3. The root app mounts inside the Page's own <body> region via
+        #    Page.mount_root_app() (§4.1 S1/S3) — no engine-side mount-region
+        #    lookup is needed; the Page locates its <body> itself.
 
         # 4. Optional DB session for the request (DBAppMixin apps)
         session_token = None
@@ -303,10 +285,22 @@ async def _render_page_ssr(
         _prev_sink = get_error_sink()
         set_error_sink(error_collector)
         try:
-            # 5. Mount the root component (if any — static pages have none)
+            # 5. Mount the root component (if any — static pages have none).
+            #    §4.1 S1/S3 declarative root mount: the Page owns its root as a
+            #    nested ChildBinding under a hyphenated host tag in its <body>
+            #    app slot ("the root is just another component"). Every page
+            #    root gets a host tag — the root's declared hyphenated __tag__
+            #    or one kebab-derived from its class name — so ALL boot paths
+            #    (real Page subclasses AND synthesized @app.page shells) unify
+            #    here. Component styles live in-tree in the <head> (every Page
+            #    renders the component_style_items loop), so nothing is
+            #    re-injected; the legacy imperative mount_app body path is gone
+            #    (§4.1 P5).
             mounted_apps = []
             if root_component is not None:
-                mounted_apps.append(root_component.mount_app(body_root, replace=False))
+                app = page_instance.mount_root_app()
+                if app is not None:
+                    mounted_apps.append(app)
 
             # 6. Collect every component for the server_load preload phase
             all_components = []
@@ -332,12 +326,15 @@ async def _render_page_ssr(
                     if store_name not in all_stores:
                         all_stores[store_name] = store_instance
 
-            # 8. Apply Hydration — re-collect after server_load so loop-generated nodes are included
-            for app in mounted_apps:
-                child_bindings = list(app.get_child_bindings(recursive=True))
-                child_components = [cb.childinstance for cb in child_bindings]
-                fresh_all_components = [app] + child_components
-                _apply_hydration_logic(app, fresh_all_components)
+            # 8. Hydration markers are stamped by Page.render →
+            #    apply_hydration_to_page (§4.1 P4): head region h: + body
+            #    region b: rooted at <body>, covering the declaratively-mounted
+            #    app subtree. Carry the mounted app on the page instance for
+            #    that stamp. (The separate app-rooted r: walk served only
+            #    synthesized @app.page shells; P5 removed it — every shell is a
+            #    whole-document page now.)
+            if mounted_apps:
+                page_instance._hydrate_body_app = mounted_apps[0]
 
             # 9. Final render: serialize all stores into the initial state
             for store_name, store_instance in Store._registry.items():
@@ -355,6 +352,13 @@ async def _render_page_ssr(
                 except StopIteration:
                     pass
 
+        # Whole-page hydration (HYDRATION-WHOLEPAGE.md No.2 / Option A): tell
+        # Page.render to stamp the Page's OWN <head> bindings (h: region) right
+        # before serialization — after render() has appended the trailing head
+        # nodes — so the served SSR document carries the whole head+body
+        # hydration surface for the client to keep alive. CSR leaves this off
+        # (its head is served static).
+        page_instance._stamp_page_hydration = True
         return page_instance.render(request=request, initial_state_json=initial_state_json)
     finally:
         _set_render_pipeline(False)

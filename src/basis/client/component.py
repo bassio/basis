@@ -54,6 +54,33 @@ def _shadow_contains(shadow_root, element):
         return False
 
 
+def _connected_to_tree_root(node):
+    """True if ``node``'s ancestor chain reaches the mounted (staged) tree's
+    document/fragment root — i.e. it is genuinely part of the tree, not stranded
+    inside a removed (if-hidden) branch.
+
+    An if-hide removes only the TOP of the hidden subtree, so descendants keep
+    their intra-subtree ``parentNode`` links even though the whole branch is
+    detached — a one-level ``parentNode`` check would wrongly call that
+    connected.  Walk the full ancestor chain: the node is connected iff it
+    reaches a document/fragment root (the mounted tree's top); if it dead-ends
+    on a stranded element, the branch was removed (an if-hidden subtree that
+    also never got stamped).  Pyodide hands back JsNull proxies (not None) for
+    absent parents — rely on ``nodeType`` membership, not ``is not None``."""
+    try:
+        n = node
+        while n is not None:
+            parent = getattr(n, "parentNode", None)
+            if not parent:
+                # Top of the chain: connected iff it is a document (9) or
+                # document-fragment (11) root — not a stranded element (1).
+                return getattr(n, "nodeType", None) in (9, 11)
+            n = parent
+        return False
+    except Exception:
+        return False
+
+
 def _emit_hydration_report(report):
     """Surface a hydration report: global for tooling, a DOM event, and a loud
     dev warning when anything failed to match."""
@@ -92,15 +119,385 @@ def _emit_hydration_report(report):
         pass
 
 
+def _build_html_document_blueprint(cls):
+    """Build the client Page blueprint: a ``<template>`` whose content is a
+    single ``<html>`` element containing ``<head>`` + ``<body>``.
+
+    A browser ``<template>.innerHTML`` parse runs in *fragment* mode and DROPS
+    the document-level ``<html>/<head>/<body>`` wrappers (flattening the head
+    and body children into one list), so a Page's whole-document template
+    cannot be staged through the generic blueprint path. Parse the whole
+    document with a structure-preserving parser instead: ``DOMParser`` keeps
+    ``<html>/<head>/<body>`` intact and parses each region's inner content the
+    same way the server's parser did (whitespace, comments and raw-text
+    entities preserved), which is what keeps the two-region (``h:`` head /
+    ``r:`` body-app) canonical paths stable across server and client.
+
+    An ``XMLSerializer`` round-trip is deliberately NOT used to rebuild the
+    document: serializing the parsed content would add ``xmlns=`` noise on
+    every element and double-encode entities inside raw-text (``<script>`` /
+    ``<style>``) bodies — corrupting e.g. the ``initial_state_json`` script.
+    """
+    template = document.createElement("template")
+    parser = window.DOMParser.new()
+    parsed = parser.parseFromString(cls.__templatestr__, "text/html")
+    html_el = parsed.documentElement
+    if html_el is not None:
+        # Move the parsed <html> into the template content (blueprint
+        # convention: __blueprint__ is a <template> whose
+        # .content.firstElementChild is the component root).
+        template.content.appendChild(html_el)
+    return template
+
+
+def _head_region(html_el):
+    """The ``<head>`` element of a client-side ``<html>`` node (first HEAD
+    element child), or None."""
+    for child in getattr(html_el, "children", ()):
+        if getattr(child, "nodeName", "").lower() == "head":
+            return child
+    return None
+
+
+def _body_region(html_el):
+    """The ``<body>`` element of a client-side ``<html>`` node (first BODY
+    element child), or None."""
+    for child in getattr(html_el, "children", ()):
+        if getattr(child, "nodeName", "").lower() == "body":
+            return child
+    return None
+
+
+def _stamp_region_ids(root, prefix):
+    """Stamp ``data-hydration-id`` on EVERY countable element under ``root``
+    with a region prefix (e.g. ``h:`` over a staged ``<head>``).
+
+    This is a FULL stamp (all elements), NOT a binding-membership stamp:
+    Pyodide hands back a distinct JsProxy wrapper per DOM access, so
+    ``id()``-based membership sets can never match the walk's wrappers against
+    a binding's stored node references. Full-stamp + canonical-path matching
+    (client template node at path P hydrates the SSR node at path P) is exactly
+    how the body region works.
+    """
+    for node, path in iter_tree_paths(root, prefix=prefix):
+        if is_element(node):
+            node.setAttribute(HYDRATION_ID_ATTR, path)
+
+
+def _stamp_live_region_text_ordinals(staged_page, live_map):
+    """Stamp ``data-hydration-text`` on the LIVE parents of the Page's text
+    bindings (CSR whole-shell adoption).
+
+    The served CSR document is STATIC — the server never stamps it — but the
+    ``TextBinding`` re-pointer locates a bound text node by reading the *live*
+    parent's ``data-hydration-text`` ordinals. The staged page is a faithful
+    client-built clone of the same template with BOTH regions stamped (``h:``
+    head + ``b:`` body), so for each Page ``TextBinding`` we take its staged
+    parent's canonical path, resolve the matching live parent in ``live_map``,
+    and stamp the text's normalized ordinal there — reproducing, client-side,
+    the ordinal the SSR server stamps for whichever region the binding lives in.
+    """
+    for b in getattr(staged_page, "__bindings__", ()):
+        if type(b).__name__ != "TextBinding":
+            continue
+        try:
+            node = b.node
+            staged_parent = getattr(node, "parentNode", None)
+            if staged_parent is None:
+                continue
+            path = staged_parent.getAttribute(HYDRATION_ID_ATTR)
+            live_parent = live_map.get(path) if path else None
+            if live_parent is None:
+                continue
+            ordinal = text_ordinal(staged_parent, node)
+            if ordinal is None:
+                continue
+            ords = set()
+            if live_parent.hasAttribute(TEXT_ORDINALS_ATTR):
+                existing = live_parent.getAttribute(TEXT_ORDINALS_ATTR)
+                if getattr(existing, "split", None) is not None:
+                    for part in str(existing).split(","):
+                        part = part.strip()
+                        if part:
+                            try:
+                                ords.add(int(part))
+                            except ValueError:
+                                pass
+            ords.add(ordinal)
+            live_parent.setAttribute(
+                TEXT_ORDINALS_ATTR, ",".join(str(o) for o in sorted(ords))
+            )
+        except Exception:
+            continue
+
+
+def _hydrate_page_head(page_cls, report=None, *, stamp_live=True):
+    """Stage the Page's ``<head>`` region and re-point its head bindings at the
+    LIVE ``document.head`` (HYDRATION-WHOLEPAGE.md §4.1 P2 shared head pass).
+
+    Used by the CSR boot (``Page.mount_document_csr``): the served CSR head is
+    STATIC (the server never stamps it), so:
+
+    1. Mount the Page detached in a ``DocumentFragment`` (a browser
+       ``<template>.innerHTML`` parse drops the ``<html>/<head>/<body>``
+       wrappers, so the client blueprint keeps them via DOMParser) and FULL-stamp
+       its staged ``<head>`` with the ``h:`` region prefix.
+    2. Stamp the LIVE ``<head>`` the way SSR would have — every element's
+       canonical ``h:`` path (``_stamp_region_ids``) plus ``data-hydration-text`` on
+       the parents of the Page's head text bindings
+       (``_stamp_live_region_text_ordinals``).
+    3. Re-point the staged Page's head bindings at the live ``document.head``
+       via the canonical ``h:`` map. Re-point never writes → no FOUC / no
+       double head; values the server resolved (expanded pyscript URLs, the
+       serialized initial-state script) survive untouched, but the title/meta
+       bindings become live.
+
+    Returns the staged Page instance (its head bindings re-pointed at the live
+    ``<head>``), or ``None`` if mounting failed.
+    """
+    from basis.shared.hydration import HydrationReport, build_hydration_map
+
+    report = report if report is not None else HydrationReport(mode="canonical")
+    staged_page = None
+    try:
+        fragment = document.createDocumentFragment()
+        staged_page = page_cls.mount(fragment, replace=False)
+        staged_head = _head_region(staged_page.__element__)
+        if staged_head is not None:
+            _stamp_region_ids(staged_head, "h")
+        if stamp_live:
+            _stamp_region_ids(document.head, "h")
+        head_map = build_hydration_map(document.head, prefix="h")
+        if stamp_live:
+            _stamp_live_region_text_ordinals(staged_page, head_map)
+        staged_page.initialize_ssr(
+            document.documentElement, report=report, ssr_map=head_map
+        )
+        # Pin the staged Page instance to the LIVE <html> root so it (and its
+        # re-pointed head bindings) is not collected: Pyodide keeps a Python
+        # object alive while a JsProxy reference to it exists. This mirrors how
+        # the body pipeline pins component instances (``__basis_instance__`` on
+        # their live nodes via ChildBinding); without it the Page — whose
+        # selfbinding node is the live <html> — would be GC'd after the staged
+        # reference drops and its head bindings would go dead. Dev tooling can
+        # also reach the live page here (``document.documentElement.__basis_instance__``).
+        try:
+            setattr(document.documentElement, "__basis_instance__", staged_page)
+        except Exception:
+            pass
+    except Exception as exc:
+        report.add_unhydrated_component(
+            page_cls.__name__,
+            client_id="head",
+            reason=f"page head hydration raised: {exc}",
+        )
+    return staged_page
+
+
+def _hydrate_page_document_ssr(page_cls):
+    """Whole-page SSR hydration driver (HYDRATION-WHOLEPAGE.md §4.1 P4/P5).
+
+    ONE staged owned document: mount the whole ``Page`` (``<html>`` with
+    ``<head>`` and ``<body>``) detached, mount the root component as a nested
+    child of the staged ``<body>`` (``Page.mount_root_app`` — a declarative
+    ``ChildBinding`` under its host tag, exactly as the server served it),
+    FULL-stamp the staged ``<head>`` (``h:``) and ``<body>`` (``b:``) regions,
+    then adopt every owner — the ``Page`` itself (its head AND body bindings)
+    plus each app component — against ONE live map built from ``document.head``
+    (``h:``) and ``document.body`` (``b:``). Nothing is ever inserted into the
+    live document: the SSR tree is adopted in place, and the single report is
+    surfaced once at the end.
+
+    Every page boot path (real ``Page`` subclasses AND synthesized ``@app.page``
+    shells) hydrates through here — the separate app-rooted ``r:`` body
+    pipeline is gone (§4.1 P5, migrate-always: ``r:`` → ``b:``).
+    """
+    from basis.shared.hydration import HydrationReport, build_hydration_map
+    from basis.shared.component import _set_ssr_hydration
+
+    report = HydrationReport(mode="canonical")
+    staged_page = None
+    try:
+        # Stage the whole Page (a browser <template>.innerHTML parse drops the
+        # <html>/<head>/<body> wrappers, so the client blueprint keeps them via
+        # DOMParser — _build_html_document_blueprint).
+        fragment = document.createDocumentFragment()
+        staged_page = page_cls.mount(fragment, replace=False)
+        staged_html = staged_page.__element__
+        staged_head = _head_region(staged_html)
+        staged_body = _body_region(staged_html)
+
+        # SSR-hydration phase: dynamic mounters (e.g. <ui-region>) defer their
+        # real work until on_hydrated() (fired by initialize_ssr) re-points them
+        # at the live SSR tree.
+        _set_ssr_hydration(True)
+        try:
+            root_component = getattr(page_cls, "root_component", None)
+            mounted_app = None
+            instances = []
+            if root_component is not None and staged_body is not None:
+                # Mount the app as a NESTED child of the staged <body> so the
+                # whole document is ONE owned tree — head h: + body b: incl.
+                # the app subtree. Component styles live in-tree in the served
+                # <head>, so nothing is re-injected.
+                #
+                # §4.1 S1/S3 declarative root mount: the Page owns its root as
+                # a nested ChildBinding under a hyphenated host tag (declared or
+                # kebab-derived) — every page root mounts this way, the exact
+                # shape the server serves. The legacy imperative staged
+                # mount_app path is gone (§4.1 P5).
+                mounted_app = staged_page.mount_root_app()
+                instances = [mounted_app]
+                instances.extend(
+                    cb.childinstance
+                    for cb in mounted_app.get_child_bindings(recursive=True)
+                )
+
+            # Full-stamp the staged regions with the canonical algorithm the
+            # server used for the live document (one address scheme).
+            if staged_head is not None:
+                _stamp_region_ids(staged_head, "h")
+            if staged_body is not None:
+                _stamp_region_ids(staged_body, "b")
+
+            # ONE live document map: head h: + body b: (server-stamped).
+            live_map = {}
+            live_map.update(build_hydration_map(document.head, prefix="h"))
+            live_map.update(build_hydration_map(document.body, prefix="b"))
+
+            # Adopt the Page's own bindings (head h: + body b:) at the live
+            # <html>, then every app component against the same map.
+            staged_page.initialize_ssr(
+                document.documentElement, report=report, ssr_map=live_map
+            )
+            if instances:
+                _adopt_instances(
+                    instances,
+                    live_map,
+                    document.body,
+                    staged_body if staged_body is not None else fragment,
+                    report,
+                )
+                # Pin the app root to its live node (mirrors ChildBinding):
+                # keep the instance (and its re-pointed bindings) alive across
+                # Pyodide GC, and let dev tooling reach it.
+                try:
+                    live_root = live_map.get(mounted_app.hydration_id)
+                    if live_root is not None:
+                        setattr(live_root, "__basis_instance__", mounted_app)
+                except Exception:
+                    pass
+        finally:
+            _set_ssr_hydration(False)
+
+        # Pin the staged Page (its selfbinding node is the live <html>) so it
+        # and its re-pointed bindings are not collected; dev tooling can reach
+        # the live page at document.documentElement.__basis_instance__.
+        try:
+            setattr(document.documentElement, "__basis_instance__", staged_page)
+        except Exception:
+            pass
+    except Exception as exc:
+        report.add_unhydrated_component(
+            page_cls.__name__,
+            client_id="page",
+            reason=f"whole-page hydration raised: {exc}",
+        )
+    _emit_hydration_report(report)
+    return staged_page
+
+
+def _adopt_instances(instances, live_map, ssr_root, staging_root, report):
+    """Adopt staged component instances onto their live SSR nodes.
+
+    Repoints every instance's bindings at its live SSR node via the canonical
+    ``live_map``, inside a flush batch (no effect drains mid-re-point onto a
+    partially-adopted tree — HYDRATION-REPOINT-RACE-FIX-PLAN.md §5 I7). The
+    pre-hydration snapshot lets a fallback re-render rebind the moved staged
+    tree (otherwise events/reactivity dangle at detached nodes).
+
+    ``staging_root`` is the detached container that holds the mounted app (a
+    bare shadow root for the standalone ``r:`` pipeline, or the staged Page
+    ``<body>`` for whole-document ``b:`` hydration); ``ssr_root`` is the live
+    container the app lives in (the fallback's target).
+    """
+    fallback_needed = False
+    fallback_snapshot = []
+    for child_instance in instances:
+        try:
+            shadow_element = child_instance.__element__
+            bindings = []
+            for b in child_instance.__bindings__:
+                bindings.append(
+                    (
+                        b,
+                        getattr(b, "node", None),
+                        getattr(b, "anchor", None),
+                        getattr(b, "parent", None),
+                    )
+                )
+            fallback_snapshot.append((child_instance, shadow_element, bindings))
+        except Exception:
+            fallback_snapshot.append((child_instance, None, []))
+
+    from basis.shared.reactive import batch
+
+    with batch() as hyd_batch:
+        for child_instance in instances:
+            hid = child_instance.hydration_id
+            if hid and hid in live_map:
+                corresponding_ssr_root_node = live_map[hid]
+                try:
+                    child_instance.initialize_ssr(
+                        corresponding_ssr_root_node,
+                        report=report,
+                        ssr_map=live_map,
+                    )
+                except Exception as exc:
+                    # One broken component must not abort the whole report.
+                    report.add_unhydrated_component(
+                        child_instance.__class__.__name__,
+                        client_id=hid,
+                        reason=f"initialize_ssr raised: {exc}",
+                    )
+            else:
+                # Component root not present in the live tree. Normal when it is
+                # hidden by an if-binding on the server (its staged node is then
+                # detached); otherwise it is a genuine mismatch.
+                if hid is not None:
+                    hidden = not _shadow_contains(
+                        staging_root, child_instance.__element__
+                    )
+                    report.add_unhydrated_component(
+                        child_instance.__class__.__name__,
+                        client_id=hid,
+                        reason=(
+                            "hidden by if-binding"
+                            if hidden
+                            else "component not present in SSR tree"
+                        ),
+                    )
+                    if not hidden:
+                        fallback_needed = True
+        if fallback_needed:
+            # Re-point-phase work must not reach the live SSR nodes — the staged
+            # tree is about to replace them.
+            hyd_batch.discard()
+
+    if fallback_needed and hydration_fallback_enabled():
+        _fallback_rerender(ssr_root, staging_root, report, snapshot=fallback_snapshot)
+    return fallback_needed
+
+
 def _fallback_rerender(ssr_root, shadow, report, snapshot=None):
     """Whole-app client re-render fallback: replace the SSR content with the
     already-mounted client app, so the page stays reactive even when hydration
     could not match.
 
-    EVERY child of the detached shadow root is moved into the live SSR root —
-    not just the app element — because ``mount_app`` *prepends* scoped
-    ``<style>`` elements into the shadow root, and losing them would render the
-    moved app unstyled.
+    EVERY child of the detached staging tree is moved into the live SSR root —
+    not just the app element — so the whole staged subtree (component styles
+    render in-tree in the Page head, so a whole-document fallback keeps the
+    staged app and its owned nodes together).
 
     ``snapshot`` (optional) holds, for every component instance, its
     pre-hydration shadow element and the shadow node each binding pointed at.
@@ -133,7 +530,7 @@ def _fallback_rerender(ssr_root, shadow, report, snapshot=None):
             return (
                 node.hasAttribute("data-hydration-id")
                 or node.hasAttribute("data-component-hydration-id")
-                or node.hasAttribute("data-basis-text")
+                or node.hasAttribute("data-hydration-text")
             )
 
         owned, non_owned = [], []
@@ -340,8 +737,9 @@ class Component(BaseComponent):
         """
         self.set_selfbinding(ssr_root)
 
-        # SSR path -> node lookup, built once.  mount_app_ssr passes a whole-tree
-        # map; fall back to the component's own subtree otherwise.
+        # SSR path -> node lookup, built once.  Whole-document hydration passes
+        # a whole-document map (head h: + body b:); fall back to the
+        # component's own subtree otherwise.
         if ssr_map is None:
             ssr_map = build_hydration_map(ssr_root)
 
@@ -417,7 +815,7 @@ class Component(BaseComponent):
             ssr_ordinals = None
             if matched_parent:
                 # The SSR parent carries a deterministic text-ordinal marker
-                # (data-basis-text) computed over *normalized* children, so
+                # (data-hydration-text) computed over *normalized* children, so
                 # whitespace/comment nodes can never shift it.
                 ssr_ordinals = matched_parent.getAttribute(TEXT_ORDINALS_ATTR)
                 # In Pyodide, getAttribute returns a JsNull proxy (not Python
@@ -428,7 +826,7 @@ class Component(BaseComponent):
                     if own is not None:
                         # Count children the same way the server stamped the
                         # ordinals: elements + non-ws text + reactive text nodes
-                        # (even if currently empty, per data-basis-text).
+                        # (even if currently empty, per data-hydration-text).
                         binding_ordinals = {
                             int(x) for x in ssr_ordinals.split(",") if x.strip()
                         }
@@ -468,7 +866,31 @@ class Component(BaseComponent):
                 parent_path = None
             ssr_parent = ssr_map.get(parent_path) if parent_path else None
             if ssr_parent is None:
-                if report is not None and binding.instances:
+                # A loop's parent missing from the SSR tree is either a DORMANT
+                # loop (its branch was if-hidden on the client BEFORE the staged
+                # region was full-stamped, so the server omitted that branch too)
+                # or a genuine mismatch.  Distinguish them by where the parent is
+                # on the CLIENT's OWN tree:
+                #   * carries a hydration path  -> visible on the client yet
+                #     absent from the SSR tree  -> genuine mismatch (report).
+                #   * connected to the staged tree root but NO path -> present
+                #     yet unstamped.  The client full-stamps every staged
+                #     element (``_stamp_region_ids``), so this only happens if
+                #     stamping regressed or the node was added after the stamp —
+                #     surface it rather than swallow it as "hidden".
+                #   * detached from the staged tree root (no path) -> the client
+                #     removed the branch (an if-hide); dormant until its branch
+                #     reveals -> not a mismatch (skip — mirrors IfBinding /
+                #     TextBinding skipping unstamped hidden targets).  Note
+                #     "detached" must mean NOT connected to the tree root: an
+                #     if-hide removes only the top of the subtree, so the loop's
+                #     container can still have a ``parentNode`` inside the
+                #     removed branch.
+                if (
+                    report is not None
+                    and binding.instances
+                    and (parent_path or _connected_to_tree_root(binding.parent))
+                ):
                     report.add_unmatched_binding(
                         name, "LoopBinding",
                         client_id=parent_path or "?",
@@ -529,135 +951,3 @@ class Component(BaseComponent):
             return hid if hid else None
         except Exception:
             return None
-
-    @classmethod
-    def mount_app_ssr(cls, ssr_root=None, replace=False):
-        # Flag the SSR-hydration mount phase so dynamic mounters (e.g.
-        # <ui-region>) defer their real work until ``initialize_ssr`` re-points
-        # them at the live SSR tree (see shared/component.in_ssr_hydration).
-        from basis.shared.component import _set_ssr_hydration
-        _set_ssr_hydration(True)
-        try:
-            return cls._mount_app_ssr_impl(ssr_root, replace)
-        finally:
-            _set_ssr_hydration(False)
-
-    @classmethod
-    def _mount_app_ssr_impl(cls, ssr_root=None, replace=False):
-        shadow_element_div = document.createElement("div")
-        shadow = shadow_element_div.attachShadow({ 'mode': 'open' })
-
-        mounted_app_component = cls.mount_app(shadow, replace)
-        # Stamp the client's own template tree with canonical hydration ids —
-        # ONE address scheme, shared with the SSR tree (same iter_tree_paths).
-        mounted_app_component._stamp_hydration_ids(
-            element=mounted_app_component.__element__)
-
-        child_bindings_recursive = [cb for cb in mounted_app_component.get_child_bindings(recursive=True)]
-        child_component_instances = [cb.childinstance for cb in child_bindings_recursive]
-
-        root_plus_child_component_instances = [mounted_app_component, *child_component_instances]
-        if not ssr_root:
-            ssr_root = document.body
-
-        marked_for_hydration = ssr_root.querySelectorAll("[data-hydration-id]")
-        marked_for_hydration_dict = {}
-        for x in marked_for_hydration:
-            hid = x.getAttribute("data-hydration-id")
-            if hid:
-                marked_for_hydration_dict[hid] = x
-        
-        # ---- Diagnostics ----
-        report = HydrationReport(mode="canonical")
-        fallback_needed = False
-
-        # Snapshot the client-side (shadow) nodes before initialize_ssr repoints
-        # every binding/`__element__` at SSR nodes.  If hydration fails and the
-        # fallback re-render fires, we restore these so the moved shadow app
-        # stays bound to the DOM it actually lives in (otherwise events and
-        # reactivity dangle at detached SSR nodes).
-        fallback_snapshot = []
-        for child_instance in root_plus_child_component_instances:
-            try:
-                shadow_element = child_instance.__element__
-                bindings = []
-                for b in child_instance.__bindings__:
-                    node = getattr(b, "node", None)
-                    anchor = getattr(b, "anchor", None)
-                    parent = getattr(b, "parent", None)
-                    bindings.append((b, node, anchor, parent))
-                fallback_snapshot.append((child_instance, shadow_element, bindings))
-            except Exception:
-                fallback_snapshot.append((child_instance, None, []))
-
-        # Repoint every component's bindings at its live SSR node. This runs
-        # inside a flush batch (P4 — HYDRATION-REPOINT-RACE-FIX-PLAN.md §5, I7):
-        # no effect can drain mid-re-point onto a partially-adopted tree with
-        # un-converged state. The MOUNT above stays unbatched so the shadow tree
-        # renders (and structural effects — regions, loops — run) exactly as
-        # before; only the adoption phase is held.
-        #
-        # On a clean hydration the single batch-exit drain applies any
-        # post-adoption work (e.g. hydrate-indicator flipping to "ready")
-        # against the fully re-pointed tree, in deterministic parent-before-
-        # child order, so values equal the SSR-rendered ones. On the fallback
-        # path the batch is DISCARDED: the fully-rendered shadow tree is about
-        # to replace the SSR content, so re-point-phase work must never write to
-        # SSR nodes that will be discarded.
-        from basis.shared.reactive import batch
-
-        with batch() as hyd_batch:
-            for child_instance in root_plus_child_component_instances:
-                hid = child_instance.hydration_id
-                if hid \
-                and (hid in marked_for_hydration_dict):
-                    corresponding_ssr_root_node = marked_for_hydration_dict[hid]
-                    try:
-                        child_instance.initialize_ssr(corresponding_ssr_root_node, report=report,
-                                                      ssr_map=marked_for_hydration_dict)
-                    except Exception as exc:
-                        # One broken component must not abort the whole report.
-                        report.add_unhydrated_component(
-                            child_instance.__class__.__name__, client_id=hid,
-                            reason=f"initialize_ssr raised: {exc}",
-                        )
-                else:
-                    # Component root not present in the SSR tree.  Normal when it is
-                    # hidden by an if-binding on the server (its shadow node is then
-                    # detached); otherwise it is a genuine mismatch.
-                    if hid is not None:
-                        hidden = not _shadow_contains(shadow, child_instance.__element__)
-                        report.add_unhydrated_component(
-                            child_instance.__class__.__name__, client_id=hid,
-                            reason="hidden by if-binding" if hidden
-                            else "component not present in SSR tree",
-                        )
-                        if not hidden:
-                            fallback_needed = True
-            if fallback_needed:
-                # Repoint-phase work must not reach the live SSR nodes — the
-                # shadow tree is about to replace them.
-                hyd_batch.discard()
-
-        if fallback_needed and hydration_fallback_enabled():
-            _fallback_rerender(ssr_root, shadow, report, snapshot=fallback_snapshot)
-
-        _emit_hydration_report(report)
-        
-        return mounted_app_component
-    
-    @client
-    def _stamp_hydration_ids(self, element=None):
-        """Stamp ``data-hydration-id`` on every countable element of the client
-        template tree.
-
-        Uses the SAME canonical-path algorithm as the server
-        (``shared/hydration.iter_tree_paths``, duck-typed for the browser DOM),
-        so there is exactly ONE address scheme: the client template node at
-        canonical path P hydrates the SSR node at canonical path P.
-        """
-        if element is None:
-            element = self.__template__
-        for node, path in iter_tree_paths(element):
-            if is_element(node):
-                node.setAttribute(HYDRATION_ID_ATTR, path)

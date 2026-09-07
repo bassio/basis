@@ -7,7 +7,7 @@ src/basis/
 ├── cli/                  # Developer CLI commands (dev, init, plugin)
 │   └── commands/         # dev.py, init.py, plugin.py
 ├── client/               # Browser-side (PyScript) runtime
-│   ├── component.py      # Client Component: hydration, mount_app / mount_app_ssr
+│   ├── component.py      # Client Component: hydration (mount_document_*), mount_app
 │   ├── entrypoint.py     # single PyScript entry (SSR-hydrated or CSR mount)
 │   ├── actions.py        # RPC client — call_action by canonical path
 │   ├── plugin.py         # Client-side BasisPlugin shim

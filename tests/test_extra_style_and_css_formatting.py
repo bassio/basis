@@ -156,7 +156,10 @@ def test_main_style_interpolates_class_attrs():
     assert ".x { background: #222; }" in C._get_style_string()
 
 
-def test_mount_app_injects_extra_style_after_main():
+def test_mount_app_no_longer_injects_component_styles():
+    """§4.1 P5: ``mount_app`` is a plain low-level mount — it no longer injects
+    component ``<style>`` elements into the container (styles live in-tree in
+    the Page ``<head>`` ``component_style_items`` loop)."""
     class MountExtraStyleComp(Component):
         __tag__ = "mount-extra"
 
@@ -176,18 +179,21 @@ def test_mount_app_injects_extra_style_after_main():
     def _is_style(el):
         return getattr(el, "tagName", "") == "style"
 
-    styles = [c for c in container.children if _is_style(c)]
-    mine = [s for s in styles
-            if s.getAttribute("data-component-class") == "MountExtraStyleComp"]
-    main = [s for s in mine if not s.getAttribute("data-extra-style")]
-    extras = [s for s in mine if s.getAttribute("data-extra-style")]
+    # No component <style> is injected into the container (only the component's
+    # own template root is mounted).
+    assert [c for c in container.children if _is_style(c)] == []
 
-    assert len(main) == 1
-    assert len(extras) == 1
-    assert extras[0].getAttribute("data-extra-style") == "add"
-    # The extra block lands after the main stylesheet so it wins at equal
-    # specificity.
-    assert container.children.index(main[0]) < container.children.index(extras[0])
+    # The ordering contract that used to live in the injection (main stylesheet
+    # before its @extra_style blocks, so the extra wins at equal specificity)
+    # now lives in _ordered_style_sources — the producer of the in-tree head
+    # loop. Main first, then the extra block.
+    ordered = MountExtraStyleComp._ordered_style_sources()
+    ours = [(n, e) for (_c, n, e, _css) in ordered if n == "MountExtraStyleComp"]
+    assert ("MountExtraStyleComp", None) in ours
+    assert ("MountExtraStyleComp", "add") in ours
+    assert ours.index(("MountExtraStyleComp", None)) < ours.index(
+        ("MountExtraStyleComp", "add")
+    )
 
 
 # ── Page.stylesheets (override layer) ──────────────────────────────────────
