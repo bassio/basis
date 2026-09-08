@@ -78,17 +78,20 @@ class AppContainer(Component):
     def style(self):
         """
 {% if is_app %}
-        /* Fixed-viewport workbench shell: the app fills 100vh and never scrolls
-           at the page level. `.app-container` is a flex column so the outer
-           <shell-stack> (flex: 1 1 auto) stretches to 100vh and pins the
+        /* Fixed-viewport workbench shell: the app fills the viewport and never
+           scrolls at the page level. `height: 100vh` is the fallback;
+           `height: 100dvh` tracks the mobile URL bar / keyboard / rotation.
+           `.app-container` is a flex column so the outer <shell-stack>
+           (flex: 1 1 auto) stretches to the viewport height and pins the
            status bar to the bottom edge (a block container would leave the
            status bar floating after the content). */
-        body { margin: 0; overflow: hidden; }
+        body { margin: 0; overflow: hidden; overscroll-behavior: none; }
         .app-container {
             display: flex;
             flex-direction: column;
             width: 100%;
             height: 100vh;
+            height: 100dvh;
             overflow: hidden;
         }
 {% else %}
@@ -98,6 +101,7 @@ class AppContainer(Component):
         .app-container {
             width: 100%;
             min-height: 100vh;
+            min-height: 100dvh;
         }
 {% endif %}
 

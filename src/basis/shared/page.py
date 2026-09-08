@@ -207,6 +207,18 @@ class Page(Component):
     #: Dev-mode marker rendered as an in-tree ``<meta name="basis-mode">`` via an
     #: ``if``-binding.
     basis_dev_mode: bool = False
+    #: iOS standalone meta (Decision G, ROADMAP-MOBILE M1.1): the three
+    #: ``apple-mobile-web-app-*`` tags are emitted into the ``<head>`` when on.
+    #: Default-on is harmless (they are inert until the page is added to the
+    #: home screen, and they are what make an installed app fullscreen with a
+    #: sane status bar); set ``False`` to omit all three.
+    apple_web_app: bool = True
+    #: ``apple-mobile-web-app-status-bar-style``. ``black-translucent`` (status
+    #: bar overlays the app edge-to-edge) rides on the D6 safe-area guard the
+    #: framework shell ships (title/status-bar ``env()`` padding); a
+    #: document-flow site that does not pad its top edge should set this to
+    #: ``"default"`` (opaque status bar) instead.
+    apple_status_bar_style: str = "black-translucent"
     root_component = None
     stores = []
     #: User stylesheet URLs assembled at the very END of ``<body>`` — AFTER the
@@ -262,6 +274,41 @@ class Page(Component):
                 "css": css,
             }
             for (_cls, name, extra, css) in sources
+        ]
+
+    def apple_meta_items(self):
+        """Ordered iOS standalone meta items (Decision G, ROADMAP-MOBILE M1.1)
+        for the base template's keyed head loop.
+
+        One ``{key, name, content}`` dict per ``apple-mobile-web-app-*`` tag;
+        ``[]`` when ``Page.apple_web_app`` is False (the loop renders nothing —
+        byte-stable). Rendered as a head loop (NOT an ``if``-binding: an if-node
+        wraps in a ``<div style="display: contents">`` anchor, which is illegal
+        inside ``<head>``). The tags are inert until the page is added to the
+        home screen. ``black-translucent`` (default) rides on the D6 safe-area
+        guard the shell ships; a document-flow page that doesn't pad its top
+        edge should set ``apple_status_bar_style = \"default\"``.
+        """
+        if not getattr(self, "apple_web_app", True):
+            return []
+        return [
+            {
+                "key": "name:apple-mobile-web-app-capable",
+                "name": "apple-mobile-web-app-capable",
+                "content": "yes",
+            },
+            {
+                "key": "name:apple-mobile-web-app-title",
+                "name": "apple-mobile-web-app-title",
+                "content": str(getattr(self, "title", "Basis App")),
+            },
+            {
+                "key": "name:apple-mobile-web-app-status-bar-style",
+                "name": "apple-mobile-web-app-status-bar-style",
+                "content": str(
+                    getattr(self, "apple_status_bar_style", "black-translucent")
+                ),
+            },
         ]
 
     @classmethod
@@ -459,6 +506,11 @@ class Page(Component):
              renders nothing (byte-stable), and $meta is a Page-guaranteed
              default like the plugin registry (MOBILE-M1.1-PLAN.md B.9). -->
         <meta for="m" in="{$meta.items}" key="key" name="{m['name']}" content="{m['content']}" />
+
+        <!-- iOS standalone meta (Decision G): a keyed loop over
+             Page.apple_meta_items() — apple_web_app=False renders nothing.
+             Loop items are direct <head> children (no if-anchor <div>). -->
+        <meta for="m" in="{apple_meta_items()}" key="key" name="{m['name']}" content="{m['content']}" />
     </head>
     <body>
         <!-- basis:app-root -->

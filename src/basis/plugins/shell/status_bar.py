@@ -29,6 +29,10 @@ class StatusBar(Component):
             box-sizing: border-box;
             background: var(--bg-secondary, #26263a);
             overflow: hidden;
+            /* D6 notch guard (M1.1): keep content clear of the bottom safe
+               area (home indicator). 0 except notched devices at the physical
+               edge, so desktop layouts are untouched. Tokenized in M1.2. */
+            padding-bottom: env(safe-area-inset-bottom, 0px);
         }
 
         .shell-status-bar[data-border="top"] { border-top: 1px solid var(--border-color, #3a3a52); }

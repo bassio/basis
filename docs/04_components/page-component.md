@@ -69,11 +69,44 @@ region. See `docs/05_reactivity/ssr-hydration.md`.
 | `pyscript_src` | `str` | `"/pyscript"` | Base path for the (offline) PyScript bundle. |
 | `pyscript_json_url` | `str` | `"/pyscript.json"` | URL of the manifest PyScript uses to resolve imports. |
 | `initial_state_json` | `str` | `"{}"` | Serialized store state injected during SSR; read by the client at boot. |
+| `viewport` | `str` | `width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content` | The layout-viewport `<meta>`: `viewport-fit=cover` opts into `env(safe-area-inset-*)` on notched devices; `interactive-widget=resizes-content` makes the on-screen keyboard resize the layout instead of covering it. Override per page (e.g. `interactive-widget=resizes-visual`). |
+| `viewport_base_css` | `str` | framework mobile base CSS | The in-tree `<style id="basis-viewport">` content: `touch-action: manipulation` on interactive controls (no double-tap zoom / 300 ms tap delay) and no iOS auto font-inflation. |
+| `apple_web_app` | `bool` | `True` | Emit the iOS `apple-mobile-web-app-*` home-screen meta (inert until the page is added to the home screen). Set `False` to omit all three. |
+| `apple_status_bar_style` | `str` | `"black-translucent"` | iOS standalone status-bar style. `black-translucent` rides on the shell's safe-area padding; a document-flow page that doesn't pad its top edge should use `"default"`. |
 
 `initial_state_json` is populated automatically during server-side rendering — you should not set it manually.
 
 > [!NOTE]
 > **Online vs. offline PyScript.** `Page` and `include_page()` default `pyscript_src` to `/pyscript`, which `app.bootstrap()` mounts with the offline PyScript bundle shipped inside `basis/static/pyscript`. However, the `@app.page` decorator overrides this default and points `pyscript_src` at the **online** PyScript CDN release (`https://pyscript.net/releases/2026.3.1`) unless you pass `pyscript_src` explicitly. If you want offline serving with `@app.page`, pass `pyscript_src="/pyscript"`.
+
+---
+
+## Mobile viewport & OS chrome
+
+A Basis page ships mobile-correct rendering chrome in its `<head>` out of the
+box (see `ROADMAP-MOBILE.md` M1.1 / `MOBILE-M1.1-PLAN.md`):
+
+- **Viewport** — `Page.viewport` (table above) opts into `viewport-fit=cover`
+  (safe areas) and `interactive-widget=resizes-content` (the keyboard resizes
+  the layout). Override on a subclass to opt out.
+- **Framework base CSS** — the in-tree `<style id="basis-viewport">`
+  (`viewport_base_css`) sets `touch-action: manipulation` on interactive
+  controls and stops iOS auto font-inflation. App-level mobile guidance is in
+  the generated `static/app.css`.
+- **Browser/OS chrome color** — `theme-color` follows the active `$theme` via
+  the core `$meta` store: the theme contributes the resolved color and the
+  page head `<meta for>` loop (kept alive by whole-page hydration) renders it
+  live. Themes declare it with `theme_color_light` / `theme_color_dark` on
+  their `ThemeDefinition`.
+- **Dynamic viewport units** — the fixed-viewport workbench frame
+  (`AppShell` / a generated `.app-container`) uses `height: 100dvh` with a
+  `100vh` fallback; scroll surfaces use `overscroll-behavior: contain` while
+  the page frame locks overscroll, so the URL bar / keyboard / rotation can't
+  break the layout and inner panels don't trigger pull-to-refresh.
+- **iOS home screen** — `apple_web_app` (table above) emits the
+  `apple-mobile-web-app-*` tags that make an added-to-home-screen app
+  fullscreen with a sane status bar; `black-translucent` rides on the shell's
+  safe-area padding.
 
 ---
 

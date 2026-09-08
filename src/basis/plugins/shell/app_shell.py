@@ -37,8 +37,13 @@ class AppShell(Component):
         .shell-app {
             display: flex;
             width: 100%;
-            height: 100vh;
+            height: 100vh;   /* fallback: fixed-viewport workbench frame */
+            height: 100dvh;  /* dynamic: tracks the URL bar / keyboard / rotation */
             overflow: hidden;
+            /* The page-locking frame: a full-bleed drag must not rubber-band /
+               pull-to-refresh the whole document. Inner panels use
+               `overscroll-behavior: contain` (see ui-scroll-area). */
+            overscroll-behavior: none;
             box-sizing: border-box;
             background: var(--bg-primary, #1e1e2e);
             color: var(--text-primary, #e0e0e0);
@@ -47,7 +52,9 @@ class AppShell(Component):
 
     def template(self):
         """
-        <div class="shell-app" style="height: 100vh;">
+        <!-- Viewport height lives in .shell-app (100vh/100dvh pair) — the class
+             is the single source, so the dvh fallback order is deterministic. -->
+        <div class="shell-app">
             <shell-stack direction="column" size="1 1 auto">
                 <shell-title-bar height="{titlebar_height}"></shell-title-bar>
                 <shell-workspace

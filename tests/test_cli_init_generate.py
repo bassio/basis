@@ -266,25 +266,31 @@ def test_frame_ui_imports_survive_no_store(tmp_path):
 # --- shell frame layout (app = fixed 100vh viewport, site = document flow) --
 
 def test_app_frame_is_fixed_viewport_flex_column(tmp_path):
-    """The app shell must fill 100vh as a flex column so the status bar is
-    pinned to the bottom edge (not floating after the content), with body
-    margin reset and no page-level scroll."""
+    """The app shell must fill the (dynamic) viewport as a flex column so the
+    status bar is pinned to the bottom edge, with body margin reset, no
+    page-level scroll and no overscroll rubber-band (M1.1 Decision D/F)."""
     generate(_canonical_app(), tmp_path)
     frame = (tmp_path / "src/myapp/components/app_container.py").read_text()
-    assert "body { margin: 0; overflow: hidden; }" in frame
+    assert "body { margin: 0; overflow: hidden; overscroll-behavior: none; }" in frame
     assert "display: flex;" in frame
     assert "flex-direction: column;" in frame
+    # The 100vh fallback must precede the 100dvh dynamic line (the fallback
+    # contract — cascade order gives the fallback for older browsers).
     assert "height: 100vh;" in frame
+    assert "height: 100dvh;" in frame
+    assert frame.index("height: 100vh;") < frame.index("height: 100dvh;")
 
 
 def test_site_frame_is_scrollable_document_flow(tmp_path):
     """The site shell must stay in normal document flow (scrollable), with the
-    body margin reset but NO 100vh overflow lock."""
+    body margin reset but NO 100vh overflow lock. It may use a dynamic
+    min-height (100dvh) so short pages still pin the footer on mobile."""
     cfg = ShellConfig(project_name="mysite", paradigm=PARADIGM_SITE)
     generate(cfg, tmp_path)
     frame = (tmp_path / "src/mysite/components/app_container.py").read_text()
     assert "body { margin: 0; }" in frame
     assert "min-height: 100vh;" in frame
+    assert "min-height: 100dvh;" in frame
     assert "body { margin: 0; overflow: hidden; }" not in frame
     # No FIXED 100vh lock (min-height: 100vh is fine — the lookbehind skips it).
     assert not re.search(r"(?<!min-)height: 100vh;", frame)

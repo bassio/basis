@@ -27,6 +27,10 @@ class ScrollArea(Component):
             padding: 0;
             margin: 0;
             background: var(--bg-primary, #1e1e1e);
+            /* Stop scroll chaining / pull-to-refresh bleed from inner panels
+               (M1.1 Decision F), and keep iOS momentum scrolling. */
+            overscroll-behavior: contain;
+            -webkit-overflow-scrolling: touch;
             scrollbar-width: thin;
             scrollbar-color: var(--scrollbar-thumb, #888) transparent;
             transition: scrollbar-color 0.3s ease;

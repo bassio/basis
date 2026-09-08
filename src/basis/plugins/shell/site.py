@@ -164,7 +164,8 @@ class SiteShell(Component):
         .shell-site {
             display: flex;
             flex-direction: column;
-            min-height: 100vh;
+            min-height: 100vh;   /* fallback */
+            min-height: 100dvh;  /* dynamic: tracks the URL bar / rotation */
             box-sizing: border-box;
         }
         """

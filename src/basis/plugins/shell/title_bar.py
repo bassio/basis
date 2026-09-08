@@ -29,6 +29,10 @@ class TitleBar(Component):
             box-sizing: border-box;
             background: var(--bg-secondary, #26263a);
             overflow: hidden;
+            /* D6 notch guard (M1.1): keep content clear of the top safe area.
+               0 everywhere except notched devices at the physical edge, so
+               desktop/scroll layouts are untouched. Tokenized in M1.2. */
+            padding-top: env(safe-area-inset-top, 0px);
         }
 
         .shell-title-bar[data-border="bottom"] { border-bottom: 1px solid var(--border-color, #3a3a52); }

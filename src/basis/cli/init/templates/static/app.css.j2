@@ -42,6 +42,23 @@ body {
 
 h1, h2, h3 { font-weight: 650; letter-spacing: -0.02em; }
 
+/* --- Mobile viewport & touch (ROADMAP-MOBILE.md M1.1) ---------------------
+   The framework ships the mobile base in the page <head>:
+     - <meta name="viewport"> = width=device-width, viewport-fit=cover,
+       interactive-widget=resizes-content (Page.viewport): the on-screen
+       keyboard resizes the layout instead of covering it, and
+       env(safe-area-inset-*) is active on notched devices.
+     - <style id="basis-viewport"> sets touch-action: manipulation on
+       interactive controls (no double-tap zoom / 300 ms tap delay) and
+       prevents iOS auto font-inflation.
+   App overrides:
+     - tap-highlight: `-webkit-tap-highlight-color: transparent` is an a11y
+       judgment — keep the :focus-visible ring above if you add it.
+     - safe areas: pad screen-edge chrome with env(safe-area-inset-*), e.g.
+       a bottom action bar → padding-bottom: env(safe-area-inset-bottom).
+       (Tokenized --safe-area-* slots land in M1.2.)
+*/
+
 /* --- Your overrides go below. Examples (uncomment to try):
    :root { --accent-color: #e63946; --radius-md: 0.75rem; }
    .demo-hero h1 { font-size: 3rem; }
