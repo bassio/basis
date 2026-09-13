@@ -1,5 +1,5 @@
 """
-Pytest integration for the Basis benchmark suite (ROADMAP-PERFORMANCE.md T0).
+Pytest integration for the Basis benchmark suite.
 
 Benchmarks are opt-in so normal test runs stay fast and deterministic:
 ``pytest`` skips them unless ``--bench`` is passed. Run with::

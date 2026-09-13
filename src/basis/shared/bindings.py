@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     # referenced as a type here, never imported at runtime.
     from basis.shared.base_component import BaseComponent
 
-# Refrain has moved to reactive.py — re-export for backward compatibility
+# Re-exported from reactive.py — callers import it from here.
 from basis.shared.reactive import Refrain
 from basis.shared.validation import validate_field, validate_model, ValidationError
 # Error sentinels used by binding updates; the structured recording
@@ -22,9 +22,8 @@ from basis.shared.errors import (
 
 # The safe expression language (desugar, _eval_ast, safe_eval, safe_format,
 # extract_dependencies, LoopScope, ALLOWED_BUILTINS, _FORMATTER,
-# IS_CLIENT/ffi/window, _report_binding_error).  Re-exported here for backwards
-# compatibility — base_component, store_provider and several tests import them
-# from ``basis.shared.bindings``.
+# IS_CLIENT/ffi/window, _report_binding_error).  Re-exported here: base_component,
+# store_provider and several tests import them from ``basis.shared.bindings``.
 from basis.shared.expr import (
     ALLOWED_BUILTINS,
     IS_CLIENT,
@@ -187,7 +186,6 @@ class AttributeBinding(NodeBinding):
                                       template=self.content,
                                       scope=self.scope)
             
-            # For the DOM attribute, we convert to string/JSON
             if isinstance(evaluated_val, (list, dict)):
                 final_dom_val = json.dumps(evaluated_val)
             else:
@@ -205,12 +203,11 @@ class AttributeBinding(NodeBinding):
             )
             final_dom_val = evaluated_val
 
-        # Update the DOM node
         if self.is_boolean:
             bool_val = bool(evaluated_val) if self._is_single_expr else str(final_dom_val).lower() == 'true'
             self.node.toggleAttribute(self.attr, bool_val)
 
-            # special cases
+            # Boolean attributes whose DOM *property* must follow the attribute
             if self.attr == 'selected' \
             and str.lower(getattr(self.node, 'tagName', '')) == 'option':
                 self.node.selected = bool_val
@@ -229,11 +226,10 @@ class AttributeBinding(NodeBinding):
         else:
             self.node.setAttribute(self.attr, str(final_dom_val))
 
-        # Prop Synchronization: If the node is a Basis component instance, update its Python property.
+        # Sync the raw evaluated value onto the child component instance (setattr
+        # triggers its reactivity); raw, so list/dict object references survive.
         if hasattr(self.node, '__basis_instance__') and evaluated_val is not EVAL_ERROR:
             child_instance = self.node.__basis_instance__
-            # We use the raw evaluated value to maintain object references (lists/dicts)
-            # Use setattr to trigger the child's reactivity
             setattr(child_instance, self.attr, evaluated_val)
 
     @classmethod
@@ -291,7 +287,6 @@ class SelfAttributeBinding(AttributeBinding):
                 final_val = ""
             else:
                 final_val = json.dumps(evaluated_val)
-            #self.component_instance.__dict__[self.attr] = final_val
             setattr(self.component_instance, self.attr, final_val)
 
     @classmethod
@@ -316,7 +311,7 @@ class TextContentAttributeBinding(AttributeBinding):
     is_boolean:bool = field(default=False, init=False, repr=False)
 
     def update(self):
-        # We leverage the base evaluation logic but redirect the output to textContent
+        # Base evaluation logic, redirected to textContent.
         context = self.component_instance
 
         final_dom_val = safe_format(
@@ -329,8 +324,6 @@ class TextContentAttributeBinding(AttributeBinding):
             template=self.content,
             scope=self.scope,
         )
-
-        #print("IN TextContentAttributeBinding : final_dom_val", final_dom_val)
 
         self.node.textContent = str(final_dom_val)
 
@@ -968,11 +961,9 @@ class ChildBinding(NodeBinding):
 
     def destroy(self):
         """Teardown: recursively destroy the mounted child, then drop the
-        reference.  Previously this only nulled ``childinstance`` and assumed
-        the child's node/listeners/DAG were "reclaimed with the subtree" — but
-        nothing recursed, leaking the child's bindings, store subscription
-        edges and JS widgets.  Removing a ChildBinding now really unmounts the
-        child subtree."""
+        reference. Nulling ``childinstance`` alone would leak the child's
+        bindings, store-subscription edges and JS widgets, so removing a
+        ChildBinding really unmounts the child subtree."""
         child = self.childinstance
         self.childinstance = None
         if child is not None:

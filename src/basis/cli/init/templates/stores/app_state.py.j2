@@ -5,28 +5,48 @@ A module-scope instance (`app_state`) registers the store's blueprint so
 `Page.stores` can resolve it by name (or default to all stores), SSR serializes
 it into `#basis-initial-state`, and the client hydrates it from the same.
 """
-from basis.shared.store import Store
 from basis.shared.actions import server_action
+from basis.shared.app_state import AppStateStore
 from basis.plugins.theme import ThemeStore
 
+#: The demo list's starting contents.
+DEMO_ITEMS = ("hello", "basis")
 
-class AppState(Store):
-    """Global app state. Reactive instance state is declared in ``__init__``."""
 
-    def __init__(self, name: str):
+class AppState(AppStateStore):
+    """App-global item list — a projection of the app's authoritative state.
+
+    ``AppStateStore`` is the base for state the SERVER owns: the data lives on
+    the app (here ``app.state.items``) and the store is a JSON-safe projection of
+    it. SSR serializes the projection into ``#basis-initial-state`` and every
+    server action answers with a fresh projection, so all clients converge on
+    the same list.
+
+    A plain ``Store`` holds *client* state instead: a server action runs on a
+    fresh per-request instance there, so mutating ``self`` inside one never
+    accumulates — the mutation is thrown away with the instance.
+    """
+
+    def project(self, app) -> dict:
+        """Read the authoritative list (seeded with the demo items until written)."""
+        items = getattr(app.state, "items", None)
+        return {"items": list(DEMO_ITEMS if items is None else items)}
+
+    def __init__(self, name: str = "app_state"):
         super().__init__(name)
-        # Never clobber the list that Store.__init__ just hydrated from
-        # #basis-initial-state (that would desync client vs SSR trees).
+        # Client-side default — only when nothing was hydrated, else the list
+        # would disagree with the SSR tree this instance is hydrating against.
         if not getattr(self, "_hydrated_from_ssr", False):
-            self.items = ["hello", "basis"]
+            self.items = list(DEMO_ITEMS)
 
     @server_action
-    def add_item(self, name: str) -> str:
-        """Canonical-path server action — appends to ``items`` (full-stack RPC)."""
-        if not isinstance(getattr(self, "items", None), list):
-            self.items = []
-        self.items.append(name)
-        return f"added {name}"
+    def add_item(self) -> str:
+        """Append the next demo item (canonical-path server action / full-stack RPC)."""
+        app = self._require_app()
+        items = self.project(app)["items"]
+        items.append(f"item {len(items) + 1}")
+        app.state.items = items
+        return f"added {items[-1]}"
 
 
 class AppTheme(ThemeStore):
@@ -35,7 +55,7 @@ class AppTheme(ThemeStore):
     The default is applied in ``__init__`` (guarded against SSR hydration) so
     the seed survives the per-request store rebuild: SSR reconstructs stores
     from their class blueprints, so a plain module-scope assignment would be
-    lost. Toggle at runtime via ``theme.dark_mode``.
+    lost. Toggle at runtime via ``theme.set_mode(...)``.
     """
 
     def __init__(self, name="theme"):

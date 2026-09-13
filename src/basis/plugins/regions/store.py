@@ -41,7 +41,7 @@ class RegionStore(AppStateStore):
         # $regions projects app state that plugin lifecycle changes mutate
         # (disable/enable unwinds/restores a plugin's contributions), so re-sync
         # whenever the $plugins control-plane store updates on the client. The
-        # dependency is a cross-object DAG edge (BINDINGS-REVIEW §6), not a
+        # dependency is a cross-object DAG edge, not a
         # parallel registry — see _wire_plugins_dependency / react.
         self._wire_plugins_dependency()
 

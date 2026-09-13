@@ -1,5 +1,5 @@
 """
-Basis benchmark suite (ROADMAP-PERFORMANCE.md, T0 — Measure First).
+Basis benchmark suite.
 
 A small, stdlib-first harness plus a set of *realistic* scenarios that exercise
 the framework's hot paths the way the target apps (dashboards, internal tools,
@@ -10,7 +10,7 @@ data apps) actually hit them:
 * rendering a 1k / 10k-row loop (full LIS reconcile)
 * hydrating an SSR page (mount + hydration IDs + initial-state serialization)
 * fanning a store out to 50 subscribers
-* template / expression parsing (the T1 #1 / #3 hot path baseline)
+* template / expression parsing (a hot path in practice)
 
 Run from anywhere with::
 

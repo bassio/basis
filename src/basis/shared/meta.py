@@ -1,11 +1,10 @@
-"""The ``$meta`` document-meta store (ROADMAP-MOBILE.md M1.1 /
-MOBILE-M1.1-PLAN.md Decision B / B.9).
+"""The ``$meta`` document-meta store.
 
-The *dynamic* half of the M1.1 head-meta design: a tiny, name-keyed,
+The dynamic half of the head-meta design: a tiny, name-keyed,
 document-level reactive store for the handful of live ``<meta name=...>`` tags
 that must react to state or be contributed by a plugin/component — today
-``theme-color`` (follows ``$theme``). The *static* per-page half needs no
-framework API: whole-page mount (HYDRATION-WHOLEPAGE.md No.2/Option A) made a
+``theme-color`` (follows ``$theme``). The static per-page half needs no
+framework API: whole-page mount made a
 Page's own ``<head>`` a live template region, so per-route tags
 (``description``, ``og:*``, ``apple-*``) are simply authored in a ``Page``
 subclass's template.

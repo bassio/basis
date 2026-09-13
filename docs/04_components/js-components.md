@@ -174,7 +174,7 @@ unguarded.
   `on_mounted()` won't re-run when the controlling `if` later reveals it — the framework
   handles this by booting on the custom element's native `connectedCallback`: the JS side
   (the dumb part) just dispatches a generic `basis:connected` event on the custom-element
-  host, and Python (`basis.client.js_bridge.wait_connected`) listens on `document` for the
+  host, and Python (`basis.client.js_runtime.wait_connected`) listens on `document` for the
   bubbled event and boots the widget when the component's element reports `isConnected`.
   This is push-based (no polling) and needs no code on your side — hidden `@js_component`s
   boot the moment the controlling `if` reveals them. Note the listener cannot attach to the

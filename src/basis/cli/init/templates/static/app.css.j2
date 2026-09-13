@@ -54,9 +54,10 @@ h1, h2, h3 { font-weight: 650; letter-spacing: -0.02em; }
    App overrides:
      - tap-highlight: `-webkit-tap-highlight-color: transparent` is an a11y
        judgment — keep the :focus-visible ring above if you add it.
-     - safe areas: pad screen-edge chrome with env(safe-area-inset-*), e.g.
-       a bottom action bar → padding-bottom: env(safe-area-inset-bottom).
-       (Tokenized --safe-area-* slots land in M1.2.)
+     - safe areas: pad screen-edge chrome with the theme's safe-area tokens,
+       e.g. a bottom action bar → padding-bottom: var(--safe-area-bottom).
+       They default to env(safe-area-inset-*) (0 unless a notched device is at
+       that edge), so they are safe everywhere.
 */
 
 /* --- Your overrides go below. Examples (uncomment to try):

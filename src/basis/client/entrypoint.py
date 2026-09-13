@@ -5,7 +5,9 @@ from pyscript import document
 
 from basis.client.errors import install_error_sink
 from basis.shared.hmr import start_hmr
-from basis.shared.store import Store
+from basis.shared.media import install_media_resync
+from basis.shared.reactive import batch
+from basis.shared.store import Store, mark_client_ready
 
 # The per-page manifest (/pyscript.json?url=<route>) carries the pre-mount plan
 # (stores / headless / page stores / entrypoint) under ``basis.bootstrap``. PyScript
@@ -44,15 +46,22 @@ try:
 except Exception as e:
     print(f"[Basis] Error initializing framework stores: {e}")
 
-# The $meta document-meta store (a Page-level default like $plugins). Guarantee
-# it exists before any component mounts so the page head loop binds it; empty by
-# default (empty items → nothing renders).
+# The framework Page-default stores ($meta / $device / $network). Guaranteed to
+# exist before any component mounts: $meta so the page head loop binds it (empty
+# by default → nothing renders); $device / $network so components can read the
+# context data plane from the first render. The real device/network PROBES are
+# installed AFTER mount (basis.client.device_probes) so SSR and CSR first paint
+# agree.
 try:
     from basis.shared.meta import ensure_meta_store
+    from basis.shared.device import ensure_device_store
+    from basis.shared.network import ensure_network_store
 
     ensure_meta_store()
+    ensure_device_store()
+    ensure_network_store()
 except Exception as e:
-    print(f"[Basis] Error initializing $meta store: {e}")
+    print(f"[Basis] Error initializing framework stores: {e}")
 
 # 2. App-level stores (stores/). Their module-scope instances self-hydrate from
 # #basis-initial-state, so Page.stores name-lists and default-to-all resolution
@@ -99,8 +108,7 @@ for module_name in headless_modules:
 # COMPONENT decorated with @app.page (which carries its synthesized-shell recipe
 # on the class itself — _synthesized_page_args, in its OWN __dict__ — set by the
 # client decoration when the module was imported). Page.mount_document reads the
-# served render-mode meta and dispatches; there is no legacy body-only mount
-# path left.
+# served render-mode meta and dispatches.
 from basis.shared.page import _synthesize_page
 
 modules_dict = bootstrap.get("entrypoint", {})
@@ -121,6 +129,39 @@ for component_name, module_path in modules_dict.items():
         page_cls.mount_document(document)
     except Exception as e:
         print(f"[Basis] Error loading {module_path}: {e}")
+
+# ── Client store lifecycle ──
+# Stores get their client hook only now: the SSR document has been adopted, so a
+# listener's first write is an ordinary DAG update rather than a divergence. Batched
+# so N stores doing M writes flush once, and marked ready first so a store built
+# during the sweep attaches itself.
+mark_client_ready()
+try:
+    with batch():
+        for store in list(Store._registry.values()):
+            try:
+                store.on_client_ready()
+            except Exception as e:
+                print(f"[Basis] {type(store).__name__}.on_client_ready failed: {e}")
+except Exception as e:
+    print(f"[Basis] Error running store client hooks: {e}")
+
+try:
+    install_media_resync(Store._registry)
+except Exception as e:
+    print(f"[Basis] Error installing the media resync: {e}")
+
+# ── Context probes ──
+# The real viewport / connectivity values, read only now that the document has mounted:
+# on a server-rendered page the DOM is adopted from the server, so probing earlier would
+# leave SSR showing the neutrals while CSR showed real values. Capability fields need no
+# probe — they are declared media queries (already attached by the hook sweep above).
+try:
+    from basis.client.device_probes import install_device_probes
+
+    install_device_probes()
+except Exception as e:
+    print(f"[Basis] Error installing the context probes: {e}")
 
 # Start HMR — live hot-swap of component files (.py/.html/.css) during development.
 try:

@@ -3,17 +3,17 @@ Structured error reporting tests.
 
 Covers:
 
-* Phase A — capture & DOM safety (``shared/errors.py`` + reworked eval helpers
+* capture & DOM safety (``shared/errors.py`` + the eval helpers
   in ``shared/bindings.py``): failures record a structured ``BindingError`` and
   return an empty value, never the raw ``[Error: ...]`` string; the sentinel
   survives only when no sink is registered.
-* Phase B — client overlay + structural surfacing (``client/errors.py``):
+* the client overlay + structural surfacing (``client/errors.py``):
   ``window.__basisErrors`` + ``basis-error`` CustomEvent + the dev-only panel,
   verified against a fake DOM stand-in.
-* Phase C — server-side capture: SSR collects errors into ``__basis_errors__``
+* server-side capture: SSR collects errors into ``__basis_errors__``
   (``#basis-initial-state``) and renders no ``[Error: ...]``; the dev meta tag
   marks dev mode.
-* Phase D — friendly ImportError hints for server-only modules.
+* friendly ImportError hints for server-only modules.
 """
 import pytest
 
@@ -45,7 +45,7 @@ def _clean_error_sink():
 
 
 # ---------------------------------------------------------------------------
-# Phase A — shared capture & DOM safety
+# Shared capture & DOM safety
 # ---------------------------------------------------------------------------
 
 def test_no_sink_keeps_legacy_sentinel():
@@ -222,7 +222,7 @@ def test_broken_sink_does_not_crash_renderer():
 
 
 # ---------------------------------------------------------------------------
-# Phase D — ImportError hints (server-only module)
+# ImportError hints (server-only module)
 # ---------------------------------------------------------------------------
 
 def test_import_hint_for_module_not_found():
@@ -269,7 +269,7 @@ def test_import_hint_in_recorded_error():
 
 
 # ---------------------------------------------------------------------------
-# Phase A — store_provider.resolve_value (sentinel-aware)
+# store_provider.resolve_value (sentinel-aware)
 # ---------------------------------------------------------------------------
 
 def test_resolve_value_returns_none_for_failure():
@@ -284,7 +284,7 @@ def test_resolve_value_returns_none_for_failure():
 
 
 # ---------------------------------------------------------------------------
-# Phase B — client overlay & structural surfacing (fake DOM)
+# Client overlay & structural surfacing (fake DOM)
 # ---------------------------------------------------------------------------
 
 class _FakeNode:
@@ -367,7 +367,7 @@ class _FakeDocument:
         return None
 
     def querySelector(self, selector):
-        if selector == 'meta[name="basis-mode"]':
+        if selector == 'meta[name="basis-dev-mode"]':
             return self._meta
         return None
 
@@ -442,8 +442,8 @@ def test_overlay_dev_gating(client_env):
     assert mod.overlay_enabled() is False
     # Dev meta → on.
     meta = doc.createElement("meta")
-    meta.setAttribute("name", "basis-mode")
-    meta.setAttribute("content", "dev")
+    meta.setAttribute("name", "basis-dev-mode")
+    meta.setAttribute("content", "True")
     doc._meta = meta
     assert mod.overlay_enabled() is True
     # Explicit override wins.
@@ -618,8 +618,8 @@ def test_replay_server_errors(client_env):
 def test_install_sink_creates_overlay_in_dev_mode(client_env):
     mod, win, doc, ffi = client_env
     meta = doc.createElement("meta")
-    meta.setAttribute("name", "basis-mode")
-    meta.setAttribute("content", "dev")
+    meta.setAttribute("name", "basis-dev-mode")
+    meta.setAttribute("content", "True")
     doc._meta = meta
 
     mod.install_error_sink()
@@ -631,7 +631,7 @@ def test_install_sink_creates_overlay_in_dev_mode(client_env):
 
 
 # ---------------------------------------------------------------------------
-# Phase C — SSR capture (server side)
+# SSR capture (server side)
 # ---------------------------------------------------------------------------
 
 def test_ssr_collects_errors_and_never_renders_sentinel(monkeypatch):
@@ -681,7 +681,7 @@ def test_ssr_collects_errors_and_never_renders_sentinel(monkeypatch):
     assert by_expr["message"]["component"] == "Root"
     assert by_expr["message"]["template_line"] == 3
     # Dev marker present because BASIS_HMR=1.
-    assert 'name="basis-mode" content="dev"' in resp.text
+    assert 'name="basis-dev-mode" content="True"' in resp.text
 
 
 def test_ssr_no_errors_means_no_basis_errors_key(monkeypatch):

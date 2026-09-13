@@ -157,9 +157,9 @@ def test_main_style_interpolates_class_attrs():
 
 
 def test_mount_with_providers_no_longer_injects_component_styles():
-    """§4.1 P5: ``mount_with_providers`` is a plain low-level mount — it no
-    longer injects component ``<style>`` elements into the container (styles
-    live in-tree in the Page ``<head>`` ``component_style_items`` loop)."""
+    """``mount_with_providers`` is a plain low-level mount — it does not inject
+    component ``<style>`` elements into the container (styles live in-tree in the
+    Page ``<head>`` ``component_style_items`` loop)."""
     class MountExtraStyleComp(Component):
         __tag__ = "mount-extra"
 

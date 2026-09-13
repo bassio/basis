@@ -20,13 +20,20 @@ region view{% endif %}).
 ## Project Structure
 
 ```
-src/{{ slug }}/
-├── __init__.py          # App setup: Basis() + bootstrap() + serve("/")(HomePage)
-├── components/          # UI components — the shell frame + chrome parts
-│   ├── page.py          # HomePage(Page) — the "/" route shell
-│   └── app_container.py # Root component (edit freely)
-├── stores/              # Global stores (auto-discovered) — incl. the theme seed
-├── plugins/             # Auto-discovered plugins
-└── static/
-    └── app.css          # App-wide override stylesheet (linked via HomePage)
+{{ project_name }}/
+├── README.md              # This file
+├── pyproject.toml         # Project metadata + dependencies
+└── src/{{ slug }}/
+    ├── __init__.py        # App setup: Basis() + bootstrap() + serve("/")(HomePage)
+    ├── components/        # UI components — the shell frame + chrome parts
+    │   ├── page.py        # HomePage(Page) — the "/" route shell
+    │   └── app_container.py # Root component (edit freely)
+{% if example_store %}
+    ├── stores/            # Global stores (auto-discovered) — incl. the theme seed
+{% endif %}
+{% if example_plugin %}
+    ├── plugins/           # Auto-discovered plugins
+{% endif %}
+    └── static/
+        └── app.css        # App-wide override stylesheet (linked via HomePage)
 ```

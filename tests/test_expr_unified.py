@@ -1,11 +1,11 @@
 """
-Item 5 of the bindings review (BINDINGS-REVIEW.md): one name resolver.
+One name resolver for the expression language.
 
 ``safe_eval`` desugars ``$store.x`` / ``#id.x`` itself when no cached tree is
 supplied, and ``safe_format`` is the single interpolation entry point (the old
 ``safe_format_with_stores`` plus its ``$``/``#`` string fast-path are gone).
 A missing ``#component.attr`` reference resolves to the falsy placeholder
-(renders ``""``), matching the old tolerant behaviour.
+(renders ``""``) instead of raising.
 """
 
 import basis.shared.base_component  # noqa: F401  (injects BaseComponent into ALLOWED_BUILTINS)

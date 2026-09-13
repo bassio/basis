@@ -3,8 +3,9 @@ Plugin lifecycle tests: name validation, ``requires`` dependency ordering, the
 revertible registration layer (``remove_plugin`` / ``disable_plugin`` /
 ``enable_plugin``), and the ``$plugins`` PluginRegistryStore control plane.
 
-Covers the Cordis-inspired "live plugin lifecycle" work in
-``ROADMAP-EXTENSIBILITY.md``.
+Covers the revertible "live plugin lifecycle": disable/enable unwind routes,
+static mounts, models, actions and region contributions, and re-enable restores
+them.
 """
 import asyncio
 import json
@@ -479,7 +480,7 @@ def test_plugins_projection_endpoint_includes_disabled_plugins():
     registry = client.get("/basis/api/plugins").json()
     # The official regions plugin is auto-registered by bootstrap, so assert the
     # svc entry exactly rather than the whole listing. Entries carry `kind`
-    # (plugin vs. theme — ROADMAP-THEMING §6.5.2); plugins-only listings never
+    # (plugin vs. theme); plugins-only listings never
     # include kind == "theme".
     assert registry["svc"] == {
         "kind": "plugin",

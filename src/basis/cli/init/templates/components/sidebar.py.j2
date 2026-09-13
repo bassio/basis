@@ -16,7 +16,7 @@ class MySidebarLeft(SidebarLeft):
 
     def template(self):
         """
-        <div class="shell-sidebar" style="--sidebar-expanded: {width}; --sidebar-icon: {icon_width}; flex: 0 0 var(--sidebar-width);" data-state="{state_attr}" data-collapsible="{collapsible}" data-border="{border_side}" data-side="{side}">
+        <div class="shell-sidebar" style="--sidebar-expanded: {width}; --sidebar-icon: {icon_width}; --sidebar-mobile-width: {mobile_width};" data-state="{state_attr}" data-drawer="{drawer_state}" data-collapsible="{collapsible}" data-border="{border_side}" data-side="{side}" onclick="{on_backdrop_click}">
             <shell-stack direction="{direction}" gap="{gap}" align="{align}" size="1 1 auto">
                 <slot></slot>
             </shell-stack>
@@ -29,7 +29,7 @@ class MySidebarRight(SidebarRight):
 
     def template(self):
         """
-        <div class="shell-sidebar" style="--sidebar-expanded: {width}; --sidebar-icon: {icon_width}; flex: 0 0 var(--sidebar-width);" data-state="{state_attr}" data-collapsible="{collapsible}" data-border="{border_side}" data-side="{side}">
+        <div class="shell-sidebar" style="--sidebar-expanded: {width}; --sidebar-icon: {icon_width}; --sidebar-mobile-width: {mobile_width};" data-state="{state_attr}" data-drawer="{drawer_state}" data-collapsible="{collapsible}" data-border="{border_side}" data-side="{side}" onclick="{on_backdrop_click}">
             <shell-stack direction="{direction}" gap="{gap}" align="{align}" size="1 1 auto">
                 <slot></slot>
             </shell-stack>

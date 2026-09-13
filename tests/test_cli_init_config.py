@@ -1,4 +1,4 @@
-"""``ShellConfig`` / slug rules — P0 of INIT-SHELL-PLAN.md."""
+"""``ShellConfig`` / slug rules."""
 
 from __future__ import annotations
 

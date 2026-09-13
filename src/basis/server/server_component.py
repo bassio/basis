@@ -18,7 +18,6 @@ class ServerComponent(BaseComponent):
     #@server
     @classmethod
     def _initialize_blueprint(cls):
-        ###Server
         blueprint_tree = html_to_element_tree(cls.__templatestr__)
         setattr(cls, "__blueprint__", blueprint_tree)
 

@@ -20,6 +20,7 @@ from basis.shared.bindings import (
 )
 
 from basis.shared.base_component import BaseComponent
+from basis.shared.js import py_event
 from basis.shared.hydration import (
     HYDRATION_ID_ATTR,
     HYDRATION_MISMATCH_EVENT,
@@ -233,7 +234,7 @@ def _stamp_live_region_text_ordinals(staged_page, live_map):
 
 def _hydrate_page_head(page_cls, report=None, *, stamp_live=True):
     """Stage the Page's ``<head>`` region and re-point its head bindings at the
-    LIVE ``document.head`` (HYDRATION-WHOLEPAGE.md §4.1 P2 shared head pass).
+    LIVE ``document.head``.
 
     Used by the CSR boot (``Page.mount_document`` — CSR): the served CSR head is
     STATIC (the server never stamps it), so:
@@ -295,7 +296,7 @@ def _hydrate_page_head(page_cls, report=None, *, stamp_live=True):
 
 
 def _hydrate_page_document_ssr(page_cls):
-    """Whole-page SSR hydration driver (HYDRATION-WHOLEPAGE.md §4.1 P4/P5).
+    """Whole-page SSR hydration driver.
 
     ONE staged owned document: mount the whole ``Page`` (``<html>`` with
     ``<head>`` and ``<body>``) detached, mount the root component as a nested
@@ -309,8 +310,7 @@ def _hydrate_page_document_ssr(page_cls):
     surfaced once at the end.
 
     Every page boot path (real ``Page`` subclasses AND synthesized ``@app.page``
-    shells) hydrates through here — the separate app-rooted ``r:`` body
-    pipeline is gone (§4.1 P5, migrate-always: ``r:`` → ``b:``).
+    shells) hydrates through here; the body region is addressed as ``b:``.
     """
     from basis.shared.hydration import HydrationReport, build_hydration_map
     from basis.shared.component import _set_ssr_hydration
@@ -341,11 +341,9 @@ def _hydrate_page_document_ssr(page_cls):
                 # the app subtree. Component styles live in-tree in the served
                 # <head>, so nothing is re-injected.
                 #
-                # §4.1 S1/S3 declarative root mount: the Page owns its root as
-                # a nested ChildBinding under a hyphenated host tag (declared or
-                # kebab-derived) — every page root mounts this way, the exact
-                # shape the server serves. The legacy imperative staged
-                # mount path is gone (§4.1 P5).
+                # The Page owns its root as a nested ChildBinding under a
+                # hyphenated host tag (declared or kebab-derived) — every page
+                # root mounts this way, the exact shape the server serves.
                 mounted_app = staged_page.mount_root_app()
                 instances = [mounted_app]
                 instances.extend(
@@ -412,14 +410,13 @@ def _adopt_instances(instances, live_map, ssr_root, staging_root, report):
 
     Repoints every instance's bindings at its live SSR node via the canonical
     ``live_map``, inside a flush batch (no effect drains mid-re-point onto a
-    partially-adopted tree — HYDRATION-REPOINT-RACE-FIX-PLAN.md §5 I7). The
-    pre-hydration snapshot lets a fallback re-render rebind the moved staged
-    tree (otherwise events/reactivity dangle at detached nodes).
+    partially-adopted tree). The pre-hydration snapshot lets a fallback
+    re-render rebind the moved staged tree (otherwise events/reactivity dangle
+    at detached nodes).
 
-    ``staging_root`` is the detached container that holds the mounted app (a
-    bare shadow root for the standalone ``r:`` pipeline, or the staged Page
-    ``<body>`` for whole-document ``b:`` hydration); ``ssr_root`` is the live
-    container the app lives in (the fallback's target).
+    ``staging_root`` is the detached container that holds the mounted app (the
+    staged Page ``<body>``); ``ssr_root`` is the live container the app lives in
+    (the fallback's target).
     """
     fallback_needed = False
     fallback_snapshot = []
@@ -569,7 +566,6 @@ class Component(BaseComponent):
 
     @classmethod
     def _initialize_blueprint(cls):
-        ###Client
         init_template = cls._create_element('template')
         init_template.innerHTML = cls.__templatestr__
         setattr(cls, "__blueprint__", init_template)
@@ -709,7 +705,6 @@ class Component(BaseComponent):
     @client
     def _create_function_proxy(self, f):
         if not getattr(f, "__is_py_event__", False):
-            from basis.shared.component import py_event
             f = py_event(f)
         return ffi.create_proxy(f)
 

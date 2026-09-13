@@ -107,6 +107,10 @@ box (see `ROADMAP-MOBILE.md` M1.1 / `MOBILE-M1.1-PLAN.md`):
   `apple-mobile-web-app-*` tags that make an added-to-home-screen app
   fullscreen with a sane status bar; `black-translucent` rides on the shell's
   safe-area padding.
+- **Viewport tier** — `$device.tier` (`"compact"` ≤ 767px / `"medium"` /
+  `"regular"`) is a reactive field the browser answers after mount, for
+  *behaviour* decisions; the *layout* reflow that follows from it is CSS, in the
+  shell. See [The App Shell](shell-components.md#4-responsive-behaviour-and-the-breakpoint-contract).
 
 ---
 

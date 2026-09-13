@@ -1,13 +1,12 @@
 """
-In-tree component chrome (HYDRATION-WHOLEPAGE.md §4.1 P3, additive step) —
-server surface.
+In-tree component chrome — server surface.
 
 Pages render component stylesheets IN-TREE in the ``<head>`` (a keyed loop
 over ``Page.component_style_items``) instead of injecting them into the
 ``<body>``; the stylesheet body is bound via ``text-content`` (raw
-text inside ``<style>`` is never binding-parsed) and survives intact. §4.1 P5
-unified every boot path through a Page, so synthesized ``@app.page`` shells
-render in-tree styles too — there is no legacy body injection left.
+text inside ``<style>`` is never binding-parsed) and survives intact. Every boot
+path goes through a Page, so synthesized ``@app.page`` shells
+render in-tree styles too.
 
 These tests pin:
 
@@ -147,9 +146,9 @@ def test_synthesized_page_renders_styles_in_tree_like_real_page():
     head = html.split("</head>", 1)[0]
     body = html.split("</head>", 1)[1]
 
-    # §4.1 P5: synthesized @app.page shells are whole-document pages now — they
+    # Synthesized @app.page shells are whole-document pages — they
     # render component styles IN-TREE in their <head> (component_style_items)
-    # exactly like a real Page; the legacy body injection is gone.
+    # exactly like a real Page.
     assert _count(body, "data-component-class") == 0
     assert re.search(
         r'<style data-component-class="SynthChromeRoot"[^>]*>.*?rgb\(9, 8, 7\)',

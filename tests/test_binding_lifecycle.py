@@ -1,5 +1,5 @@
 """
-Item 2 (binding lifecycle): ``from_blueprint`` is PURE construction — no DOM
+The binding lifecycle: ``from_blueprint`` is PURE construction — no DOM
 work; ``activate()`` attaches listeners at mount; ``destroy()``/``detach()``
 tear them down.  Listener bindings (EventBinding, ModelBinding, FormModelBinding)
 own their own attach/detach via the base ``Binding.activate()``/``destroy()``.

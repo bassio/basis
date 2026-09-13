@@ -5,10 +5,13 @@ chrome parts) to the client and registers the ``basis.plugins.shell`` package
 under the standard ``basis.plugins`` entry point, so it rides the same
 discovery/lifecycle path as any third-party plugin.
 
-P1 scope (ROADMAP-SHELL.md §10, simplified): behavior primitives + default
+P1 scope: behavior primitives + default
 chrome, composed with the ``Stack`` primitive (slot-based, shadcn copy-paste
-style). The ``$layout`` store plan is postponed. ``on_register`` is a no-op: the
-shell has no boot-time state to claim yet.
+style). The ``$layout`` store plan (the workspace pane tree) is postponed.
+``on_register`` is a no-op: the shell has no boot-time state to claim yet.
+
+The compact arrangement needs no store either: it is CSS, driven by the shared
+breakpoint contract, with ``$device.tier`` available for behaviour decisions.
 """
 from pathlib import Path
 
@@ -19,7 +22,7 @@ class ShellPlugin(BasisPlugin):
     """The shell plugin — no runtime dependencies (requires=[])."""
 
     def on_register(self, app) -> None:
-        # P1: the shell only serves its component files; it owns no stores or
+        # The shell only serves its component files; it owns no stores or
         # registry state at boot ($layout / $app_state are postponed).
         pass
 

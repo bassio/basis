@@ -248,7 +248,7 @@ async def _render_page_ssr(
                 pass
 
     # 3. The root app mounts inside the Page's own <body> region via
-    #    Page.mount_root_app() (§4.1 S1/S3) — no engine-side mount-region
+    #    Page.mount_root_app() — no engine-side mount-region
     #    lookup is needed; the Page locates its <body> itself.
 
     # 4. Optional DB session for the request (DBAppMixin apps)
@@ -279,16 +279,13 @@ async def _render_page_ssr(
     set_error_sink(error_collector)
     try:
         # 5. Mount the root component (if any — static pages have none).
-        #    §4.1 S1/S3 declarative root mount: the Page owns its root as a
-        #    nested ChildBinding under a hyphenated host tag in its <body>
-        #    app slot ("the root is just another component"). Every page
-        #    root gets a host tag — the root's declared hyphenated __tag__
-        #    or one kebab-derived from its class name — so ALL boot paths
-        #    (real Page subclasses AND synthesized @app.page shells) unify
-        #    here. Component styles live in-tree in the <head> (every Page
-        #    renders the component_style_items loop), so nothing is
-        #    re-injected; the legacy imperative body-injection path is gone
-        #    (§4.1 P5).
+        #    The Page owns its root as a nested ChildBinding under a hyphenated
+        #    host tag in its <body> app slot ("the root is just another
+        #    component"). Every page root gets a host tag — the root's declared
+        #    hyphenated __tag__ or one kebab-derived from its class name — so all
+        #    boot paths (real Page subclasses AND synthesized @app.page shells)
+        #    unify here. Component styles live in-tree in the <head> (every Page
+        #    renders the component_style_items loop), so nothing is re-injected.
         mounted_apps = []
         if root_component is not None:
             app = page_instance.mount_root_app()

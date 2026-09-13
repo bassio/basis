@@ -5,32 +5,25 @@ from basis.shared.element import Element, DocumentType
 from basis.shared.store import Store, attach_app_to_store, FRAMEWORK_STORE_NAMES
 from basis.shared.serialization import json_dumps_script_safe
 
-#: The client builds a Page's whole-document blueprint by parsing the template
-#: with a structure-preserving document parser (``DOMParser`` keeps
-#: ``<html>/<head>/<body>``; see ``client/component.py::
-#: _build_html_document_blueprint``). No string splitting of the raw template is
-#: needed or used — a browser ``<template>.innerHTML`` parse (the generic
-#: component path) would drop the document wrappers, and an ``XMLSerializer``
-#: round-trip would double-encode raw-text (``<script>``/``<style>``) entities.
+#: A Page's client blueprint must come from a structure-preserving document
+#: parser: ``<template>.innerHTML`` drops the ``<html>/<head>/<body>`` wrappers,
+#: and an ``XMLSerializer`` round-trip double-encodes raw-text entities
+#: (``<script>``/``<style>``). See
+#: ``client/component.py::_build_html_document_blueprint``.
 
 
 
-#: M1.1 (ROADMAP-MOBILE.md) — framework mobile viewport base CSS.
+#: Framework mobile viewport base CSS.
 #:
-#: Document-level rules only. Component styles live in shadow roots and can
-#: never reach ``html``/``body``, so the handful of page-level mobile rules ship
-#: as a light-DOM ``<style id="basis-viewport">`` in ``<head>``. The block is
-#: deliberately neutral and theme-agnostic — safe for the fixed-viewport
-#: workbench *and* the document-flow site paradigm.
+#: Document-level rules only: component styles live in shadow roots and can never
+#: reach ``html``/``body``, so the page-level mobile rules ship as a light-DOM
+#: ``<style id="basis-viewport">`` in ``<head>``. Neutral and theme-agnostic —
+#: safe for the fixed-viewport workbench and the document-flow site paradigm.
 #:
-#: In-tree home (HYDRATION-WHOLEPAGE.md §4.1 P3 / category 2): the base
-#: ``Page.template()`` declares ``<style id="basis-viewport"
-#: text-content="{viewport_base_css}"></style>`` (see the ``viewport_base_css``
-#: class attribute). The CSS travels as runtime DATA through the
-#: ``text-content`` attribute binding (the proven ``ThemeProvider.tokens_css``
-#: pattern) — never as inline template text — so its ``{``/``}`` braces are
-#: never misread as ``{expr}`` fields, and both SSR and CSR render the block
-#: from the same constant.
+#: The block reaches the template as DATA through the ``text-content`` attribute
+#: binding (see the ``viewport_base_css`` class attribute), never as inline
+#: template text: ``{``/``}`` inside a raw-text element would be parsed as
+#: ``{expr}`` fields.
 _VIEWPORT_BASE_CSS = """\
 /* basis mobile viewport base */
 html {
@@ -40,7 +33,7 @@ html {
     text-size-adjust: 100%;
 }
 button, a, input, select, textarea, [role="button"] {
-    /* no double-tap zoom, no legacy 300ms tap delay on interactive controls */
+    /* no double-tap zoom, no 300ms tap delay on interactive controls */
     touch-action: manipulation;
 }
 """
@@ -136,11 +129,10 @@ def _hyphen_tag(name: str) -> str:
     """Kebab-case a class name into a hyphenated host tag (``HelloBasis`` →
     ``hello-basis``, ``AppContainer`` → ``app-container``).
 
-    Used by :meth:`Page._declarative_root_tag` to derive a deterministic
-    declarative host tag for a root component that does not declare a
-    hyphenated ``__tag__`` (§4.1 P5: every boot path through a Page). Both the
-    server and the client derive it from the same class name, so hydration
-    paths match.
+    Used by :meth:`Page._declarative_root_tag` to derive a deterministic host
+    tag for a root component that does not declare a hyphenated ``__tag__``.
+    Server and client derive it from the same class name, so hydration paths
+    match.
     """
     import re
 
@@ -153,10 +145,9 @@ def _replace_comment_anchors(html_root, anchor_data, elements):
     """Replace every ``<!-- anchor_data -->`` comment node under the server tree
     ``html_root`` with ``elements`` (each a detached ``Element``).
 
-    Comment anchors are the §4.1 P3 category-1 mechanism: they pin where
-    assembly-time chrome belongs in the Page template — the user stylesheet
-    ``<link>``s at the very END of ``<body>``. The anchors are inert (comments
-    never count toward hydration numbering), so replacing them before the
+    Comment anchors pin where assembly-time chrome belongs in the Page template
+    — the user stylesheet ``<link>``s at the very END of ``<body>``. Comments
+    never count toward hydration numbering, so replacing them before the
     stamping pass can never shift an ``h:``/``b:`` path.
 
     When ``elements`` is empty the anchor comment is removed too, so prod
@@ -200,15 +191,17 @@ class Page(Component):
         "interactive-widget=resizes-content"
     )
     #: The framework mobile viewport base CSS rendered into
-    #: ``<style id="basis-viewport">`` in the base template's ``<head>`` (via a
-    #: ``text-content`` binding — category 2, §4.1 P3). Kept as a data field so
-    #: it can be overridden per-page; defaults to the neutral ``_VIEWPORT_BASE_CSS``.
+    #: ``<style id="basis-viewport">`` in the base template's ``<head>``. A data
+    #: field so it can be overridden per-page; defaults to ``_VIEWPORT_BASE_CSS``.
     viewport_base_css: str = _VIEWPORT_BASE_CSS
-    #: Dev-mode marker rendered as an in-tree ``<meta name="basis-mode">`` via an
-    #: ``if``-binding.
+    #: Dev-mode marker — ``True`` only when the HMR dev watcher runs. Bound into
+    #: the always-present in-tree ``<meta name="basis-dev-mode"
+    #: content="{basis_dev_mode}">`` head meta as an ATTRIBUTE binding (the
+    #: ``content`` value carries the mode, ``True``/``False``), so no
+    #: ``if``-binding anchor is needed in ``<head>``.
     basis_dev_mode: bool = False
-    #: iOS standalone meta (Decision G, ROADMAP-MOBILE M1.1): the three
-    #: ``apple-mobile-web-app-*`` tags are emitted into the ``<head>`` when on.
+    #: iOS standalone meta: the three ``apple-mobile-web-app-*`` tags are
+    #: emitted into the ``<head>`` when on.
     #: Default-on is harmless (they are inert until the page is added to the
     #: home screen, and they are what make an installed app fullscreen with a
     #: sane status bar); set ``False`` to omit all three.
@@ -221,35 +214,25 @@ class Page(Component):
     apple_status_bar_style: str = "black-translucent"
     root_component = None
     stores = []
-    #: User stylesheet URLs assembled at the very END of ``<body>`` — AFTER the
-    #: body-mounted app and the ``<head>`` component styles — so they load later
-    #: in the document and win the cascade at equal specificity (the "your CSS
-    #: comes later" rule). The base ``Page.template()`` body carries a
-    #: ``<!-- basis:user-stylesheets -->`` anchor there; :meth:`Page._render`
-    #: replaces it with these ``<link rel="stylesheet">`` elements at assembly
-    #: time. This is the framework-native home for a user override stylesheet
-    #: (e.g. a generated ``static/app.css``).
-    #:
-    #: §4.1 P4 note (2026-09-07): an in-tree body ``<link>`` LOOP is the clean
-    #: end-state but requires the APP to be a declarative template child — an
-    #: engine-mounted app and a declarative loop at the same trailing body slot
-    #: race (browser-verified). Until that final architecture lands, the links
-    #: are server-assembled at this anchor.
+    #: User stylesheet URLs, assembled last in ``<body>`` — after the app and the
+    #: ``<head>`` component styles — so they load later and win the cascade at
+    #: equal specificity (the "your CSS comes later" rule). The base template
+    #: carries a ``<!-- basis:user-stylesheets -->`` anchor there and
+    #: :meth:`Page._render` replaces it with these ``<link rel="stylesheet">``.
+    #: This is the framework-native home for a user override stylesheet (e.g. a
+    #: generated ``static/app.css``); a ``<link>`` loop would be cleaner but
+    #: races the app at the same trailing body slot.
     stylesheets: tuple[str, ...] = ()
 
     def component_style_items(self):
         """Ordered component style items for the in-tree ``<head>``
-        component-style loop (HYDRATION-WHOLEPAGE.md §4.1 P3).
+        component-style loop.
 
         Each item is a dict the loop template reads: ``uid`` (stable
         reconciliation key), ``name`` (component class), ``extra`` (``''`` for
         the main stylesheet, else the ``@extra_style`` name) and ``css`` (the
-        formatted stylesheet). The set/order comes from
-        ``BaseComponent._ordered_style_sources`` — the same producer that once
-        fed the legacy body injection — so the in-tree and injected homes could
-        never diverge. Since §4.1 P5 every boot path goes through a Page
-        (synthesized ``@app.page`` shells included), so component styles always
-        render in-tree here and the legacy body injection is gone.
+        formatted stylesheet). The set and order come from
+        ``BaseComponent._ordered_style_sources``.
 
         Server vs client parity is guaranteed by making the SERVED page head
         authoritative, not by enumerating a shared registry: the server renders
@@ -277,8 +260,8 @@ class Page(Component):
         ]
 
     def apple_meta_items(self):
-        """Ordered iOS standalone meta items (Decision G, ROADMAP-MOBILE M1.1)
-        for the base template's keyed head loop.
+        """Ordered iOS standalone meta items for the base template's keyed head
+        loop.
 
         One ``{key, name, content}`` dict per ``apple-mobile-web-app-*`` tag;
         ``[]`` when ``Page.apple_web_app`` is False (the loop renders nothing —
@@ -318,23 +301,27 @@ class Page(Component):
         API is ``PageResponse.from_page`` / ``render_page``."""
         # Instantiate the page's stores — its explicit ``stores`` subset, or all
         # auto-discovered stores when empty — so they exist before the server
-        # renders and serialize cleanly into the initial state. Runs for both SSR
-        # and CSR (the server constructs the stores in either mode; only the old
-        # code gated this to SSR). Registry-guarded and idempotent.
+        # renders and serialize cleanly into the initial state. Registry-guarded
+        # and idempotent.
         store_refs = getattr(cls, "stores", None) or Store.all_names()
         for name in _page_store_names(store_refs):
             if name not in Store._registry:
                 store_instance = Store.resolve(name)
                 if name == "router" and request is not None and hasattr(request, "url"):
                     store_instance.current_path = request.url.path
-        # Framework document-meta store ($meta): a Page-level default exactly
-        # like the plugin registry — guaranteed to exist at mount so the base
-        # template's head `<meta for>` loop always binds it. It is empty by
-        # default (empty ``items`` → the loop renders nothing). FRAMEWORK_
-        # STORE_NAMES also serializes it on strict ``Page.stores`` pages.
+        # Framework control-plane stores ($meta / $device / $network) are
+        # guaranteed to exist at mount, like the plugin registry. $meta's head
+        # `<meta for>` loop always binds it (empty items render nothing);
+        # $device / $network carry neutral defaults that client probes overwrite
+        # after mount. FRAMEWORK_STORE_NAMES also serializes them on strict
+        # ``Page.stores`` pages.
         from basis.shared.meta import ensure_meta_store
+        from basis.shared.device import ensure_device_store
+        from basis.shared.network import ensure_network_store
 
         ensure_meta_store()
+        ensure_device_store()
+        ensure_network_store()
         container = Element("html", {}, list())
         
         attributes = {"title": cls.title,
@@ -344,9 +331,9 @@ class Page(Component):
                       "initial_state_json": cls.initial_state_json,
                       "render_mode": cls.render_mode,
                       "viewport": cls.viewport,
-                      # Dev-mode marker: bound at MOUNT time so the template's
-                      # basis_dev_mode if-binding evaluates once (no mid-render
-                      # re-insert) — True only when the HMR dev watcher runs.
+                      # Dev-mode marker: bound at MOUNT time (True only when the
+                      # HMR dev watcher runs); the head meta's
+                      # content="{basis_dev_mode}" attribute binding reads it.
                       "basis_dev_mode": bool(
                           request is not None
                           and getattr(getattr(request, "app", None),
@@ -363,15 +350,12 @@ class Page(Component):
         """The hyphenated host ``__tag__`` this Page mounts its root app under,
         or ``None`` when the Page has no root (static page).
 
-        Declarative root mount (HYDRATION-WHOLEPAGE.md §4.1 S1 + S3): the Page
-        owns its root as a nested ``ChildBinding`` under a hyphenated host tag
-        in its ``<body>`` app slot — "the root is just another component". A
-        root that declares a hyphenated ``__tag__`` mounts under it (e.g. jotter
-        ``AppContainer.__tag__ = "app-container"``). A root that does NOT
-        declare one gets a kebab-case tag derived from its class name, so every
-        boot path (real ``Page`` subclasses AND synthesized ``@app.page``
-        shells) mounts declaratively through :meth:`Page.mount_root_app` — there
-        is no legacy imperative engine path left to fall back to (§4.1 P5).
+        The Page owns its root as a nested ``ChildBinding`` under a hyphenated
+        host tag in its ``<body>`` app slot — the root is just another
+        component. A root that declares a hyphenated ``__tag__`` mounts under it
+        (e.g. jotter ``AppContainer.__tag__ = "app-container"``); one that does
+        not gets a kebab-case tag derived from its class name, so every boot
+        path mounts declaratively through :meth:`Page.mount_root_app`.
         """
         root_component = getattr(cls, "root_component", None)
         if root_component is None:
@@ -386,7 +370,7 @@ class Page(Component):
 
     def mount_root_app(self):
         """Declaratively mount this Page's root component into its ``<body>``
-        app slot as a real nested child (HYDRATION-WHOLEPAGE.md §4.1 S1/S3).
+        app slot as a real nested child.
 
         Replaces the inert ``<!-- basis:app-root -->`` slot marker with a live
         ``<{root_tag}>`` element and mounts the root component into it via a
@@ -397,12 +381,9 @@ class Page(Component):
         providers mount ahead of it exactly as :meth:`BaseComponent.mount_with_providers`
         mounts them.
 
-        The host tag is the root's declared hyphenated ``__tag__`` when it has
-        one; otherwise it is kebab-derived from the root class name, and the
-        host is given ``display: contents`` so a root that did not opt into the
-        declarative contract (e.g. a ``@app.page`` quickstart component whose
-        template is plain content) keeps its original layout — the host adds no
-        box. A root that DECLARES its tag styles its own host (the
+        A derived host is given ``display: contents`` so a root that did not opt
+        into the declarative contract keeps its original layout — the host adds
+        no box. A root that DECLARES its tag styles its own host (the
         ``ui-theme-provider { display: contents }`` pattern, e.g. jotter
         ``AppContainer``).
 
@@ -436,8 +417,8 @@ class Page(Component):
             return None
 
         # Providers first (appended), then the root host, then relocate the
-        # whole block to the app-root slot and drop the marker comment — the
-        # legacy imperative page-mount ordering, minus the comment.
+        # whole block to the app-root slot and drop the marker comment, so the
+        # app stays one deterministic node ordered before the trailing links.
         ref = _container_last_child(body)
         anchor = _find_anchor_comment(body, "basis:app-root")
         providers = _mount_root_providers(root_component, body)
@@ -477,7 +458,7 @@ class Page(Component):
         <meta charset="UTF-8" />
         <meta name="viewport" content="{viewport}" />
         <meta name="basis-render-mode" content="{render_mode}" />
-        <meta name="basis-mode" content="dev" if="{basis_dev_mode}" />
+        <meta name="basis-dev-mode" content="{basis_dev_mode}" />
 
         <title>{title}</title>
 
@@ -500,16 +481,10 @@ class Page(Component):
         <!-- component styles -->
         <style text-content="{item['css']}" for="item" in="{component_style_items()}" key="uid" data-component-class="{item['name']}" data-extra-style="{item['extra']}"></style>
 
-        <!-- document meta ($meta): live, name-keyed <meta> tags contributed by
-             plugins/stores (e.g. theme-color follows $theme). A Page-owned keyed
-             LoopBinding kept alive by whole-page hydration — an empty store
-             renders nothing (byte-stable), and $meta is a Page-guaranteed
-             default like the plugin registry (MOBILE-M1.1-PLAN.md B.9). -->
+        <!-- document meta ($meta) -->
         <meta for="m" in="{$meta.items}" key="key" name="{m['name']}" content="{m['content']}" />
 
-        <!-- iOS standalone meta (Decision G): a keyed loop over
-             Page.apple_meta_items() — apple_web_app=False renders nothing.
-             Loop items are direct <head> children (no if-anchor <div>). -->
+        <!-- iOS standalone meta -->
         <meta for="m" in="{apple_meta_items()}" key="key" name="{m['name']}" content="{m['content']}" />
     </head>
     <body>
@@ -576,25 +551,20 @@ class Page(Component):
     def _mount_document_csr(cls, document=None):
         """Client-only: mount the page for a CSR document.
 
-        CSR head half-hydration (§4.1 P2): the served static shell is kept
-        as-is (no FOUC / double head — the pyscript scripts are never
-        re-inserted), but the Page's OWN ``<head>`` bindings are staged and
-        re-pointed at the LIVE ``document.head`` (``h:`` region) — title,
-        viewport meta, render-mode meta, initial-state script, the
-        component-style loop and the dev-mode meta — so a title/meta a page
-        changes after load updates the real DOM in CSR mode too. (The
-        ``<body>`` chrome — the user stylesheet ``<link>``s — is NOT a Page
-        binding in CSR: it is server-assembled at the ``basis:user-stylesheets``
-        anchor and adopted as static body; only SSR re-points the whole
-        document.)
+        The served static shell is kept as-is (no FOUC, no double head — the
+        pyscript scripts are never re-inserted), but the Page's OWN ``<head>``
+        bindings are staged and re-pointed at the LIVE ``document.head`` (the
+        ``h:`` region): title, viewport meta, render-mode meta, initial-state
+        script, the component-style loop and the dev-mode meta. The ``<body>``
+        chrome (the user stylesheet ``<link>``s) is not a Page binding in CSR —
+        it is server-assembled at the ``basis:user-stylesheets`` anchor and
+        adopted as static body.
 
-        The app itself is client-RENDERED (not hydrated): every root mounts
-        declaratively (§4.1 S1/S3) — the staged Page's ``__element__`` already
-        re-points at the live ``<html>`` (set by ``_hydrate_page_head`` →
-        ``initialize_ssr`` → ``set_selfbinding``), so ``mount_root_app()``
-        mounts it into the LIVE ``document.body`` under its host tag (declared
-        or derived) — the SAME body shape SSR pre-renders (§2.1 equivalence).
-        Returns the mounted root component (or ``None`` for a static page).
+        The app itself is client-RENDERED, not hydrated: the staged Page's
+        ``__element__`` already points at the live ``<html>``, so
+        ``mount_root_app()`` mounts the root into the LIVE ``document.body``
+        under its host tag — the same body shape SSR pre-renders. Returns the
+        mounted root component (or ``None`` for a static page).
 
         ``document`` is the caller's PyScript ``document`` (this module is
         server-importable, so it cannot import ``pyscript`` at module scope);
@@ -682,14 +652,12 @@ class Page(Component):
             # every page regardless of the page's store subset.
             names |= set(FRAMEWORK_STORE_NAMES)
 
-            # Phase 1 — attach app-bound stores and run every store's per-request
-            # pref hook (``apply_request``, e.g. ``$theme`` reads its
-            # ``basis_theme`` cookie) BEFORE any store is serialized. A request
-            # hook that CONTRIBUTES to another store (``$theme`` →
-            # ``$meta`` theme-color, ROADMAP-MOBILE M1.1) must have run before
-            # that store serializes — two-phase keeps it deterministic
-            # regardless of set-iteration order (the SSR engine already sweeps
-            # apply_request ahead of serialization).
+            # Attach app-bound stores and run every store's per-request hook
+            # (``apply_request``, e.g. ``$theme`` reading its ``basis_theme``
+            # cookie) BEFORE any store is serialized: a hook that CONTRIBUTES to
+            # another store (``$theme`` → ``$meta`` theme-color) must have run
+            # first, and two phases keep that deterministic regardless of
+            # set-iteration order.
             for name in names:
                 instance = Store._registry.get(name) or Store.resolve(name)
                 # App-bound stores (``_requires_app``, e.g. ``$plugins``) hold a
@@ -705,37 +673,29 @@ class Page(Component):
                     except Exception:
                         pass
 
-            # Phase 2 — serialize all stores (request hooks already applied).
+            # Serialize every store (request hooks already applied).
             for name in names:
                 instance = Store._registry.get(name) or Store.resolve(name)
                 initial_state[name] = instance.serialize()
             if initial_state:
-                # Script-safe JSON for embedding in <script type="application/json">.
-                # The page template HTML-escapes the interpolated value (text
-                # escaping turns `&` into `&amp;`), but script content is NOT
-                # entity-decoded by the browser — so the client's
-                # json.loads(textContent) would hydrate the ESCAPED string
-                # (e.g. `&amp;` instead of `&`). json_dumps_script_safe escapes
-                # `<`, `>` and `&` as \uXXXX sequences: they survive template
-                # escaping unchanged, `</script>` can't break out, and
-                # json.loads decodes them back to the original characters.
+                # Script-safe JSON: the page template HTML-escapes the
+                # interpolated value (``&`` → ``&amp;``), but script content is
+                # NOT entity-decoded by the browser, so json.loads(textContent)
+                # would hydrate the ESCAPED string. json_dumps_script_safe
+                # escapes ``<``, ``>`` and ``&`` as \uXXXX sequences: they
+                # survive template escaping unchanged, ``</script>`` cannot
+                # break out, and json.loads decodes them back.
                 initial_state_json = json_dumps_script_safe(initial_state)
 
         self.initial_state_json = initial_state_json
 
-        # 2. Assembly-time chrome — §4.1 P3/P4 in-tree: the viewport <style>
-        #    (computed text-content), the component-style loop and the dev-mode
-        #    meta (an if-binding over basis_dev_mode, set from the request at
-        #    mount) are OWNED reactive nodes of the Page template. Only the user
-        #    stylesheet <link>s are still assembled by replacing a trailing body
-        #    comment anchor here (category 1) — the clean in-tree <link> loop
-        #    must wait for the final architecture where the app is a declarative
-        #    template child (see the stylesheets docstring). The client
-        #    pre-mount plan (stores/headless/entrypoint/page stores) no longer
-        #    lives in the DOM — it is served per-page via
-        #    /pyscript.json?url=<route> under ``basis.bootstrap`` and read from
-        #    ``pyscript.config`` (see basis/server/bootstrap.py::page_bootstrap
-        #    + client/entrypoint.py).
+        # Assembly-time chrome: the viewport <style>, the component-style loop
+        # and the dev-mode meta are owned reactive nodes of the Page template.
+        # Only the user stylesheet <link>s are assembled here, by replacing a
+        # trailing body comment anchor. The client pre-mount plan does not live
+        # in the DOM — it is served per-page via /pyscript.json?url=<route>
+        # (``basis.bootstrap``, see basis/server/bootstrap.py::page_bootstrap
+        # and client/entrypoint.py).
         _replace_comment_anchors(
             self.__element__,
             "basis:user-stylesheets",
@@ -745,13 +705,10 @@ class Page(Component):
             ],
         )
 
-        # Whole-page hydration (HYDRATION-WHOLEPAGE.md §4.1 P4): when the SSR
-        # engine asks, stamp the Page's OWN hydration surface on the fully
-        # assembled tree — the <head> region (h:) AND the <body> region (b:,
-        # rooted at <body> and covering the mounted app subtree) — so the served
-        # document carries the whole head+body surface the client keeps alive.
-        # CSR leaves this off (its shell is served static; the client half-
-        # hydrates and client-renders instead).
+        # When the SSR engine asks, stamp the Page's own hydration surface over
+        # the fully assembled tree — the <head> region (h:) and the <body> region
+        # (b:, rooted at <body>, covering the mounted app subtree). CSR leaves
+        # this off: its shell is served static and the client half-hydrates.
         if stamp_hydration:
             from basis.shared.hydration import apply_hydration_to_page
 
@@ -773,15 +730,14 @@ def _synthesize_page(
 
     Used by ``@app.page`` to turn a root
     Component into a page without the developer writing a ``Page`` subclass.
-    The synthesized class carries ``__synthesized__`` (informational only —
-    §4.1 P5 removed every behavioral fork on it): it is treated EXACTLY like a
-    real ``Page`` subclass — in-tree ``<head>`` component styles, a declarative
-    root child under its (declared or derived) host tag, whole-document ``h:``/
-    ``b:`` stamping — on both the server and the client. The per-page manifest
-    lists it under its root COMPONENT name, so it boots through the SAME single
-    client driver as a real Page (P0): the driver imports the component module
-    (whose client ``@app.page`` decoration registered the shell inputs) and
-    rebuilds this class before mounting.
+    The synthesized class carries ``__synthesized__`` (informational only) and is
+    treated exactly like a real ``Page`` subclass: in-tree ``<head>`` component
+    styles, a declarative root child under its (declared or derived) host tag,
+    whole-document ``h:``/``b:`` stamping. The per-page manifest lists it under
+    its root COMPONENT name, so it boots through the same client driver as a real
+    Page: the driver imports the component module (whose client ``@app.page``
+    decoration registered the shell inputs) and rebuilds this class before
+    mounting.
 
     Because the decoration takes no page-level ``stores``, they cannot reach the
     browser here — a shell that declares its own ``root_component`` or ``stores``

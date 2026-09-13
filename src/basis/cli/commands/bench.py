@@ -1,5 +1,5 @@
 """
-``basis bench`` — run the Basis benchmark suite (ROADMAP-PERFORMANCE.md, T0).
+``basis bench`` — run the Basis benchmark suite.
 
 Runs the framework's realistic benchmark scenarios (mount N components, mutate
 M fields, 1k/10k-row loop, SSR page hydration, store fan-out, template
@@ -97,6 +97,5 @@ def bench(
     console.print(table)
     console.print(
         f"\n[dim]{len(results)} scenario(s) × {repeats} iteration(s). "
-        "Lower is better. Full stats (min/max/stdev) via --json. "
-        "Add regression gates after T1 lands (ROADMAP-PERFORMANCE.md T0).[/]"
+        "Lower is better. Full stats (min/max/stdev) via --json.[/]"
     )

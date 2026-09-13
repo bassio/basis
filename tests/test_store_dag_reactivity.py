@@ -104,6 +104,56 @@ class TestReactiveObjectBasics:
         assert "a" in calls
         assert "b" in calls
 
+    def test_refrain_skips_writes_that_do_not_move_the_value(self):
+        """A batch must not dirty the graph for a redundant write."""
+        obj = ReactiveObject()
+        obj.a = 1
+        calls = []
+        obj._dag.add_effect("effect_a", lambda: calls.append("a"), ["a"])
+        calls.clear()
+
+        with obj.refrain() as r:
+            r.a = 1  # identical
+        assert calls == []
+
+        with obj.refrain() as r:
+            r.a = 2  # real change
+        assert calls == ["a"]
+
+    def test_refrain_still_triggers_new_attributes(self):
+        obj = ReactiveObject()
+        calls = []
+        obj._dag.add_effect("effect_a", lambda: calls.append("a"), ["a"])
+        calls.clear()
+
+        with obj.refrain() as r:
+            r.a = 1  # not previously set
+        assert calls == ["a"]
+
+    def test_refrain_treats_a_new_container_identity_as_a_change(self):
+        """Container semantics match ``__setattr__``: identity, not content."""
+        obj = ReactiveObject()
+        obj.items = [1]
+        calls = []
+        obj._dag.add_effect("effect_items", lambda: calls.append("i"), ["items"])
+        calls.clear()
+
+        with obj.refrain() as r:
+            r.items = [1]
+        assert calls == ["i"]
+
+    def test_refrain_force_react_bypasses_the_change_guard(self):
+        obj = ReactiveObject()
+        obj.a = 1
+        calls = []
+        obj._dag.add_effect("effect_a", lambda: calls.append("a"), ["a"])
+        calls.clear()
+
+        with obj.refrain() as r:
+            r.a = 1
+            r.force_react("a")
+        assert calls == ["a"]
+
     def test_react_triggers_dag(self):
         obj = ReactiveObject()
         obj.x = 1

@@ -1,11 +1,10 @@
 """
-Whole-page hydration surface (HYDRATION-WHOLEPAGE.md No.2 / Option A) — server side.
+Whole-page hydration surface — server side.
 
 The Page is the whole-``<html>`` document shell and owns BOTH hydration regions:
 its ``<head>`` bindings are stamped ``h:`` (title / viewport meta / render-mode
 meta / initial-state script) and its ``<body>`` region — rooted at the
-``<body>`` element — is stamped ``b:`` over the mounted app subtree (§4.1 P4
-migrated the old app-rooted ``r:`` body walk to ``b:``, migrate-always). The
+``<body>`` element — is stamped ``b:`` over the mounted app subtree. The
 client can therefore keep the whole document alive against ONE ``h:`` + ``b:``
 map.
 
@@ -107,7 +106,7 @@ def test_ssr_body_region_is_b_rooted_and_disjoint_from_head():
     assert head_ids, "expected h: head markers"
     assert body_ids, "expected b: body markers"
     # Body region is rooted at the <body> element (b:0) with the app as its
-    # first countable child (b:0:0) — §4.1 P4 migrated r: → b: (migrate-always).
+    # first countable child (b:0:0).
     assert "b:0" in body_ids
     assert "b:0:0" in body_ids
     assert all(i.startswith("b:") for i in body_ids)

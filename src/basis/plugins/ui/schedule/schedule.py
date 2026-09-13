@@ -1,5 +1,6 @@
 import json
-from basis.shared.component import Component, IS_CLIENT, py_event
+from basis.shared.component import Component, IS_CLIENT
+from basis.shared.js import py_event
 from basis.shared.reactive import computed
 
 if IS_CLIENT:
@@ -238,7 +239,6 @@ class Schedule(Component):
             if not isinstance(entry, dict):
                 continue
             if entry.get(ad_attr):
-                # Build summary from columns for chip display
                 parts = [str(entry.get(c.get("key", ""), "")) for c in cols if entry.get(c.get("key", ""), "")]
                 summary = " · ".join(parts) if parts else f"Event {idx + 1}"
                 ad = {"idx": idx, "summary": summary}

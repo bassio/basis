@@ -1,5 +1,5 @@
 """
-Item 4 of the bindings review (BINDINGS-REVIEW.md): ``bind="{field}"`` is a
+``bind="{field}"`` is a
 self-attaching ModelBinding.
 
 The old design compiled ``bind`` to TWO blueprints (ModelBinding +

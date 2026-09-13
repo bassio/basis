@@ -1,6 +1,5 @@
 """
-Server-side tests for the ``@js_component`` decorator / ``JsComponent`` base
-(ROADMAP-AMBITIOUS.md Bet 5; JS-COMPONENT-PLAN.md).
+Server-side tests for the ``@js_component`` decorator / ``JsComponent`` base.
 
 Server-side only: verifies the decorator metadata, the MRO injection (user lifecycle
 overrides win), the registry, that a decorated component still SSR-renders its
@@ -139,7 +138,7 @@ def test_framework_manifest_registers_js_component_modules():
     d = client.get("/pyscript.json").json()
     files = d.get("files", {})
     assert any(k.endswith("/basis/shared/js_component.py") for k in files)
-    assert any(k.endswith("/basis/client/js_bridge.py") for k in files)
+    assert any(k.endswith("/basis/client/js_runtime.py") for k in files)
 
 
 def test_js_component_name_default_and_explicit():

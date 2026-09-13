@@ -1,4 +1,4 @@
-"""The declarative question tree + wizard driver — P2 of INIT-SHELL-PLAN.md.
+"""The declarative question tree + wizard driver.
 
 The P2 gate: the question-tree model is fully testable without a TTY
 (``iter_active_questions`` gating + ``build_config``), and ``run_wizard`` walks

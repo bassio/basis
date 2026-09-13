@@ -2,12 +2,12 @@ import re
 from basis.shared.store import Store
 from basis.shared.component import Component, IS_CLIENT, client
 from basis.shared.context import ContextVarProxyDict
+from basis.shared.js import Listener
 
 if IS_CLIENT:
-    from pyscript import window, ffi
+    from pyscript import window
 else:
     window = None
-    ffi = None
 
 
 class RouterStore(Store):
@@ -19,11 +19,12 @@ class RouterStore(Store):
         self.params = {}
         if window:
             self.current_path = window.location.pathname
-            
-            def on_popstate(event):
-                self.current_path = window.location.pathname
-                
-            window.addEventListener("popstate", ffi.create_proxy(on_popstate))
+            # Held for the store's lifetime: the browser keeps calling the proxy until
+            # it is freed, so a dropped one is a handler that can no longer run.
+            self._popstate = Listener(window, "popstate", self._on_popstate)
+
+    def _on_popstate(self, event=None):
+        self.current_path = window.location.pathname
         
     def navigate(self, path: str):
         if window and path != self.current_path:
@@ -42,7 +43,6 @@ class Route(Component):
     def __init__(self):
         super().__init__()
 
-        # Ensure we subscribe to router.current_path
         Component.S['router'].add_subscription(self, "current_path")
         self.__dict__['router'] = Component.S['router']
 
@@ -71,8 +71,6 @@ class Route(Component):
         # Trigger an initial check
         if "path" in self.__fields__:
             self.__fields__.pop("path")
-
-        #print("FALLBACK", type(self.fallback), self.fallback)
 
     def is_path_matching(self, current_path):
         if self.path == "*":
@@ -137,7 +135,6 @@ class Route(Component):
             # If this is a fallback route, we must check if any standard route matches
             if is_fallback:
                 for path, route in Route._route_registry.items():
-                    #print("path, route", path, route)
                     if route is self:
                         continue
                     

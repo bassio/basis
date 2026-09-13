@@ -1,5 +1,5 @@
 """
-Shell plugin (P1) tests — ROADMAP-SHELL.md §10 (simplified slot-based design).
+Shell plugin tests — slot-based shell primitives + default chrome.
 
 Covers: plugin registration (name, requires=[], static mount) + VFS serving of
 the shell files; the ``Stack`` primitive (slotted children); the ``Splitter``
@@ -78,7 +78,7 @@ def test_plugin_registers_and_serves_serving_mount():
     app = _app_with_shell()
 
     assert shell_plugin.name == "shell"
-    assert shell_plugin.requires == ["theme"]  # shell chrome is token-only (ROADMAP-THEMING)
+    assert shell_plugin.requires == ["theme"]  # shell chrome is token-only
     assert shell_plugin._app is app
 
     mounts = [getattr(r, "path", None) for r in app._component_routes]
@@ -349,7 +349,8 @@ def test_activity_bar_renders_top_and_bottom_slots():
 
     html = _render(app, Root, "/test_activitybar.py")
     assert 'class="shell-activity-bar"' in html
-    assert "flex: 0 0 56px" in html
+    # Sizing travels as a custom property so the compact breakpoint can restate it.
+    assert "--shell-activitybar-width: 56px" in html
     # Both groups render, and each named slot received its content.
     assert 'class="shell-activity-top"' in html
     assert 'class="shell-activity-bottom"' in html
@@ -375,7 +376,8 @@ def test_title_bar_renders_height_and_border():
 
     html = _render(app, Root, "/test_titlebar.py")
     assert 'class="shell-title-bar"' in html
-    assert "flex: 0 0 64px" in html
+    # Sizing travels as a custom property so the compact breakpoint can restate it.
+    assert "--shell-titlebar-height: 64px" in html
     assert 'data-border="none"' in html
 
 
@@ -394,13 +396,13 @@ def test_parts_render_with_props():
 
     html = _render(app, Root, "/test_parts.py")
     assert 'class="shell-status-bar"' in html
-    assert "flex: 0 0 30px" in html
+    assert "--shell-statusbar-height: 30px" in html
     assert "<shell-sidebar-right" in html
     assert 'class="shell-sidebar"' in html
     assert "--sidebar-expanded: 200px" in html
     assert 'data-border="left"' in html
     assert 'class="shell-tabs-bar"' in html
-    assert "flex: 0 0 40px" in html
+    assert "--shell-tabsbar-height: 40px" in html
     assert 'class="shell-main-container"' in html
 
 
@@ -461,7 +463,7 @@ def test_app_shell_renders_full_frame_with_prop_pass_through():
     assert 'class="shell-status-bar"' in html
     # snake_case attrs pass through: AppShell → Workspace → Sidebar width.
     assert "--sidebar-expanded: 320px" in html
-    assert "flex: 0 0 64px" in html
+    assert "--shell-titlebar-height: 64px" in html
 
 
 def test_app_shell_renders_all_parts_as_components():

@@ -30,14 +30,53 @@ inner box before resizing.
 
 This is the canonical resize primitive: ``basis.plugins.ui.split_pane``
 (``SplitPane`` / ``SplitPaneItem`` / ``SplitHandle``) is slated for deprecation
-in favour of ``Stack`` + ``Splitter`` once existing apps migrate (ROADMAP-SHELL.md §5).
+in favour of ``Stack`` + ``Splitter`` once existing apps migrate.
+
+At the compact breakpoint the divider is dropped: a 4px drag target is not a touch
+affordance, and a phone frame stacks its panes instead of dividing them (see the
+``workbench`` arrangement in ``basis.plugins.shell.stack``).
 """
+from basis.shared.breakpoints import compact_block
 from basis.shared.component import Component, IS_CLIENT
 
 if IS_CLIENT:
     from pyscript import window
 else:
     window = None
+
+_BASE_CSS = """
+shell-splitter {
+    display: contents;
+}
+
+.shell-splitter {
+    box-sizing: border-box;
+    flex: 0 0 var(--shell-splitter-size, 4px);
+    background: var(--border-color, #3a3a52);
+    background-clip: padding-box;
+    position: relative;
+    z-index: 10;
+    touch-action: none;  /* pointer events drive the drag, not scroll */
+}
+
+.shell-splitter[direction="horizontal"] {
+    cursor: col-resize;
+}
+
+.shell-splitter[direction="vertical"] {
+    cursor: row-resize;
+}
+
+.shell-splitter:hover, .shell-splitter[data-dragging="true"] {
+    background: var(--accent-color, #007acc);
+}
+"""
+
+_COMPACT_CSS = """
+.shell-splitter {
+    display: none;
+}
+"""
 
 
 class Splitter(Component):
@@ -153,35 +192,9 @@ class Splitter(Component):
         except Exception:
             pass
 
-    def style(self):
-        """
-        shell-splitter {
-            display: contents;
-        }
-
-        .shell-splitter {
-            box-sizing: border-box;
-            background: var(--border-color, #3a3a52);
-            background-clip: padding-box;
-            position: relative;
-            z-index: 10;
-            touch-action: none;  /* pointer events drive the drag, not scroll */
-        }
-
-        .shell-splitter[direction="horizontal"] {
-            cursor: col-resize;
-        }
-
-        .shell-splitter[direction="vertical"] {
-            cursor: row-resize;
-        }
-
-        .shell-splitter:hover, .shell-splitter[data-dragging="true"] {
-            background: var(--accent-color, #007acc);
-        }
-        """
+    style = _BASE_CSS + compact_block(_COMPACT_CSS)
 
     def template(self):
         """
-        <div class="shell-splitter" direction="{direction}" style="flex: 0 0 {size};" onpointerdown="{on_pointer_down}" onpointermove="{on_pointer_move}" onpointerup="{on_pointer_up}" onpointercancel="{on_pointer_up}"></div>
+        <div class="shell-splitter" direction="{direction}" style="--shell-splitter-size: {size};" onpointerdown="{on_pointer_down}" onpointermove="{on_pointer_move}" onpointerup="{on_pointer_up}" onpointercancel="{on_pointer_up}"></div>
         """

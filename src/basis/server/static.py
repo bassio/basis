@@ -95,7 +95,6 @@ class BasisStaticFiles(StaticFiles):
                     scope=scope,
                 )
 
-        # Get the standard response first
         response = await super().get_response(path, scope)
         
         # Only transform .py files that were found (status 200)
@@ -105,7 +104,6 @@ class BasisStaticFiles(StaticFiles):
             if full_path and os.path.isfile(full_path):
                 mtime = os.path.getmtime(full_path)
                 
-                # Check cache
                 if full_path in self._cache:
                     cached_mtime, cached_content = self._cache[full_path]
                     if cached_mtime == mtime:
@@ -115,11 +113,9 @@ class BasisStaticFiles(StaticFiles):
                             scope=scope,
                         )
                 
-                # Read and transform
                 try:
                     transformed = self.get_transformed_py_source(full_path)
                     
-                    # Update cache
                     self._cache[full_path] = (mtime, transformed)
 
                     return conditional_response(
@@ -196,7 +192,7 @@ class BasisStaticFilesPyc(BasisStaticFiles):
 
 
 # ──────────────────────────────────────────────
-# Offline PyScript/Pyodide bundle (ROADMAP-PERFORMANCE.md T1 #10)
+# Offline PyScript/Pyodide bundle
 # ──────────────────────────────────────────────
 
 #: ``max-age`` for the immutable offline bundle (1 year).

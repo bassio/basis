@@ -13,6 +13,8 @@ import asyncio
 
 from pyscript import window, document, ffi
 
+from basis.shared.js import Listener
+
 _LOADED: dict[str, object] = {}
 _REFS: dict[str, int] = {}
 
@@ -62,24 +64,13 @@ def wait_connected(element, callback) -> None:
             connected = False
         if not connected:
             return  # some other element connected; ours is still detached
-        try:
-            document.removeEventListener("basis:connected", proxy)
-        except Exception:
-            pass
+        listener.detach()
         callback()
 
-    proxy = ffi.create_proxy(_on_connected)
-    document.addEventListener("basis:connected", proxy)
+    listener = Listener(document, "basis:connected", _on_connected)
 
     def _dispose():
-        try:
-            document.removeEventListener("basis:connected", proxy)
-        except Exception:
-            pass
-        try:
-            proxy.destroy()
-        except Exception:
-            pass
+        listener.dispose()
 
     return _dispose
 
@@ -115,24 +106,13 @@ def wait_disconnected(element, callback) -> None:
             connected = True
         if connected:
             return  # some other element disconnected; ours is still in the doc
-        try:
-            document.removeEventListener("basis:disconnected", proxy)
-        except Exception:
-            pass
+        listener.detach()
         callback()
 
-    proxy = ffi.create_proxy(_on_disconnected)
-    document.addEventListener("basis:disconnected", proxy)
+    listener = Listener(document, "basis:disconnected", _on_disconnected)
 
     def _dispose():
-        try:
-            document.removeEventListener("basis:disconnected", proxy)
-        except Exception:
-            pass
-        try:
-            proxy.destroy()
-        except Exception:
-            pass
+        listener.dispose()
 
     return _dispose
 
@@ -227,8 +207,7 @@ async def _import_module(url: str):
         if not future.done():
             future.set_result(getattr(window, slot, None))
 
-    proxy = ffi.create_proxy(_on_loaded)
-    window.addEventListener(f"{slot}:loaded", proxy)
+    listener = Listener(window, f"{slot}:loaded", _on_loaded)
     try:
         await asyncio.wait_for(future, timeout=15)
         return future.result()
@@ -236,8 +215,7 @@ async def _import_module(url: str):
         log_error(f"timed out loading JS module: {url}")
         return None
     finally:
-        window.removeEventListener(f"{slot}:loaded", proxy)
-        proxy.destroy()
+        listener.dispose()
 
 
 def _to_js_arg(value):

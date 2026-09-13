@@ -42,6 +42,7 @@ dev = [
     "fastapi[standard]>=0.127.0",
     "uvicorn>=0.40.0",
     "pytest>=9.0.3",
+    "playwright>=1.48",
 ]
 
 [build-system]
@@ -55,4 +56,5 @@ packages = ["src/basis"]
 testpaths = ["tests"]
 markers = [
     "benchmark: Basis benchmark scenarios (ROADMAP-PERFORMANCE.md T0) — run with --bench; skipped by default.",
+    "browser: Playwright client-browser tests (ROADMAP-MOBILE.md M5.3a) — run with --browser; skipped by default.",
 ]

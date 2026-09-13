@@ -1,21 +1,17 @@
 """The official UI plugin — Basis's built-in component suite.
 
-Formerly the framework-core ``basis.ui`` package, mounted unconditionally at
-``/basis/ui/`` by ``bootstrap``. Now a plugin: it self-serves its component
-files to the client (via ``serving_dir`` / ``serving_mount``) and is registered
-through the standard ``basis.plugins`` entry point, exactly like any
-third-party plugin — so apps can also opt out of the component library by
-excluding the ``ui`` plugin.
+Self-serves its component files to the client (via ``serving_dir`` /
+``serving_mount``) and is registered through the standard ``basis.plugins``
+entry point, exactly like any third-party plugin — so apps can also opt out of
+the component library by excluding the ``ui`` plugin.
 
 Component families live directly under the plugin package (one directory per
-family, e.g. ``button/``). Theming is no longer part of this plugin — the
-token schema, ``ThemeStore`` and ``<ui-theme-provider>`` moved to the official
-``basis.plugins.theme`` plugin (ROADMAP-THEMING.md), which this plugin depends
-on (``requires=["theme"]``). The plugin itself carries no HTTP routes and no
+family, e.g. ``button/``). Theming lives in the separate official
+``basis.plugins.theme`` plugin, which this plugin depends on
+(``requires=["theme"]``). The plugin itself carries no HTTP routes and no
 boot-time store wiring: components are imported by app code (which registers
 their custom elements), and the ``$theme`` store is wired by the theme plugin
-(plus the app's own conventional ``stores/`` layout) — unchanged from the
-pre-migration behaviour.
+(plus the app's own conventional ``stores/`` layout).
 """
 
 from pathlib import Path

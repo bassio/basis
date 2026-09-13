@@ -1,6 +1,6 @@
 """The theme schema — the declarative token manifest.
 
-The theming contract (ROADMAP-THEMING.md §4.1): named, typed design tokens that
+The theming contract: named, typed design tokens that
 a theme declares and the framework turns into CSS variables. ``TOKEN_SLOTS`` is
 the single source of truth — ThemeStore's reactive token attrs, ThemeProvider's
 ``:root`` injection and a theme package's ``ThemeDefinition`` all speak the same
@@ -52,6 +52,14 @@ TOKEN_SLOTS: dict[str, str] = {
     "radius_lg": "size",
     "shadow_sm": "shadow",
     "shadow_md": "shadow",
+    # Safe-area insets (notch / home indicator). Defaults
+    # are ``env(safe-area-inset-*)`` (0 on desktops and un-notched phones), so
+    # screen-edge chrome pads with ``var(--safe-area-*)`` and is notch-aware
+    # through the theme — one answer, every component inherits.
+    "safe_area_top": "size",
+    "safe_area_right": "size",
+    "safe_area_bottom": "size",
+    "safe_area_left": "size",
 }
 
 
@@ -63,6 +71,9 @@ def css_var(slot: str) -> str:
 # Lightweight value validation — dev warnings, never errors (a bad value
 # degrades to the default, matching the "themes are overlays" rule).
 _SIZE_UNITS = ("px", "rem", "em", "%", "vw", "vh", "ch", "ex", "pt", "pc")
+#: CSS value functions that resolve to a length and must pass the "size" check
+#: (e.g. ``env(safe-area-inset-top, 0px)``, ``calc(100dvh - 48px)``).
+_SIZE_FUNCS = ("env(", "var(", "calc(", "min(", "max(", "clamp(")
 
 
 def _valid_for(kind: str, value: Any) -> bool:
@@ -75,6 +86,8 @@ def _valid_for(kind: str, value: Any) -> bool:
     if kind == "size":
         v = value.strip()
         if v == "0":
+            return True
+        if v.lower().startswith(_SIZE_FUNCS):
             return True
         return any(v.endswith(u) for u in _SIZE_UNITS)
     if kind == "font":
@@ -114,6 +127,12 @@ class ThemeTokens:
     radius_lg: str | None = None
     shadow_sm: str | None = None
     shadow_md: str | None = None
+    # Safe-area insets — default to the browser's env() values; a theme may
+    # override them (e.g. a fixed inset for a kiosk shell).
+    safe_area_top: str | None = None
+    safe_area_right: str | None = None
+    safe_area_bottom: str | None = None
+    safe_area_left: str | None = None
 
     @classmethod
     def from_dict(
@@ -150,7 +169,7 @@ class ThemeTokens:
 class ThemeDefinition:
     """A named theme — the manifest a theme package contributes.
 
-    The full package contract is ROADMAP-THEMING.md §6; only the fields the
+    The full package contract is richer; only the fields the
     mechanism consumes today (identity + tokens) are required. ``tokens`` is an
     overlay: missing slots fall back to the default theme.
     """
@@ -162,8 +181,8 @@ class ThemeDefinition:
     description: str | None = None
     data_theme: str = "basis"          # value for :root[data-theme=...] (app CSS hooks)
     color_scheme: str = "auto"         # "light" | "dark" | "auto"
-    #: Browser/OS chrome color (``theme-color`` meta) per color mode (Decision
-    #: C — MOBILE-M1.1-PLAN.md). Optional, manifest-level DESIGN data, NOT token
+    #: Browser/OS chrome color (``theme-color`` meta) per color mode. Optional,
+    #: manifest-level DESIGN data, NOT token
     #: slots / CSS vars: a theme's browser-chrome color is a real design
     #: decision, never a string-parsed side effect. When unset,
     #: :func:`resolve_theme_color` falls back to a best-effort ``light-dark()``
@@ -226,7 +245,7 @@ class ThemeDefinition:
 
 
 # ---------------------------------------------------------------------------
-# Browser/OS chrome color resolution (Decision C — MOBILE-M1.1-PLAN.md)
+# Browser/OS chrome color resolution
 # ---------------------------------------------------------------------------
 
 #: Spec-default chrome colors used when a definition declares no

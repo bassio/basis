@@ -1,5 +1,4 @@
-"""``@js_component`` — wrap a JS library as a reactive Basis component
-(ROADMAP-AMBITIOUS.md Bet 5; plan: JS-COMPONENT-PLAN.md).
+"""``@js_component`` — wrap a JS library as a reactive Basis component.
 
 Mark any ``Component`` subclass with ``@js_component(module=..., exports=...)`` to turn
 it into a JS-backed component:
@@ -7,7 +6,7 @@ it into a JS-backed component:
 - The class still renders a normal, SSR-safe template (a deterministic placeholder).
   On the server nothing else happens — SSR output is pure template.
 - On the client the ES module is lazily imported once (ref-counted and shared across
-  instances via ``basis.client.js_bridge.JsModuleRegistry``), the declared ``exports``
+  instances via ``basis.client.js_runtime.JsModuleRegistry``), the declared ``exports``
   are exposed as instance attributes, and the wrapper's ``boot_js(module)`` creates the
   JS widget.
 - ``sync_js()`` is called whenever a declared ``bridge_props`` field is assigned after
@@ -20,7 +19,7 @@ it into a JS-backed component:
 The class may be decorated as a plain ``Component`` (the decorator mixes
 :class:`JsComponent` into the MRO *below* the class, so the class's own lifecycle-hook
 overrides still win) or inherit :class:`JsComponent` directly. The client-only loader
-lives in ``basis.client.js_bridge`` and is imported lazily — never on the server.
+lives in ``basis.client.js_runtime`` and is imported lazily — never on the server.
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ from typing import Any, Sequence
 from basis.shared.component import Component, IS_CLIENT, in_ssr_hydration
 
 if IS_CLIENT:  # pragma: no cover - client branch (never imported on the server)
-    from basis.client.js_bridge import (
+    from basis.client.js_runtime import (
         JsModuleRegistry,
         emit_event as _emit_event,
         js_call as _js_call,
@@ -224,7 +223,7 @@ class JsComponent(Component):
         ``connectedCallback`` dispatches a generic ``basis:connected`` event
         when the node is (re-)inserted into the live document — exactly the
         reveal moment — so we register a one-shot listener (see
-        :func:`basis.client.js_bridge.wait_connected`, which listens on
+        :func:`basis.client.js_runtime.wait_connected`, which listens on
         ``document`` for the bubbled event and fires when this component's
         element reports ``isConnected``) and boot on it. Idempotent via
         ``_js_booted`` (visible components boot via ``on_hydrated`` first, and
@@ -243,12 +242,12 @@ class JsComponent(Component):
         except Exception as exc:
             _log_error(f"@js_component {self.__class__.__name__}: module load failed: {exc}")
             return
-        # Destroy-before-boot guard (COMPONENT-LIFECYCLE-PLAN.md P2 §2.3): the
-        # instance may have been destroyed while the ES module was loading —
-        # destroy() sets _destroyed and clears _js_booted (via _teardown_js).
-        # If so, cancel the boot: never call boot_js on a dead node. The module
-        # load itself is harmless (cached, ref-counted). Async is single-
-        # threaded, so this check right after the await is sufficient.
+        # Destroy-before-boot guard: the instance may have been destroyed while
+        # the ES module was loading — destroy() sets _destroyed and clears
+        # _js_booted (via _teardown_js). If so, cancel the boot: never call
+        # boot_js on a dead node. The module load itself is harmless (cached,
+        # ref-counted). Async is single-threaded, so this check right after the
+        # await is sufficient.
         if getattr(self, "_destroyed", False) or not getattr(self, "_js_booted", False):
             return
         self.__dict__["_js_module"] = module

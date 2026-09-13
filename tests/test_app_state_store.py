@@ -266,7 +266,7 @@ def test_subclass_guard_pattern_preserves_hydrated_projection():
         _cleanup("guard_store")
 
 
-# ── registration via the EXISTING API (Phase 5 — no new API) ──────────────
+# ── registration via the existing registration API ──────────────
 
 
 def test_app_state_store_registered_via_app_include_store():

@@ -1,11 +1,11 @@
 """
-Item 3 of the bindings review (BINDINGS-REVIEW.md): only REACTIVE bindings
-(having an ``update()``) contribute their ``fields`` to ``__fields__`` / the DAG.
+Only REACTIVE bindings (having an ``update()``) contribute their ``fields`` to
+``__fields__`` / the DAG.
 
 An ``EventBinding`` is a pure DOM listener — its target is a handler METHOD
-name, which is never a state field.  Before the fix its ``[target_fn]`` leaked
-into ``__fields__``, creating a dead ``StateNode`` named after the handler and
-a stale bound-method snapshot in ``_capture_state`` (HMR).
+name, which is never a state field. If it leaked into ``__fields__`` it would
+create a dead ``StateNode`` named after the handler and a stale bound-method
+snapshot in ``_capture_state`` (HMR).
 """
 
 from basis.shared.component import Component

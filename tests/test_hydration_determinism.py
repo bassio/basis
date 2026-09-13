@@ -69,7 +69,7 @@ def test_iter_tree_paths_prefix_parameterization():
 
 
 # ---------------------------------------------------------------------------
-# Phase E — diagnostics report (shared shape)
+# Diagnostics report (shared shape)
 # ---------------------------------------------------------------------------
 
 def test_hydration_report_starts_clean():
@@ -280,7 +280,7 @@ def find_text_nodes(root, contains=None):
 
 
 # ---------------------------------------------------------------------------
-# Phase A — tree-builder text handling
+# Tree-builder text handling
 # ---------------------------------------------------------------------------
 
 TEMPLATES = {
@@ -316,7 +316,7 @@ def test_tree_builder_does_not_merge_across_tags():
 
 
 # ---------------------------------------------------------------------------
-# Phase B — canonical golden paths
+# Canonical golden paths
 # ---------------------------------------------------------------------------
 
 GOLDEN = {
@@ -357,7 +357,7 @@ def test_golden_paths_in_new_world(name):
 
 
 # ---------------------------------------------------------------------------
-# Item 7 — client stamping IS the canonical algorithm (no second walker)
+# Client stamping IS the canonical algorithm (no second walker)
 # ---------------------------------------------------------------------------
 
 def test_client_stamping_uses_canonical_paths():
@@ -398,7 +398,7 @@ def test_canonical_paths_are_whitespace_stable():
 
 
 # ---------------------------------------------------------------------------
-# Phase B — deterministic text ordinals
+# Deterministic text ordinals
 # ---------------------------------------------------------------------------
 
 TEXT_ORDINAL_TEMPLATE = (
@@ -450,7 +450,7 @@ def test_stamp_text_ordinals_is_deterministic():
 
 
 # ---------------------------------------------------------------------------
-# Phase B — set-based marker stamping
+# Set-based marker stamping
 # ---------------------------------------------------------------------------
 
 def test_apply_hydration_markers_stamps_bindings_and_components():
@@ -497,7 +497,7 @@ def test_build_hydration_map_ignores_unmarked_nodes():
 
 
 # ---------------------------------------------------------------------------
-# Phase C/D — wiring: canonical SSR markers, client ordinal matching
+# Wiring: canonical SSR markers, client ordinal matching
 # ---------------------------------------------------------------------------
 
 def test_ssr_emits_markers_and_text_ordinals():
@@ -532,7 +532,7 @@ def test_ssr_emits_markers_and_text_ordinals():
     resp = client.get("/")
     assert resp.status_code == 200
 
-    # §4.1 P5: synthesized @app.page shells are whole-document pages now — the
+    # Synthesized @app.page shells are whole-document pages: the
     # root mounts declaratively under a kebab-derived host tag (here `root`, the
     # host is the Page's ChildBinding node → b:0:0), and the root's own element
     # is a stamped component child of the host (b:0:0:0).
@@ -573,7 +573,7 @@ def test_ssr_stamps_loop_body_nodes_and_text_ordinals():
     resp = client.get("/")
     assert resp.status_code == 200
 
-    # §4.1 P5: synthesized pages are whole-document pages — the root sits under
+    # Synthesized pages are whole-document pages — the root sits under
     # its derived `<root>` host (b:0:0 → content div b:0:0:0), so the loop item
     # wrappers are children of that content div (b:0:0:0:0 / b:0:0:0:1).
     assert 'data-hydration-id="b:0:0:0:0"' in resp.text
@@ -584,7 +584,7 @@ def test_ssr_stamps_loop_body_nodes_and_text_ordinals():
 
 
 def test_ssr_stamps_nested_loop_body_nodes_and_text_ordinals():
-    """Phase 5-extension (server side): a NESTED loop's INNER item wrappers and
+    """A NESTED loop's INNER item wrappers and
     body nodes carry data-hydration-id AND data-hydration-text in the SSR output
     (the recursion in ``marked_for_hydration`` / ``text_binding_nodes``), so
     the client's structural matcher can re-point inner loop bodies on /ssr."""
@@ -614,7 +614,7 @@ def test_ssr_stamps_nested_loop_body_nodes_and_text_ordinals():
     resp = client.get("/")
     assert resp.status_code == 200
 
-    # §4.1 P5: the root sits under its derived `<root>` host (content div
+    # The root sits under its derived `<root>` host (content div
     # b:0:0:0), so every loop path is prefixed by that content div.
     # Outer item wrappers.
     assert 'data-hydration-id="b:0:0:0:0"' in resp.text   # outer A
@@ -671,7 +671,7 @@ def _fake_text(value):
 
 
 def test_client_text_ordinal_matching_on_dom_like_nodes():
-    """The client-side canonical branch (Phase D) must resolve the SSR text
+    """The client-side canonical branch must resolve the SSR text
     node by ordinal, computed over normalized children, exactly as it will run
     on browser DOM nodes in Pyodide."""
     from basis.shared.hydration import normalized_children

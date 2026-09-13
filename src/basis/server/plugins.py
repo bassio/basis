@@ -527,7 +527,7 @@ class PluginMixin:
 
         # 6b. Region contributions declared by the plugin (module scope and/or
         #     on_register) are flushed into the app registry and recorded on the
-        #     registration so disable/remove can unwind them (ROADMAP-SPATIAL.md).
+        #     registration so disable/remove can unwind them.
         from basis.plugins.regions.registry import _register_contribution
         plugin._app = self
         pending = list(getattr(plugin, "_region_items", []) or [])
@@ -749,9 +749,8 @@ class PluginMixin:
         # 3c. Stores contributed by the plugin (@plugin.store / include_store):
         #     drop them from the app-global store list and the live registry so
         #     they stop being collected/serialized. The persistent store
-        #     blueprint is intentionally kept (full teardown is a Phase-4
-        #     decision — disabling a store-providing plugin is otherwise
-        #     half-hearted until then).
+        #     blueprint is kept: removing it would need full teardown of every
+        #     store instance, which disable does not attempt.
         if getattr(reg, "store_items", None):
             from basis.shared.store import Store
             for store_name, _store_cls in reg.store_items:
@@ -762,7 +761,7 @@ class PluginMixin:
             reg.store_items = []
 
         # 4. Remove from _plugins, and unregister its actions from the global
-        #    registry so a disabled plugin's actions are no longer callable.
+        #    registry so a disabled plugin's actions stop being callable.
         if reg.plugin in self._plugins:
             self._plugins.remove(reg.plugin)
         from basis.shared.actions import _action_registry

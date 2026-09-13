@@ -108,10 +108,10 @@ These are a **second axis** — observable DOM signals, not lifecycle hooks. The
 | `basis:connected` | Custom element `connectedCallback`, on the element (bubbles) | The element joined the live document (initial mount, an `if`-reveal, a fallback move). |
 | `basis:disconnected` | Custom element `disconnectedCallback`, on `document` | The element left the live document (or an ancestor subtree containing it did). Dispatched on `document` because a removed node can no longer bubble. |
 
-Python listens with the push helpers in `basis.client.js_bridge`:
+Python listens with the push helpers in `basis.client.js_runtime`:
 
 ```python
-from basis.client.js_bridge import wait_connected, wait_disconnected
+from basis.client.js_runtime import wait_connected, wait_disconnected
 
 wait_connected(element, on_connected)       # one-shot, fires when element.isConnected
 wait_disconnected(element, on_disconnected) # one-shot, fires on a real disconnect

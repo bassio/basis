@@ -1,5 +1,5 @@
 """Shared registry-manager base — the row/action machinery behind the plugin
-manager and the theme manager (ROADMAP-THEMING.md §6.5.4).
+manager and the theme manager.
 
 One component base renders reactive rows over a ``$<registry>.items`` projection
 (the ``$plugins`` / ``$themes`` stores, which share one shape): row chrome, the

@@ -195,7 +195,7 @@ def test_custom_element_loop_child_is_still_a_component_child():
 
 
 def test_plain_loop_exposes_body_bindings_for_hydration():
-    """Phase 5-core: a plain loop exposes its owner-bound body bindings via
+    """A plain loop exposes its owner-bound body bindings via
     all_body_bindings(), so the client hydration pass can re-point them to SSR
     nodes by canonical path -> ssr_map."""
     class Owner(Component):
@@ -277,11 +277,11 @@ def test_item_binding_renders_per_item():
 
 
 def test_custom_element_loop_stays_before_trailing_sibling():
-    """REGRESSION (2026-08-17, browser): custom-element loop children must stay
+    """Custom-element loop children must stay
     INSIDE the loop block, BEFORE any trailing sibling (e.g. a component
     showcase / a dismiss button). Anchoring on the
     child's inner __element__ (instead of the mounted <custom-element> wrapper)
-    used to append every item after the first AFTER the trailing sibling."""
+    would append every item after the first AFTER the trailing sibling."""
     class Entry(Component):
         __tag__ = "x-loop-item"
         label = ""

@@ -38,7 +38,6 @@ class SplitPane(Component):
         self._active_handle = handle
         handle.setAttribute("data-dragging", "true")
 
-        # Find adjacent panes
         self._prev_pane = handle.previousElementSibling
         self._next_pane = handle.nextElementSibling
 
@@ -74,7 +73,6 @@ class SplitPane(Component):
         if new_prev_size < 20 or new_next_size < 20:
             return
 
-        # Update styles
         if self.direction == "horizontal":
             self._prev_pane.style.width = f"{new_prev_size}px"
             self._prev_pane.style.flex = "0 0 auto"

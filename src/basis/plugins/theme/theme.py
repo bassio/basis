@@ -7,8 +7,6 @@ registration), semantically a theme: it carries a
 ``kind = "theme"`` so the shared registry (and therefore the managers)
 classifies it as a theme — it appears only in the theme manager, never the
 plugin manager.
-
-ROADMAP-THEMING.md §6.5.1.
 """
 
 from basis.plugins.theme.schema import ThemeDefinition

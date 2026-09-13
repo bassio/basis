@@ -1,9 +1,9 @@
 """``basis theme`` — theme package commands, contributed by the theme plugin.
 
-The lazy CLI-discovery convention (CLI-EXTENSIBILITY.md): a plugin ships a
+The lazy CLI-discovery convention: a plugin ships a
 ``cli/`` subpackage exposing a module-level ``cli`` ``typer.Typer``; the CLI
 mounts it as ``basis <plugin-name>`` with import-on-first-use. This module is the
-``theme`` plugin's contribution — previously hardcoded in ``basis.cli.commands.theme``.
+``theme`` plugin's contribution.
 
 Sub-commands::
 
@@ -22,7 +22,7 @@ from rich import box
 
 console = Console()
 
-# Read import-free by CLI discovery (CLI-EXTENSIBILITY.md §6.11) so that
+# Read import-free by CLI discovery so that
 # `basis --help` shows the real description without importing this module.
 help = "🎨 Manage Basis themes."
 

@@ -9,7 +9,8 @@ bools. The click hook (``handle_click``) is a ``@py_event`` behavior seam —
 apps subclass ``Icon`` (or put their own ``onclick`` content inside) to act
 on a click.
 """
-from basis.shared.component import Component, py_event
+from basis.shared.component import Component
+from basis.shared.js import py_event
 from basis.shared.reactive import computed
 
 

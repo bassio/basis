@@ -2,7 +2,7 @@
 
 A data-driven mount point: the component reads its page's ``$regions`` slice
 for ``name`` and mounts each contribution's component class into its own root,
-live, on both SSR and the client. See ``ROADMAP-SPATIAL.md`` (Tier A1/A2).
+live, on both SSR and the client.
 
 Not a ``<slot>`` — slots are static and shadow-DOM-bound. A region grows and
 shrinks with the ``$regions`` store (which is app-housed and page-scoped): the
@@ -22,8 +22,7 @@ class Region(Component):
     Renders whatever ``$regions`` holds for ``name`` by mounting each
     contribution's component class into its own root element. Class-as-identity:
     one live instance per ``(region, cls_path)``; removed contributions are
-    disposed (node removal — full binding teardown + SSR-hydration of region
-    items is the P1 follow-up flagged in ROADMAP-SPATIAL.md).
+    disposed.
     """
 
     __tag__ = "ui-region"
@@ -115,10 +114,9 @@ class Region(Component):
         for path in list(mounted):
             if path not in expected_paths:
                 instance = mounted.pop(path)
-                # Full unmount via Component.destroy() (COMPONENT-LIFECYCLE-
-                # PLAN.md P1): recurses into the contribution's nested children,
-                # tears down its JS subresources, fires on_unmounted, and removes
-                # its DOM node — not the ad hoc scope-destroy + node.remove().
+                # Full unmount via Component.destroy(): recurses into the
+                # contribution's nested children, tears down its JS subresources,
+                # fires on_unmounted, and removes its DOM node.
                 try:
                     instance.destroy()
                 except Exception:

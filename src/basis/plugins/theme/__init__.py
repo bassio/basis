@@ -1,9 +1,8 @@
-"""Official theme plugin — the theming mechanism (ROADMAP-THEMING.md).
+"""Official theme plugin — the theming mechanism.
 
-Moved out of the UI plugin (``basis.plugins.ui.theme``) into its own plugin on
-the standard ``basis.plugins`` entry point ("everything is a plugin"), so the
-``ui`` / ``shell`` plugins depend on it and third-party **theme packages**
-(installable skins) are plugins contributing a ``ThemeDefinition``.
+Lives on the standard ``basis.plugins`` entry point, so the ``ui`` / ``shell``
+plugins can depend on it and third-party **theme packages** (installable skins)
+are plugins contributing a ``ThemeDefinition``.
 
 It provides:
 

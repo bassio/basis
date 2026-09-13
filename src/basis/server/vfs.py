@@ -123,7 +123,8 @@ class VFSRegistry:
             "actions.py",
             "errors.py",
             "errors_component.py",
-            "js_bridge.py",
+            "js_runtime.py",
+            "device_probes.py",
         ]:
             stem = Path(f_name).stem
             target = stem + py_ext
@@ -141,6 +142,12 @@ class VFSRegistry:
             "component.py",
             "page.py",
             "store.py",
+            "js.py",
+            "media.py",
+            "breakpoints.py",
+            "meta.py",
+            "device.py",
+            "network.py",
             "store_provider.py",
             "context.py",
             "hmr.py",

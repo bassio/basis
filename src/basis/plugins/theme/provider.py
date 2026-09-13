@@ -1,5 +1,4 @@
-"""The ``<ui-theme-provider>`` element — injects design tokens as CSS variables
-(ROADMAP-THEMING.md §4.3)."""
+"""The ``<ui-theme-provider>`` element — injects design tokens as CSS variables."""
 
 from basis.shared.component import Component
 from basis.shared.reactive import computed

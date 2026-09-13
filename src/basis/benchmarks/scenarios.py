@@ -1,12 +1,11 @@
 """
-Realistic benchmark scenarios for Basis (ROADMAP-PERFORMANCE.md, T0).
+Realistic benchmark scenarios for Basis.
 
 Each scenario is a :class:`~basis.benchmarks.harness.Scenario` with a fresh
 ``setup()`` (fixture) and a ``run(fixture)`` timed body. Scenarios deliberately
 measure the *real* framework path the way an app hits it — e.g. component
-mounting goes through ``Component.mount()`` (which, today, re-runs template
-analysis per instance — exactly the cost T1 #11 / #15 target), and loop
-rendering goes through the full LIS reconcile.
+mounting goes through ``Component.mount()`` (which re-runs template analysis per
+instance), and loop rendering goes through the full LIS reconcile.
 
 Isolation & side-effect notes
 -----------------------------

@@ -62,7 +62,6 @@ class Node(object):
                 expanded.append(n)
                 
         parent.children[index+1:index+1] = expanded
-        # Update parent references for inserted elements
         for n in expanded:
             if hasattr(n, 'parent'):
                 n.parent = parent
@@ -220,7 +219,6 @@ class Element(Node):
         elif force == True:
             self.attrs[attr] = ""
         else:
-            #force == False
             if attr in self.attrs:
                 del self.attrs[attr]
 
@@ -361,7 +359,6 @@ class Element(Node):
         self.children = other_element.children
         self.void_ = other_element.void_
         
-        # Ensure children point to this element now
         for c in self.children:
             c.parent = self
 
@@ -379,7 +376,6 @@ class Element(Node):
                 
         parent.children[index+1:index+1] = expanded
         parent.children.pop(index)
-        # Update parent references for inserted elements
         for el in expanded:
             el.parent = parent
     

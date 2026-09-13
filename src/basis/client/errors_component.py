@@ -3,8 +3,7 @@ basis/client/errors_component.py
 --------------------------------
 The dev-only binding-error overlay as a reactive Basis component.
 
-Previously the overlay was built imperatively (Python -> JS DOM calls) inside
-``errors.py``.  It is now a proper component: ``<basis-error-overlay>`` renders
+The overlay is a proper component: ``<basis-error-overlay>`` renders
 its reactive ``items`` list declaratively (``for`` / ``if`` / ``onclick``
 bindings), so new errors appear live, the count badge stays correct, each
 entry shows its full detail, and the whole list collapses with a dismiss-all

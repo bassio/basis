@@ -1,5 +1,5 @@
 """
-Pytest wrapper around the Basis benchmark suite (ROADMAP-PERFORMANCE.md T0).
+Pytest wrapper around the Basis benchmark suite.
 
 Every scenario in :data:`basis.benchmarks.scenarios.SCENARIOS` becomes a
 parameterized test. The harness's ``verify`` hook runs during the warm-up, so a

@@ -1,5 +1,5 @@
 """
-``$meta`` document-meta store (MOBILE-M1.1-PLAN.md Decision B / B.9) — unit
+``$meta`` document-meta store — unit
 tests for the store itself (the head ``<meta for>`` loop that renders it and the
 theme-color consumer land with their own wiring).
 

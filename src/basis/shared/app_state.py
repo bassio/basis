@@ -14,10 +14,6 @@ hoc:
 The module lives in ``shared/`` so the same class is importable on the client
 (Pyodide) — ``project()`` is pure server code, but the module must not import
 fastapi/server modules at module scope.
-
-Full design: APP-STATE-STORES.md (app access §5, concurrency §6, serialization
-§7 via ``shared/serialization.py``, refresh §8; push/StateHub deferred to a
-later phase).
 """
 
 from __future__ import annotations
@@ -86,13 +82,13 @@ class AppStateStore(Store):
         """Pull the latest projection from the server (client RPC).
 
         The RPC layer re-applies ``new_state`` to the client store via
-        ``store.update()``, so subscribers re-render reactively. (Push via a
-        StateHub is deferred — APP-STATE-STORES.md §8.)
+        ``store.update()``, so subscribers re-render reactively. Pushing changes
+        without a client pull is not implemented.
         """
         self._refresh_from_app()
         return {"ok": True}
 
-    # ── mutation guard (thread-safety, §6.1) ─────────────────────────────
+    # ── mutation guard (thread-safety) ─────────────────────────────────
     def mutate(self, fn: Callable[[], Any]) -> Any:
         """Run *fn* while holding this store's mutation lock.
 

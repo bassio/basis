@@ -1,7 +1,7 @@
-"""Render the full `.j2` template set for canonical configs — P1 of INIT-SHELL-PLAN.md.
+"""Render the full `.j2` template set for canonical configs.
 
-The P1 gate: every generated file exists with the right content, and the
-context-coverage guard proves every template renders without `StrictUndefined`
+Every generated file exists with the right content, and the context-coverage
+guard proves every template renders without `StrictUndefined` risking
 raising (i.e. every key a template uses is provided by `layout.build_context`).
 """
 
@@ -76,9 +76,9 @@ def test_generate_writes_full_project_tree(tmp_path):
     dests = {str(p.relative_to(tmp_path)) for p in written}
     expected = {
         "pyproject.toml",
+        "README.md",
         "src/myapp/__init__.py",
         "src/myapp/components/page.py",
-        "src/myapp/README.md",
         ".gitignore",
         "src/myapp/components/__init__.py",
         "src/myapp/components/app_container.py",
@@ -93,6 +93,16 @@ def test_generate_writes_full_project_tree(tmp_path):
         "src/myapp/static/app.css",
     }
     assert expected <= dests
+
+
+def test_readme_lands_where_pyproject_expects_it(tmp_path):
+    """`[project] readme = "README.md"` resolves against the project root, so the
+    generated README must live there — a package-relative README makes the first
+    `uv sync` fail with "Readme file does not exist"."""
+    generate(_canonical_app(), tmp_path)
+    pyproject = (tmp_path / "pyproject.toml").read_text()
+    assert 'readme = "README.md"' in pyproject
+    assert (tmp_path / "README.md").is_file()
 
 
 def test_generated_init_registers_ssr_page(tmp_path):
@@ -138,6 +148,20 @@ def test_generated_store_seeds_light_theme(tmp_path):
     assert "self.dark_mode = False" in store
 
 
+def test_generated_store_keeps_shared_state_on_the_app(tmp_path):
+    """A server action runs on a fresh per-request store instance, so state that
+    must accumulate belongs on the app — an ``AppStateStore`` projection, not
+    instance attributes (which are discarded with the instance)."""
+    generate(_canonical_app(), tmp_path)
+    store = (tmp_path / "src/myapp/stores/app_state.py").read_text()
+    assert "class AppState(AppStateStore):" in store
+    assert "def project(self, app)" in store
+    assert "app.state.items" in store
+    assert "self.items.append" not in store
+    frame = (tmp_path / "src/myapp/components/app_container.py").read_text()
+    assert "await app_state.add_item()" in frame
+
+
 def test_pyproject_uses_slug_and_name(tmp_path):
     generate(_canonical_app(), tmp_path)
     pyproject = (tmp_path / "pyproject.toml").read_text()
@@ -175,6 +199,39 @@ def test_app_frame_includes_sidebar_right_when_requested(tmp_path):
     generate(cfg, tmp_path)
     frame = (tmp_path / "src/myapp/components/app_container.py").read_text()
     assert "<shell-sidebar-right" in frame
+
+
+def test_app_frame_declares_the_responsive_arrangement(tmp_path):
+    """The frame opts into the workbench arrangement and ships the drawer's toggle,
+    so a scaffolded app is phone-correct without hand-written media queries."""
+    generate(_canonical_app(), tmp_path)
+    frame = (tmp_path / "src/myapp/components/app_container.py").read_text()
+    assert 'layout="workbench"' in frame
+    assert '<shell-sidebar-trigger target="#sidebarLeft">' in frame
+    assert 'id="sidebarLeft"' in frame
+
+
+def test_app_frame_omits_the_drawer_toggle_without_a_sidebar(tmp_path):
+    cfg = ShellConfig(project_name="myapp", sidebar_left=False, sidebar_right=False)
+    generate(cfg, tmp_path)
+    frame = (tmp_path / "src/myapp/components/app_container.py").read_text()
+    assert "<shell-sidebar-trigger" not in frame
+
+
+def test_generated_chrome_sizes_itself_with_custom_properties(tmp_path):
+    """The copies of the shell chrome keep the prop→variable sizing; an inline
+    `flex` would out-rank the compact rules in the framework stylesheet."""
+    generate(_canonical_app(), tmp_path)
+
+    for name, prop in [
+        ("titlebar", "--shell-titlebar-height"),
+        ("statusbar", "--shell-statusbar-height"),
+        ("activitybar", "--shell-activitybar-width"),
+        ("sidebar", "--sidebar-mobile-width"),
+    ]:
+        chrome = (tmp_path / f"src/myapp/components/{name}.py").read_text()
+        assert prop in chrome, name
+        assert 'style="flex' not in chrome, name
 
 
 # --- frame composition (site paradigm) -------------------------------------
@@ -294,7 +351,10 @@ def test_site_frame_is_scrollable_document_flow(tmp_path):
     assert "body { margin: 0; overflow: hidden; }" not in frame
     # No FIXED 100vh lock (min-height: 100vh is fine — the lookbehind skips it).
     assert not re.search(r"(?<!min-)height: 100vh;", frame)
-    assert "overflow: hidden;" not in frame
+    # The frame itself never locks page scroll (demo cards clipping their own
+    # corners is unrelated to the document-flow contract).
+    container = re.search(r"\.app-container \{(.*?)\}", frame, re.S).group(1)
+    assert "overflow: hidden;" not in container
 
 
 # --- chrome parts are self-editable ----------------------------------------

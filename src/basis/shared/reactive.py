@@ -48,7 +48,7 @@ class ReactiveNode:
 _tracker_stack: List[ReactiveNode] = []
 
 # ──────────────────────────────────────────────
-# Scheduler — owner-scoped pending queues (HYDRATION-REPOINT-RACE-FIX-PLAN.md §5)
+# Scheduler — owner-scoped pending queues
 # ──────────────────────────────────────────────
 
 # Monotonic creation ordinal. The deterministic flush policy drains graphs in
@@ -72,7 +72,7 @@ _flush_depth = 0
 # Batch depth: while > 0 (inside ``batch()``) flushes are HELD — triggers only
 # enqueue onto their owner graphs. The outermost batch exit drains to
 # quiescence or, if ``discard()`` was requested, drops all pending effects
-# instead — the "SSR DOM is authoritative" hydration boundary (I7).
+# instead — the "SSR DOM is authoritative" hydration boundary.
 _batch_depth = 0
 _batch_discard = False
 
@@ -234,7 +234,7 @@ class EffectNode(ReactiveNode):
         super().__init__(name)
         self.update_func = update_func
         #: The DependencyGraph that owns this effect (set by add_effect). Pending
-        #  work is queued on the OWNER graph, not a global bag (I2 ownership).
+        #  work is queued on the OWNER graph, not a global bag.
         self.owner_graph: 'DependencyGraph | None' = None
 
     def update(self):
@@ -265,7 +265,7 @@ class DependencyGraph:
         self.effects: List[EffectNode] = []
         self._wildcard_effects: List[EffectNode] = []
         #: THIS graph's own stale-but-unflushed effects, in enqueue order.
-        #  Ownership (I2): pending work is attributable to exactly one graph.
+        #  Pending work is attributable to exactly one graph.
         self._pending: 'Dict[EffectNode, None]' = {}
         #: Creation ordinal — deterministic flush order (older graphs first).
         self._order: int = next(_graph_orders)
@@ -300,7 +300,6 @@ class DependencyGraph:
             # Transfer dependents to the new node
             new_node.dependents = old_node.dependents
             for dependent in new_node.dependents:
-                # Update the dependent's dependency set
                 if old_node in dependent.dependencies:
                     dependent.dependencies.remove(old_node)
                     dependent.dependencies.add(new_node)
@@ -391,7 +390,7 @@ class DependencyGraph:
         Delegates to the module-level ``_drain_pending`` (graphs drained in
         ascending creation order, waves, at-most-once per wave). Inside a
         ``batch()`` this is a no-op — flushes are held until the outermost
-        batch exit, which drains (or discards, I7).
+        batch exit, which drains or discards.
         """
         if _batch_depth:
             return  # held by batch(); the outermost exit drains or discards
@@ -399,15 +398,15 @@ class DependencyGraph:
 
 
 # ──────────────────────────────────────────────
-# Batching & flush boundaries (HYDRATION-REPOINT-RACE-FIX-PLAN.md §5 — I7)
+# Batching & flush boundaries
 # ──────────────────────────────────────────────
 
 def _drain_pending():
     """Drain every graph with pending effects to quiescence.
 
     Graphs run in ascending creation order (older = stores/ancestors first),
-    each graph's pending effects once each in enqueue order (waves, I3); an
-    effect re-dirtied while draining is re-run in a later wave (I5). Nested
+    each graph's pending effects once each in enqueue order (waves); an
+    effect re-dirtied while draining is re-run in a later wave. Nested
     triggers fired from inside an effect only enqueue — this is the sole drain.
     """
     global _flush_depth
@@ -446,7 +445,7 @@ def _drop_all_pending():
 class ReactiveBatch:
     """Context manager that HOLDS all effect flushes for the duration of the
     block, then on the OUTERMOST exit either drains to quiescence or — if
-    ``.discard()`` was requested — drops all pending effects instead (I7).
+    ``.discard()`` was requested — drops all pending effects instead.
 
     Used by SSR hydration (P4): the shadow mount + re-point run inside a batch
     so no effect can write to a live SSR node mid-adoption; ``discard()`` makes
@@ -530,7 +529,7 @@ class ReactiveScope:
         target's graph) so ``destroy()`` removes it from that graph."""
         self._effects.append((graph, name))
 
-    # ── pending / discard — owner-scoped flush boundary (I2/I7, P3) ──
+    # ── pending / discard — owner-scoped flush boundary ──
 
     def pending_count(self) -> int:
         """How many effects this scope owns are currently pending (unflushed)."""
@@ -548,7 +547,7 @@ class ReactiveScope:
         """Drop (without running) every effect this scope owns that is currently
         pending, resetting each dropped effect's stale flag so a future real
         change re-runs it. Returns the number dropped. The owner-scoped half of
-        the I7 hydration boundary: call inside ``batch()`` to drop one subtree's
+        the hydration boundary: call inside ``batch()`` to drop one subtree's
         pre-adoption work without touching other scopes' pending effects."""
         dropped = 0
         for graph, name in self._effects:
@@ -592,7 +591,6 @@ def computed(args=None, dependencies=None):
     Can be used as @computed or @computed(dependencies=['a', 'b'])
     """
     def decorator(func):
-        # Store metadata on the function itself
         func._is_computed = True
         # Declared deps only — the body's reactive reads are tracked at run time.
         actual_deps = dependencies if dependencies is not None else []
@@ -617,7 +615,6 @@ def computed(args=None, dependencies=None):
             
         return wrapper
 
-    # Handle both @computed and @computed(...)
     if callable(args):
         return decorator(args)
     
@@ -650,7 +647,27 @@ def derived(func):
 # Refrain — Batched Update Context Manager
 # ──────────────────────────────────────────────
 
+def _unchanged(value, previous) -> bool:
+    """True when writing *value* over *previous* is a no-op for the DAG.
+
+    Mirrors ``ReactiveObject.__setattr__``: identity first, then equality — except for
+    containers, which always count as changed because the setattr path treats them by
+    identity/inequality rather than by value.
+    """
+    if value is previous:
+        return True
+    return not isinstance(value, (list, dict, set, tuple)) and value == previous
+
+
 class Refrain(object):
+    """Collects attribute writes and applies them as ONE batched trigger.
+
+    A write that does not move the value is still applied, but not triggered — the
+    same change detection ``ReactiveObject.__setattr__`` performs, which a batch would
+    otherwise bypass and turn into a re-run of every dependent binding. Use
+    :meth:`force_react` to react regardless of whether the value moved.
+    """
+
     def __init__(self, owner):
         self.__dict__['inner_dict'] = {}
         self.__dict__['owner'] = owner
@@ -667,12 +684,17 @@ class Refrain(object):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         inner_dict = self.__dict__['inner_dict']
-        inner_dict_keys = list(inner_dict.keys())
+        owner_dict = self.owner.__dict__
+
+        changed = []
         for k, v in inner_dict.items():
-            self.owner.__dict__[k] = v
-        
-        # Collect all fields that need to react
-        fields_to_react = inner_dict_keys + [k for k in self.forced_reactivity if k not in inner_dict_keys]
+            moved = k not in owner_dict or not _unchanged(v, owner_dict[k])
+            owner_dict[k] = v
+            if moved:
+                changed.append(k)
+
+        # Forced names react whether or not their value moved.
+        fields_to_react = changed + [k for k in self.forced_reactivity if k not in changed]
 
         if fields_to_react:
             self.owner._dag.trigger_batch(fields_to_react)

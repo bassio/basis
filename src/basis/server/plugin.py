@@ -46,7 +46,7 @@ def _resolve_plugin_name(name: str | None, prefix: str) -> str:
 
 class BasisPlugin(ModelRegistryMixin):
     #: Contribution classification — ``"plugin"`` (default) or ``"theme"``.
-    #: A generic partition key (ROADMAP-THEMING.md §6.5.1): the plugin/theme
+    #: A generic partition key: the plugin/theme
     #: managers are the same registry under different kind filters, and themes
     #: never appear in the plugin manager. Core never interprets the value.
     kind: str = "plugin"
@@ -170,7 +170,7 @@ class BasisPlugin(ModelRegistryMixin):
         self._action_registry_entries = {}
         self._settings = {}
         # Region contributions declared via add_to_region / @plugin.region. Flushed
-        # into the app registry by include_plugin (ROADMAP-SPATIAL.md A1).
+        # into the app registry by include_plugin.
         self._region_items = []
         # Stores declared via include_store / @plugin.store. Wired into the app
         # by include_plugin (and recorded on PluginRegistration for unwind).
@@ -230,7 +230,7 @@ class BasisPlugin(ModelRegistryMixin):
         return decorator
 
     def add_to_region(self, region, component_cls, *, props=None, order=None, position="end"):
-        """Register *component_cls* into *region* (ROADMAP-SPATIAL.md A1).
+        """Register *component_cls* into *region*.
 
         Returns a ``RegionHandle`` disposer. Class-as-identity: re-adding the
         same class to the same region replaces the existing entry (HMR-safe).
@@ -359,7 +359,7 @@ class BasisPlugin(ModelRegistryMixin):
         """
         Called synchronously when the plugin is registered with a Basis app
         via ``include_plugin()``.  Use for validation or immediate setup.
-        The ``app._plugins`` list will already contain previously registered
+        The ``app._plugins`` list will already contain earlier-registered
         plugins, so you can check for dependencies here.
         """
         pass

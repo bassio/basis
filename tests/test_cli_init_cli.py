@@ -1,4 +1,4 @@
-"""``basis init`` CLI wiring — P3 of INIT-SHELL-PLAN.md.
+"""``basis init`` CLI wiring.
 
 Exercises the typer command registered on ``basis.cli.main:app``: flag-driven
 non-interactive generation (``--yes``), ``--list``, ``--config`` replay, and the

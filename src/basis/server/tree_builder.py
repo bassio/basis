@@ -94,10 +94,6 @@ class ElementTreeBuilder(TreeBuilder):
         
         tag_func = element_fn
 
-        #commented for now
-        #element_id = self._generate_current_id()
-        #fasthtml_attrs['data-hydration-id'] = element_id
-
         # Create element (children will be added later)
         element = {'tag': name, 'func': tag_func, 'attrs': fasthtml_attrs, 'children': []}
         
@@ -118,10 +114,10 @@ class ElementTreeBuilder(TreeBuilder):
         self.index_stack.append(0)
 
         # Void elements (e.g. <input>, <img>) have no end tag: finalize them
-        # immediately so their parent's end tag can close correctly.  Previously
-        # a void element stayed as ``current_element`` and the parent's end tag
-        # never matched — the whole tree came back ``None`` (breaking SSR of any
-        # component whose template contains a void element, e.g. ui/input).
+        # immediately so their parent's end tag can close correctly. Otherwise
+        # a void element stays as ``current_element`` and the parent's end tag
+        # never matches — the whole tree comes back ``None``, breaking SSR of
+        # any component whose template contains a void element (e.g. ui/input).
         if name.lower() in voids:
             self._finalize_current_element()
 

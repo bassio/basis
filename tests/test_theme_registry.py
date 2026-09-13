@@ -1,4 +1,4 @@
-"""P3 — theme registry + managers (ROADMAP-THEMING.md §6.5, §8 P3).
+"""Theme registry + managers.
 
 Covers: the `Theme(BasisPlugin)` classification (`kind="theme"`), the shared
 kind-filtered registry listing (`$plugins` vs `$themes`), the `$theme` control
@@ -221,7 +221,7 @@ def test_csr_initial_state_applies_persisted_cookie():
     assert state["theme"]["dark_mode"] is True
 
 
-# --- theme-color → $meta (ROADMAP-MOBILE M1.1 / MOBILE-M1.1-PLAN B.9) -------
+# --- theme-color → $meta -------
 
 def test_resolve_theme_color_prefers_explicit_fields():
     """Decision C: a definition's theme_color_light/dark are authoritative."""
@@ -348,6 +348,92 @@ def test_theme_mode_and_theme_flips_sync_theme_color_into_meta():
 
     theme.set_theme("ambient")  # keeps the current (light) mode
     assert color() == "#f6f5f0"
+
+
+def _meta_theme_color(meta) -> str:
+    return next(
+        it["content"] for it in meta.items_for() if it["name"] == "theme-color"
+    )
+
+
+def test_theme_carries_derived_chrome_colors_and_serializes_them():
+    """The ACTIVE definition's browser-chrome colors ride as public attrs so
+    serialize() carries them into #basis-initial-state and a hydrated client can
+    re-sync the ``theme-color`` meta without holding the definition."""
+    from basis.plugins.theme.schema import ThemeDefinition
+    from basis.plugins.theme.store import ThemeStore
+
+    d = ThemeDefinition(
+        id="chrome_test",
+        name="Chrome",
+        theme_color_light="#abc111",
+        theme_color_dark="#def222",
+    )
+    store = ThemeStore("theme_chrome_test", definition=d)
+    assert store.theme_color_light == "#abc111"
+    assert store.theme_color_dark == "#def222"
+    state = store.serialize()
+    assert state["theme_color_light"] == "#abc111"
+    assert state["theme_color_dark"] == "#def222"
+
+
+def test_sync_meta_color_uses_derived_color_without_definition():
+    """Client parity (the F1 fix): a hydrated ThemeStore never carries
+    ``_definition`` (not serialized), so ``_sync_meta_color`` must use the
+    derived ``theme_color_light/dark`` attrs — not ``DEFAULT_DEFINITION`` — or a
+    custom/overlay theme flips the OS chrome to the wrong color. Also proves the
+    direct ``dark_mode = …`` write path re-syncs correctly."""
+    from basis.shared.meta import ensure_meta_store
+    from basis.shared.store import Store
+    from basis.plugins.theme.schema import ThemeDefinition
+    from basis.plugins.theme.store import ThemeStore
+
+    d = ThemeDefinition(
+        id="parity_test",
+        name="Parity",
+        theme_color_light="#fefefe",
+        theme_color_dark="#010101",
+    )
+    store = ThemeStore("theme_parity_test", definition=d)
+    # Simulate a hydrated client: _definition is never serialized → absent;
+    # only the derived chrome-color attrs + prefs survive.
+    store.__dict__.pop("_definition", None)
+
+    ensure_meta_store()
+    meta = Store._registry["meta"]
+
+    store._sync_meta_color()
+    assert _meta_theme_color(meta) == "#fefefe"
+
+    store.dark_mode = True  # the direct-write path (no dual-path method)
+    store._sync_meta_color()
+    assert _meta_theme_color(meta) == "#010101"
+
+
+def test_client_watch_resyncs_meta_on_direct_dark_mode_write(monkeypatch):
+    """Client parity of the F1 fix: with the client DAG watch installed, a
+    DIRECT ``dark_mode = …`` assignment (no dual-path method — the exact basis-
+    website pattern) re-upserts the ``theme-color`` $meta item, which is the
+    trigger the head ``<meta for>`` loop reconciles live."""
+    import basis.plugins.theme.store as theme_store_mod
+    from basis.shared.meta import ensure_meta_store
+    from basis.shared.store import Store
+    from basis.plugins.theme.store import ThemeStore
+
+    # Client-only watch (the theme store checks its module IS_CLIENT at init).
+    monkeypatch.setattr(theme_store_mod, "IS_CLIENT", True)
+    ensure_meta_store()
+    meta = Store._registry["meta"]
+
+    store = ThemeStore("theme_watch_test")  # basis default, light
+    assert store.theme_color_light == "#f6f6f7"
+
+    # The direct write (no method) must drive _sync_meta_color via the watch.
+    store.dark_mode = True
+    assert _meta_theme_color(meta) == "#1b2029"
+
+    store.dark_mode = False
+    assert _meta_theme_color(meta) == "#f6f6f7"
 
 
 # --- shared RegistryManager: the theme picker -------------------------------

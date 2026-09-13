@@ -37,7 +37,6 @@ app = typer.Typer(
     rich_markup_mode="rich",
 )
 
-# Register sub-commands / command groups
 app.command(name="dev", help="Start the development server with HMR.")(dev_cmd.dev)
 app.command(name="init", help="Scaffold a new Basis project.")(init_cmd.init)
 app.command(

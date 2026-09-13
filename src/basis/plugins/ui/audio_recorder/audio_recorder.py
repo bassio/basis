@@ -114,14 +114,12 @@ class AudioRecorder(Component):
         return await future
 
     def _cleanup_db_open_proxies(self):
+        # Drop the references; the proxies are not explicitly destroyed.
         if hasattr(self, "_db_success_proxy") and self._db_success_proxy:
-            #self._db_success_proxy.destroy()
             self.__dict__['_db_success_proxy'] = None
         if hasattr(self, "_db_error_proxy") and self._db_error_proxy:
-            #self._db_error_proxy.destroy()
             self.__dict__['_db_error_proxy'] = None
         if hasattr(self, "_db_upgrade_proxy") and self._db_upgrade_proxy:
-            #self._db_upgrade_proxy.destroy()
             self.__dict__['_db_upgrade_proxy'] = None
 
     async def _cache_chunk_locally(self, session_id, index, blob):
@@ -138,13 +136,9 @@ class AudioRecorder(Component):
         request = store.put(blob, key)
         
         def on_success(event):
-            #self._put_success_proxy.destroy()
-            #self._put_error_proxy.destroy()
             future.set_result(True)
             
         def on_error(event):
-            #self._put_success_proxy.destroy()
-            #self._put_error_proxy.destroy()
             future.set_result(False)
             
         self._put_success_proxy = ffi.create_proxy(on_success)
@@ -172,13 +166,9 @@ class AudioRecorder(Component):
         request = store.delete(key_range)
         
         def on_success(event):
-            #self._del_success_proxy.destroy()
-            #self._del_error_proxy.destroy()
             future.set_result(True)
             
         def on_error(event):
-            #self._del_success_proxy.destroy()
-            #self._del_error_proxy.destroy()
             future.set_result(False)
             
         self._del_success_proxy = ffi.create_proxy(on_success)
@@ -394,7 +384,6 @@ class AudioRecorder(Component):
                     file_path = res.get("file_path")
                     self.status_text = "Saved!"
                     
-                    # Clear local IndexedDB cache on success
                     if str(self.cache_locally).lower() == "true":
                         await self._clear_local_cache(session_id)
                     
@@ -442,14 +431,11 @@ class AudioRecorder(Component):
             self.animation_id = None
             
         if self._ondataavailable_proxy:
-            #self._ondataavailable_proxy.destroy()
             self.__dict__["_ondataavailable_proxy"] = None
         if self._onstop_proxy:
-            #self._onstop_proxy.destroy()
             self.__dict__["_onstop_proxy"] = None
             
         if self._visualizer_proxy:
-            #self._visualizer_proxy.destroy()
             self.__dict__["_visualizer_proxy"] = None
 
         if self.audio_ctx:
@@ -767,7 +753,6 @@ def save_audio_chunk(session_id: str, chunk_index: int, base64_data: str, conten
         # Decode base64 bytes
         audio_bytes = base64.b64decode(base64_data)
         
-        # Write binary chunk
         file_path.write_bytes(audio_bytes)
         
         print(f"[AudioRecorder Server] Saved chunk {chunk_index} for session {session_id} to {file_path}")

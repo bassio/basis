@@ -1,4 +1,4 @@
-"""The ``$themes`` catalog store — the theme registry (ROADMAP-THEMING §6.5.3).
+"""The ``$themes`` catalog store — the theme registry.
 
 An :class:`~basis.shared.app_state.AppStateStore` whose ``items`` projection is
 the *theme* slice of the shared contribution registry (``kind == "theme"``) —
@@ -8,8 +8,7 @@ their state); ``$theme`` says what's applied and how it looks.
 The theme ``metadata`` block each catalog entry carries is shaped here too
 (:func:`theme_metadata`) — theme is its own plugin, so this lives in the theme
 plugin, not in framework-core's plugin registry. The shared registry listing
-builder calls it lazily for ``kind == "theme"`` entries.
-"""
+builder calls it lazily for ``kind == "theme"`` entries."""
 
 from basis.shared.actions import server_action
 from basis.shared.app_state import AppStateStore
@@ -21,8 +20,7 @@ def theme_metadata(plugin) -> dict | None:
 
     Reads common fields off ``plugin.definition`` generically. Homed in the
     theme plugin (theme is its own plugin, not a framework-core concern); the
-    shared ``_registry_listing`` builder imports it lazily for theme entries so
-    framework core stays theme-agnostic (ROADMAP-THEMING.md §6.5.2).
+    shared ``_registry_listing`` builder imports it lazily for theme entries.
     """
     definition = getattr(plugin, "definition", None)
     if definition is None:
@@ -48,7 +46,7 @@ class ThemeRegistryStore(AppStateStore):
     Same shape as the ``$plugins`` registry store: an ``items`` projection of
     the shared registry, SSR-serialized, client-reactive. The only differences
     are the ``kind == "theme"`` filter and the theme metadata block each entry
-    carries (ROADMAP-THEMING §6.5.2).
+    carries.
     """
 
     def __init__(self, name: str = "themes"):

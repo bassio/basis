@@ -28,6 +28,7 @@ else:
     pyfetch = None
 
 from basis.shared.context import ContextVarProxyDict
+from basis.shared.media import MediaMixin
 from basis.shared.reactive import ReactiveObject
 from basis.shared.serialization import jsonable
 
@@ -73,10 +74,15 @@ def attach_app_to_store(store, app) -> None:
 # ``$plugins``: the Page guarantees the store exists (empty by default) and the
 # base template's head ``<meta for>`` loop binds it. Plugins/contributors never
 # ``include_store`` it — they only push items into it.
+#
+# ``$device`` / ``$network`` (MOBILE-M1.3) are Page-level defaults too: the
+# client-observed context data plane, serialized with neutral defaults on the
+# server so SSR and CSR first paint agree (the client probes real values after
+# mount).
 # NOTE: ``$regions`` is NOT here — it is provided by the official regions plugin
 # (basis.plugins.regions), which registers its store at boot so it is picked up
 # by the default "all stores" serialization path.
-FRAMEWORK_STORE_NAMES = ("plugins", "meta")
+FRAMEWORK_STORE_NAMES = ("plugins", "meta", "device", "network")
 
 
 def ensure_store(name: str, store_cls: type) -> Store:
@@ -93,9 +99,28 @@ def ensure_store(name: str, store_cls: type) -> Store:
     return store_cls(name)
 
 
-class Store(ReactiveObject):
+# Set by the client entrypoint once every page has mounted. A store built after that
+# point must attach its own client listeners, because the ready sweep has already run.
+# Never set on the server, where the entrypoint does not execute.
+_client_ready = False
+
+
+def mark_client_ready() -> None:
+    """Record that the client document has mounted (client entrypoint only)."""
+    global _client_ready
+    _client_ready = True
+
+
+class Store(MediaMixin, ReactiveObject):
     _registry = ContextVarProxyDict("store_registry")
     _pending_subscriptions = ContextVarProxyDict("store_pending_subscriptions")
+
+    #: Neutral values for *context-observed* state: fields whose real answer only the
+    #: client has, but whose neutral the server still serialises (see
+    #: ``basis.shared.device`` / ``basis.shared.network``). Declared here rather than
+    #: assigned in ``__init__`` so they are real fields before computeds are primed — and
+    #: so a store subclass needs no constructor at all.
+    neutral_defaults: dict[str, Any] = {}
 
     # Persistent config registry: name -> (cls, config_snapshot).
     # Unlike `_registry` (which is cleared per-request for SSR isolation), this is a plain
@@ -215,14 +240,16 @@ class Store(ReactiveObject):
         self.__dict__['loading'] = False
         self.__dict__['error'] = None
 
-        # Register default public attributes as state nodes
         self._dag.get_or_create_state('loading')
         self._dag.get_or_create_state('error')
 
-        # Register in the global registry
+        displaced = Store._registry.get(name)
+        if displaced is not None and displaced is not self:
+            # One name, one registry slot: the displaced instance's client listeners
+            # have no other owner.
+            displaced._detach_media()
         Store._registry[name] = self
 
-        # Fulfill pending subscriptions
         if name in Store._pending_subscriptions:
             for subscribing_component_instance, attr_name in Store._pending_subscriptions.pop(name):
                 self.add_subscription(
@@ -243,14 +270,12 @@ class Store(ReactiveObject):
                 try:
                     state_data = json.loads(initial_state_script.textContent)
                     if name in state_data:
-                        # print(f"HYDRATING store {name} FROM basis-initial-state")
                         for k, v in state_data[name].items():
                             setattr(self, k, v)
                         
                         self.__dict__['_hydrated_from_ssr'] = True
                         self.__dict__['_first_load_completed'] = True
                         
-                        # Populate metadata if present under __basis_meta__
                         basis_meta = state_data.get("__basis_meta__", {})
                         if basis_meta:
                             ssr_params = basis_meta.get("ssr_params", {})
@@ -264,8 +289,33 @@ class Store(ReactiveObject):
                 except Exception as e:
                     print(f"Error: Failed to hydrate store '{name}': {e}")
 
-        # Register @computed properties from the class
+        # Declared fields become real ones before computeds are primed, so a computed
+        # reading one settles on a state node instead of a promoted class attribute, and
+        # a browser-less render still serialises the neutral.
+        self._materialize_defaults()
+        self._materialize_media()
+        if _client_ready:
+            self._attach_media()
+
         self._init_computed()
+
+    @classmethod
+    def declared_neutral_defaults(cls) -> dict:
+        """The neutrals in effect for *cls*: base-first, so an override wins."""
+        merged = {}
+        for klass in reversed(cls.__mro__):
+            merged.update(klass.__dict__.get("neutral_defaults") or {})
+        return merged
+
+    def _materialize_defaults(self) -> None:
+        """Give every declared neutral a real field — unless hydration wrote one.
+
+        Absence, not hydration, is the guard: a key the server did not ship still gets
+        its neutral, so no field is ever unreadable, and a shipped value always wins.
+        """
+        for name, neutral in type(self).declared_neutral_defaults().items():
+            if name not in self.__dict__:
+                setattr(self, name, neutral)
 
     def serialize(self) -> dict:
         """
@@ -305,7 +355,6 @@ class Store(ReactiveObject):
         # Dedup bookkeeping only — the reactive edge is the DAG effect below.
         self.__dict__['_subscriptions'].append((component_instance, attr_name))
 
-        # Register as EffectNode in the DAG
         store_name = self.get_store_name()
         effect_name = f"sub_{id(component_instance)}_{attr_name}"
 
@@ -340,9 +389,20 @@ class Store(ReactiveObject):
         self.__dict__['_subscriptions'] = [
             sub for sub in self._subscriptions if sub != (component_instance, attr_name)
         ]
-        # Remove from DAG
         effect_name = f"sub_{id(component_instance)}_{attr_name}"
         self._dag.remove_effect(effect_name)
+
+    def on_client_ready(self) -> None:
+        """Client-only: the document has mounted; attach client-side listeners here.
+
+        Inherited from :class:`~basis.shared.media.MediaMixin`, which wires the store's
+        declared media queries. Overriders must call ``super().on_client_ready()``.
+        """
+        super().on_client_ready()
+
+    def on_client_teardown(self) -> None:
+        """Client-only: undo :meth:`on_client_ready`. Safe to call repeatedly."""
+        super().on_client_teardown()
 
     def _require_app(self):
         """Return the owning app for an app-bound store (``_requires_app``).
@@ -560,7 +620,6 @@ class ModelStore(Store):
         if name.startswith('_'):
             raise AttributeError(name)
         
-        # Check fields
         model = self.__dict__['_config'].get("model")
         if model is None:
             raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")

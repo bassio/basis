@@ -6,8 +6,7 @@ third-party plugin. It owns:
 
 - the app-hosted region registry state (``app._regions`` / ``app._region_seq``),
 - the ``$regions`` store (created in ``on_register``),
-- the region contribution API (``add_to_region`` / ``remove_from_region``,
-  formerly app-level ``Basis`` methods),
+- the region contribution API (``add_to_region`` / ``remove_from_region``),
 - the ``<ui-region>`` component (served to the client via ``serving_dir``).
 """
 
@@ -21,15 +20,14 @@ class RegionsPlugin(BasisPlugin):
 
     ``on_register`` sets up the app-owned registry + the ``$regions`` store. The
     contribution API (``add_to_region`` / ``remove_from_region``) registers
-    directly against the owning app — this is the former ``Basis.add_to_region``
-    surface, moved into the plugin space so the framework core has no region
+    directly against the owning app, so framework core carries no region
     knowledge.
     """
 
     def on_register(self, app) -> None:
         """Create the app-owned region registry state + the ``$regions`` store."""
-        # App-housed region registry (ROADMAP-SPATIAL.md): {region: [RegionContribution]}.
-        # Durable, boot-populated; the $regions store is a reactive projection.
+        # App-housed region registry: {region: [RegionContribution]}. Durable,
+        # boot-populated; the $regions store is a reactive projection.
         if not hasattr(app, "_regions"):
             app._regions = {}
         if not hasattr(app, "_region_seq"):
@@ -59,9 +57,10 @@ class RegionsPlugin(BasisPlugin):
         Identity is ``(region, class)``: re-adding the same class replaces the
         existing entry (HMR-safe). Ordering: declaration order (append) by
         default, overridable by ``order=`` (int sort key); ``position="start"``
-        prepends. Returns a ``RegionHandle`` disposer. See ROADMAP-SPATIAL.md.
+        prepends. Returns a ``RegionHandle`` disposer.
 
-        This is the plugin-space replacement for the former ``Basis.add_to_region``.
+        Registers against the owning app directly; the contribution API lives in
+        the plugin space so framework core carries no region knowledge.
         """
         from basis.plugins.regions.registry import (
             MIN_ORDER,

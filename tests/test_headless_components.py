@@ -2,7 +2,7 @@
 Tests for headless components — multi-file components where the ``.html`` (±
 ``.css``) exist but the ``.py`` logic file does not yet.
 
-Covers (see HEADLESS-COMPONENTS-PLAN.md, Option D — static-handler synthetic):
+Covers (the static handler serves synthetic modules):
 * Detection: bare ``*.html`` at the mount root with no owning ``.py`` is promoted;
   an owned companion (same-stem ``.py``) is NOT headless.
 * Identity: ``todo_list.html`` -> class ``TodoList``, tag ``todo-list``, module

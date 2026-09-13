@@ -17,7 +17,7 @@ Pyodide):
   fields it depends on, and caches the desugared AST trees for eval.
 
 The expression engine is a standalone concern; ``bindings.py`` re-exports
-these names for backwards compatibility.
+these names for existing importers.
 """
 
 import ast
@@ -339,7 +339,6 @@ def _eval_ast(node, context, allowed_builtins, scope=None):
                 if found:
                     return val
 
-            # Check context (can be a dict or a component instance)
             if isinstance(context, dict):
                 if node.id in context:
                     return context[node.id]
@@ -670,7 +669,6 @@ def extract_dependencies(template_str, allowed_builtins=ALLOWED_BUILTINS, format
     try:
         parsed_template = list(parser.parse(template_str))
     except ValueError:
-        # Handle cases where template_str is not a valid format string (e.g. CSS)
         return [], {}
     
     fnames = [fname for _, fname, _, _ in parsed_template if fname is not None]
@@ -700,7 +698,6 @@ def extract_dependencies(template_str, allowed_builtins=ALLOWED_BUILTINS, format
                     if node.id not in allowed_builtins and node.id not in ['BaseComponent'] and isinstance(getattr(node, 'ctx', None), ast.Load):
                         deps.add(node.id)
                 elif isinstance(node, ast.Attribute):
-                    # Detect BaseComponent.S['store'].attr or BaseComponent.C['comp'].attr
                     if isinstance(node.value, ast.Subscript) and \
                        isinstance(node.value.value, ast.Attribute) and \
                        isinstance(node.value.value.value, ast.Name) and \

@@ -92,13 +92,11 @@ def dev(
 
     module_part, attr_part = import_path.split(":", 1)
 
-    # Build the startup banner
     _print_banner(import_path, host, port, reload, hmr, pyc, profile, project_dir)
 
     # Discover and display plugins before starting
     _show_plugin_summary(module_part, project_dir)
 
-    # Build uvicorn command
     uvicorn_args = [
         sys.executable, "-m", "uvicorn",
         import_path,

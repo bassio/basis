@@ -45,8 +45,6 @@ class ContextVarProxyDict(dict):
             task_name = task.get_name() if task else "NoTask"
         except Exception:
             task_name = "ErrorTask"
-            
-        # print(f"[REGISTRY-DEBUG] {self._name} - Task: {task_name}, DictID: {id(d)}, Created: {created}, Len: {len(d)}")
         
         return d
 

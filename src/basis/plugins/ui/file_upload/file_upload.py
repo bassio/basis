@@ -275,7 +275,6 @@ class FileUpload(Component):
 
                 base64_data = data_url.split(",")[1] if "," in data_url else data_url
 
-                # Call backend action with verification parameters
                 res = await call_action(
                     "basis.plugins.ui.file_upload.file_upload.save_upload_chunk",
                     None,
@@ -301,7 +300,6 @@ class FileUpload(Component):
             # Successfully uploaded all chunks
             self.update_file_state(file_id, status="success", file_path=res.get("file_path", ""))
 
-            # Get the updated file_info to dispatch
             updated_file_info = None
             for f in self.files:
                 if f["id"] == file_id:

@@ -15,7 +15,7 @@ class MyActivityBar(ActivityBar):
 
     def template(self):
         """
-        <div class="shell-activity-bar" style="flex: 0 0 {width};" data-border="{border}">
+        <div class="shell-activity-bar" style="--shell-activitybar-width: {width}; --shell-activitybar-mobile-height: {mobile_height};" data-border="{border}">
             <shell-stack direction="{direction}" align="{align}" justify="space-between" gap="{gap}" size="1 1 auto">
                 <div class="shell-activity-top"><slot name="top"></slot></div>
                 <div class="shell-activity-bottom"><slot name="bottom"></slot></div>

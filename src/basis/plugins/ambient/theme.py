@@ -19,7 +19,7 @@ definition = ThemeDefinition(
     author="Basis",
     description=(
         "A calm, teal-accented alternative to the default — the in-tree "
-        "dogfood proving the theme-package format (ROADMAP-THEMING §6.5)."
+        "dogfood proving the theme-package format."
     ),
     data_theme="ambient",
     color_scheme="auto",

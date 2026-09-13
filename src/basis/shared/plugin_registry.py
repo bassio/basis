@@ -22,7 +22,7 @@ def _registry_listing(app, kinds: tuple[str, ...] | None = None) -> dict:
     ``app._plugin_registrations``, optionally filtered by ``kinds``. Themes
     (``kind == "theme"``) additionally carry a ``theme`` metadata block. The
     single source of truth shared by the ``$plugins`` / ``$themes`` stores, the
-    projection endpoints, and any tooling (ROADMAP-THEMING.md §6.5.2).
+    projection endpoints, and any tooling.
     """
     registrations = getattr(app, "_plugin_registrations", {})
     snapshot = {}
@@ -58,7 +58,7 @@ def _plugin_listing(app) -> dict:
 
     Backward-compatible wrapper over :func:`_registry_listing`: the ``$plugins``
     store, the ``GET /basis/api/plugins`` endpoint, and tooling keep using this
-    name; themes live in the ``$themes`` catalog instead (ROADMAP-THEMING.md).
+    name; themes live in the ``$themes`` catalog instead.
     """
     return _registry_listing(app, kinds=("plugin",))
 

@@ -1,5 +1,5 @@
 """
-Region primitive tests (ROADMAP-SPATIAL.md Tier A1/A2).
+Region primitive tests.
 
 Covers: the app-level ``add_to_region`` API (class-as-identity, replace-on-
 readd, ordering), the ``$regions`` RegionStore projection, the plugin flush /
@@ -22,7 +22,7 @@ from basis.shared.store import Store
 
 # The official regions plugin provides the <ui-region> custom element, the
 # $regions store and the contribution API (app-level add_to_region moved into
-# the plugin space — REGIONS-PLUGIN-PLAN.md D2).
+# the plugin space).
 from basis.plugins.regions import regions_plugin
 # Register the <ui-region> custom element / component class so templates that
 # reference the tag resolve it as a child component (server + client).

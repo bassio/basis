@@ -1,8 +1,7 @@
-"""The ``$theme`` store — reactive design tokens + the active-theme control plane
-(ROADMAP-THEMING.md §4.2 / §6.5.3).
+"""The ``$theme`` store — reactive design tokens + the active-theme control plane.
 
-API-compatible with the pre-P3 store (token attrs, ``dark_mode``,
-``toggle_dark_mode()``) plus the P3 control plane: ``active_theme``,
+API-compatible with the token attrs, ``dark_mode`` and ``toggle_dark_mode()``,
+plus the control plane: ``active_theme``,
 ``set_theme(id)`` / ``set_mode(mode)`` / ``set_accent(value)`` — all *dual-path*
 methods (the client-side theme engine): on the client they apply locally and
 persist by flushing the cookie directly (no RPC round trip); on the server they
@@ -71,22 +70,69 @@ class ThemeStore(CookieStore):
         # super().__init__() would CLOBBER the SSR-hydrated values (hydration
         # runs inside Store.__init__). Only apply defaults when nothing was
         # hydrated — otherwise a persisted theme / seed is lost.
-        if getattr(self, "_hydrated_from_ssr", False):
-            return
+        if not getattr(self, "_hydrated_from_ssr", False):
+            self.__dict__["_definition"] = definition or DEFAULT_DEFINITION
+            self.dark_mode = False
+            self.active_theme = self._definition.id
+            self.data_theme = self._definition.data_theme
+            self.accent = None  # user accent override (unset → theme's accent)
 
-        self.__dict__["_definition"] = definition or DEFAULT_DEFINITION
-        self.dark_mode = False
-        self.active_theme = self._definition.id
-        self.data_theme = self._definition.data_theme
-        self.accent = None  # user accent override (unset → theme's accent)
+            # Reactive token attributes — the exact names the UI/shell consume
+            # (docs/04_components/ui-components.md). Missing/invalid slots fall
+            # back to the default theme (themes are overlays).
+            base = self._definition.tokens
+            for slot in TOKEN_SLOTS:
+                value = getattr(base, slot) or getattr(DEFAULT_TOKENS, slot, "")
+                setattr(self, slot, value)
+            # Resolve the active definition's browser-chrome colors into public
+            # attrs — serialized into #basis-initial-state and hydrated on the
+            # client, so the live sync below needs no definition lookup.
+            self._derive_chrome_colors()
 
-        # Reactive token attributes — the exact names the UI/shell consume
-        # (docs/04_components/ui-components.md). Missing/invalid slots fall
-        # back to the default theme (themes are overlays).
-        base = self._definition.tokens
-        for slot in TOKEN_SLOTS:
-            value = getattr(base, slot) or getattr(DEFAULT_TOKENS, slot, "")
-            setattr(self, slot, value)
+        # Client-only live re-sync (B.9 / F1): a DAG effect re-upserts the
+        # ``theme-color`` ``$meta`` item whenever the chrome color — or the mode
+        # picking its side — changes, so the head ``<meta for>`` loop reconciles
+        # the live node on ANY write path (a direct ``dark_mode = …``
+        # assignment included), not just the dual-path methods.
+        if IS_CLIENT:
+            self._install_meta_color_watch()
+
+    # ── browser-chrome color: derived public attrs + live $meta re-sync ──────
+
+    def _derive_chrome_colors(self) -> None:
+        """Resolve the ACTIVE definition's browser-chrome colors into public
+        attrs (``theme_color_light`` / ``theme_color_dark``).
+
+        Kept as ordinary public attributes (like the token slots) so they
+        serialize into ``#basis-initial-state`` and a hydrated client can pick
+        the current ``theme-color`` without holding the definition — a client
+        ThemeStore never carries ``_definition`` (it is not serialized), so
+        resolving from ``DEFAULT_DEFINITION`` there would yield the wrong color
+        for app/overlay themes."""
+        definition = self.__dict__.get("_definition") or DEFAULT_DEFINITION
+        self.theme_color_light = resolve_theme_color(definition, dark=False)
+        self.theme_color_dark = resolve_theme_color(definition, dark=True)
+
+    def _install_meta_color_watch(self) -> None:
+        """Client-only DAG effect: re-sync the ``$meta`` theme-color item when
+        the chrome color or the mode picking its side changes.
+
+        The chrome color is fully determined by ``theme_color_light``/
+        ``theme_color_dark`` + ``dark_mode`` (the definition is already
+        collapsed into the two colors by :meth:`_derive_chrome_colors`), so a
+        direct ``store.dark_mode = …`` or a ``set_theme`` re-derivation both
+        trigger this — closing the gap where only the dual-path methods
+        remembered to call :meth:`_sync_meta_color`."""
+
+        def _resync():
+            self._sync_meta_color()
+
+        self._scope.add_effect(
+            self._dag,
+            f"theme_meta_color_{id(self)}",
+            _resync,
+            ["dark_mode", "theme_color_light", "theme_color_dark"],
+        )
 
     # ── theme switching (dual-path: client applies locally + flushes the ─────
     #    cookie directly; server applies + marks dirty for the RPC write) ─────
@@ -190,6 +236,7 @@ class ThemeStore(CookieStore):
         for slot in TOKEN_SLOTS:
             value = getattr(base, slot) or getattr(DEFAULT_TOKENS, slot, "")
             setattr(self, slot, value)
+        self._derive_chrome_colors()
 
     # ── cookie payload (CookieStore hooks — core calls these generically) ──
 
@@ -209,7 +256,7 @@ class ThemeStore(CookieStore):
         """Hydrate theme prefs from a decoded cookie, resolving the definition so
         the token attributes re-derive (falls back to ``basis`` if the saved
         theme is no longer available — disabling a theme unwinds on the next
-        render, P4)."""
+        render)."""
         theme_id = prefs.get("active_theme")
         if theme_id:
             app = self.__dict__.get("_app")
@@ -240,7 +287,7 @@ class ThemeStore(CookieStore):
         self._flush_cookie()
         self._sync_meta_color()
 
-    # ── $meta theme-color contribution (ROADMAP-MOBILE M1.1 / B.9) ─────────
+    # ── $meta theme-color contribution ──────────────────────────────────────
 
     def _sync_meta_color(self) -> None:
         """Upsert the active theme's browser-chrome color into the ``$meta``
@@ -256,9 +303,19 @@ class ThemeStore(CookieStore):
         meta = Store._registry.get("meta")
         if meta is None:
             return
-        definition = self.__dict__.get("_definition") or DEFAULT_DEFINITION
         dark = bool(getattr(self, "dark_mode", False))
-        meta.upsert("theme-color", resolve_theme_color(definition, dark=dark))
+        # Prefer the derived public chrome colors (serialized from the server, so
+        # the client doesn't need to re-resolve a definition); fall back to
+        # resolving from the in-memory definition.
+        color = (
+            getattr(self, "theme_color_dark", "")
+            if dark
+            else getattr(self, "theme_color_light", "")
+        )
+        if not color:
+            definition = self.__dict__.get("_definition") or DEFAULT_DEFINITION
+            color = resolve_theme_color(definition, dark=dark)
+        meta.upsert("theme-color", color)
 
     def apply_request(self, request) -> None:
         """Server-only per-request hook: apply the ``basis_theme`` cookie (the

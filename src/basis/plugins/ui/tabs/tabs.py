@@ -34,7 +34,6 @@ class Tabs(Component):
         event.preventDefault()
         event.dataTransfer.dropEffect = "move"
         
-        # Find the tab we are dragging over
         target = event.target.closest("ui-tab")
         if target and self._dragged_tab and target != self._dragged_tab:
             # Determine if we should insert before or after

@@ -1,6 +1,5 @@
 """
-Tests for the M1.1 mobile viewport & base-CSS changes (ROADMAP-MOBILE.md,
-MOBILE-M1.1-PLAN.md):
+Tests for the mobile viewport & base-CSS behavior:
 
 * ``Page.viewport`` is a class attribute; the rendered viewport ``<meta>``
   carries the mobile-correct default (``viewport-fit=cover`` +
@@ -99,7 +98,7 @@ def test_mobile_base_style_block_injected_into_head():
 
     for url in (ssr_url, csr_url):
         html = client.get(url).text
-        # The viewport style is an in-tree <head> binding node (§4.1 P3) so it
+        # The viewport style is an in-tree <head> binding node, so it
         # carries a data-hydration-id after the id attribute — match on the id
         # prefix, not the exact open tag.
         assert '<style id="basis-viewport"' in html

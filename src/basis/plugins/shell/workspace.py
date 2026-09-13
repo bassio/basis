@@ -38,6 +38,7 @@ class Workspace(Component):
 
         .shell-workspace {
             box-sizing: border-box;
+            flex: 1 1 auto;
             min-width: 0;
             min-height: 0;
             overflow: hidden;
@@ -46,8 +47,8 @@ class Workspace(Component):
 
     def template(self):
         """
-        <div class="shell-workspace" style="flex: 1 1 auto;">
-            <shell-stack direction="row" size="1 1 auto">
+        <div class="shell-workspace">
+            <shell-stack direction="row" size="1 1 auto" layout="workbench">
                 <shell-activity-bar width="{activitybar_width}"></shell-activity-bar>
                 <shell-sidebar-left width="{sidebar_left_width}"></shell-sidebar-left>
                 <shell-splitter if="{sidebar_left_resizeable}" direction="horizontal"></shell-splitter>

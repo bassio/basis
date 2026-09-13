@@ -1,16 +1,12 @@
 """
-Component lifecycle contract — P0 regression harness + P1 unmount tests for
-``COMPONENT-LIFECYCLE-PLAN.md``.
+Component lifecycle contract: the mount-side semantics this framework promises,
+plus the unmount path (``Component.destroy()`` + ``on_unmounted()``).
 
-P0 pinned TODAY's component lifecycle semantics on the server model (the server
-side of an SSR render); those pins still guard the mount-side contract so the
-refactor cannot change it silently. P1 added a real ``Component.destroy()`` +
-``on_unmounted()``; the two P0 pins that documented the *gaps* (shallow
-ChildBinding destroy, custom-element loop-child store-subscription leak) were
-deliberately FLIPPED to assert the fixed behavior.
+The pins here guard the mount-side contract so a refactor cannot change it
+silently, and assert that teardown really unmounts (ChildBinding destroys its
+child subtree; a custom-element loop child's store subscriptions are released).
 
-Every test documents exactly what it pins and which phase will *deliberately*
-change it.
+Every test documents exactly what it pins.
 
 Coverage boundary (why some plan items are documented here, not asserted):
 - ``on_mounted`` running in the *client CSR* and *client detached-SSR-shadow*
@@ -90,9 +86,8 @@ def test_on_hydrated_is_not_part_of_server_mount():
     """Hydration is a client-only concept: mounting (server SSR render / client
     CSR) NEVER calls ``on_hydrated`` — that hook fires only from the client's
     ``initialize_ssr`` re-pointing pass. Pins that ``on_mounted`` and
-    ``on_hydrated`` are two DISJOINT entry points (the "which hook where" table
-    in the plan §3.2), so P1 cannot accidentally start invoking hydration hooks
-    on the server or during plain mounts."""
+    ``on_hydrated`` are two DISJOINT entry points — a mount must not invoke
+    hydration hooks on the server or during plain mounts."""
     history = []
 
     class Life(Component):
@@ -118,8 +113,8 @@ def test_on_hydrated_is_not_part_of_server_mount():
 def test_if_hide_keeps_child_mounted_and_reveal_reattaches():
     """IfBinding HIDE detaches the child's wrapper from the DOM but does NOT
     unmount it: the child instance, its scope effects and bindings stay live so
-    re-show works WITHOUT a remount. This pins hide ≠ unmount (plan §3.3) —
-    P1's recursive ``destroy()`` must never be triggered by an if-hide."""
+    re-show works WITHOUT a remount. This pins hide ≠ unmount — an if-hide must
+    never trigger the recursive ``destroy()``."""
     class Inner(Component):
         __tag__ = "x-life-hide-inner"
         label = ""
@@ -273,12 +268,10 @@ class Pill(Component):
 
 
 def test_region_removal_tears_down_contribution_scope_and_node():
-    """``<ui-region>`` item removal routes through the full P1/P2
+    """``<ui-region>`` item removal routes through the full
     ``Component.destroy()`` — the contribution's scope effects are cleared, its
     DOM node is removed, the instance is marked destroyed and (via destroy's
-    cascade) its nested children are unmounted. P0 pinned the pre-P2 contract
-    (ad hoc scope-destroy + node.remove, no on_unmounted); Phase 2 adopted full
-    destroy() here, so the observable contract is now the destroy contract."""
+    cascade) its nested children are unmounted."""
     from basis.plugins.regions.region import Region
     from basis.plugins.regions.registry import cls_path_of
     from basis.plugins.regions.store import RegionStore
@@ -307,7 +300,7 @@ def test_region_removal_tears_down_contribution_scope_and_node():
 
 
 # ---------------------------------------------------------------------------
-# Phase 1 — Component.destroy() / on_unmounted()
+# Mount-side contract: destroy()/on_unmounted()
 # ---------------------------------------------------------------------------
 
 def test_destroy_is_idempotent_removes_element_and_calls_on_unmounted_once():
@@ -472,7 +465,7 @@ def test_destroy_drains_pending_subscriptions():
 
 
 # ---------------------------------------------------------------------------
-# Phase 2 — destroy() is reachable: region adopts full destroy, JsComponent
+# Unmount path: region adopts full destroy, JsComponent
 # boot-race guard, whole-loop cascade (tests only)
 # ---------------------------------------------------------------------------
 

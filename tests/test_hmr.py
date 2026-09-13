@@ -1,5 +1,5 @@
 """
-Tests for client-side HMR wiring (ROADMAP.md Critical #2).
+Tests for client-side HMR wiring.
 
 Covers:
   * ``BASIS_HMR`` env var -> in-process file watcher enabled by default

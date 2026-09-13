@@ -1,5 +1,5 @@
 """
-Regions-as-an-official-plugin tests (REGIONS-PLUGIN-PLAN.md Phase 2).
+Regions-as-an-official-plugin tests.
 
 Covers the ``basis.plugins`` entry-point registration (the regions plugin is
 discovered and auto-registered at bootstrap exactly like a third-party plugin),
@@ -414,8 +414,7 @@ def test_region_hosted_plugin_disables_over_http_without_force():
 
 def test_region_store_subscribes_to_plugins_via_dag_edge():
     """``RegionStore`` subscribes to ``$plugins.items`` through a first-class
-    cross-object DAG edge (the mechanism ``ComponentSubscription`` became —
-    BINDINGS-REVIEW §6): ``$plugins.add_subscription(self, "items")`` registers
+    cross-object DAG edge: ``$plugins.add_subscription(self, "items")`` registers
     an effect on ``$plugins``' graph keyed on ``items``. No framework code knows
     "regions" by name."""
     from basis.plugins.regions.store import RegionStore

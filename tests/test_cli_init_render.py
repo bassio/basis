@@ -1,4 +1,4 @@
-"""The Jinja2-based template renderer + layout context — P0 of INIT-SHELL-PLAN.md §4.9."""
+"""The Jinja2-based template renderer + layout context."""
 
 from __future__ import annotations
 

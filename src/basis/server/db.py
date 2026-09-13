@@ -1,31 +1,52 @@
 import inspect
 from fastapi import Depends, Request, HTTPException
-from sqlmodel import Session, select, delete, SQLModel
-from sqlalchemy.orm import joinedload, selectinload
-from sqlalchemy import inspect as sqlalchemy_inspect
+
+# The DB layer is an optional extra (``basis-framework[db]``): a plain install
+# must still import the app/plugin mixins, so a missing sqlmodel degrades to an
+# actionable error where the DB is actually USED rather than an ImportError here.
+try:
+    from sqlmodel import Session, select, delete, SQLModel
+    from sqlalchemy.orm import joinedload, selectinload
+    from sqlalchemy import inspect as sqlalchemy_inspect
+except ImportError as exc:
+    _DB_IMPORT_ERROR: ImportError | None = exc
+    Session = select = delete = SQLModel = None
+    joinedload = selectinload = sqlalchemy_inspect = None
+else:
+    _DB_IMPORT_ERROR = None
 
 from basis.shared.serialization import register_serializer
 
 
-@register_serializer(for_type=SQLModel)
-def _serialize_sqlmodel(obj):
-    """Serialize a SQLModel record: model_dump plus any loaded relationships.
+def _require_db() -> None:
+    """Raise an actionable error when the optional DB dependencies are absent."""
+    if _DB_IMPORT_ERROR is not None:
+        raise RuntimeError(
+            "The database layer needs the optional 'db' extra — install it with "
+            "`uv add 'basis-framework[db]'` (or `pip install sqlmodel`)."
+        ) from _DB_IMPORT_ERROR
 
-    Registered at the DB layer (not in core ``serialization.py``) so the shared
-    serializer stays free of sqlalchemy/sqlmodel — the "db teaches the framework
-    how to serialize its models" plugin pattern. The generic ``model_dump``
-    fallback in :func:`~basis.shared.serialization.jsonable` covers models even
-    without this handler.
-    """
-    data = obj.model_dump()
-    try:
-        mapper = sqlalchemy_inspect(obj.__class__)
-        for rel in mapper.relationships.keys():
-            if rel in obj.__dict__:
-                data[rel] = obj.__dict__[rel]
-    except Exception:
-        pass
-    return data
+
+if _DB_IMPORT_ERROR is None:
+    @register_serializer(for_type=SQLModel)
+    def _serialize_sqlmodel(obj):
+        """Serialize a SQLModel record: model_dump plus any loaded relationships.
+
+        Registered at the DB layer (not in core ``serialization.py``) so the shared
+        serializer stays free of sqlalchemy/sqlmodel — the "db teaches the framework
+        how to serialize its models" plugin pattern. The generic ``model_dump``
+        fallback in :func:`~basis.shared.serialization.jsonable` covers models even
+        without this handler.
+        """
+        data = obj.model_dump()
+        try:
+            mapper = sqlalchemy_inspect(obj.__class__)
+            for rel in mapper.relationships.keys():
+                if rel in obj.__dict__:
+                    data[rel] = obj.__dict__[rel]
+        except Exception:
+            pass
+        return data
 
 
 async def get_db_session(request: Request):
@@ -63,6 +84,7 @@ def create_expose_wrapper(modelcls, method: str = "GET", one: bool = False, rela
     """
     Creates a FastAPI route handler for a model class based on the method.
     """
+    _require_db()
     from basis.shared.serialization import jsonable
     method = method.upper()
 
@@ -236,7 +258,7 @@ class ModelRegistryMixin(object):
         """
         Utility to create database tables for all models registered on this app/plugin.
         """
-        from sqlmodel import SQLModel
+        _require_db()
         SQLModel.metadata.create_all(engine)
 
 

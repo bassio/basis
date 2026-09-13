@@ -119,7 +119,6 @@ def _detect_from_pyproject(pyproject: Path, cwd: Path) -> tuple[str, Path] | Non
     if not project_name:
         return None
 
-    # Check src/<project_name>/__init__.py
     src_init = cwd / "src" / project_name / "__init__.py"
     if src_init.exists():
         var_name = _find_basis_instance_in_file(src_init)

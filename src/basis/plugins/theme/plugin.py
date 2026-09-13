@@ -1,4 +1,4 @@
-"""The official theme plugin — the theming mechanism (ROADMAP-THEMING.md).
+"""The official theme plugin — the theming mechanism.
 
 Sibling to ``regions`` / ``ui`` / ``shell`` on the standard ``basis.plugins``
 entry point. It provides:
@@ -15,7 +15,7 @@ entry point. It provides:
 
 The ``ui`` and ``shell`` plugins depend on it (``requires=["theme"]``); the
 default theme is a separate ``Theme`` entry point (``kind="theme"``) that rides
-the identical path as community themes (ROADMAP-THEMING §6.5.1).
+the identical path as community themes.
 """
 
 from pathlib import Path

@@ -34,9 +34,9 @@ def when_app(*part_flags: str) -> Callable[[ShellConfig], bool]:
 
 TEMPLATE_FILES: tuple[TemplateFile, ...] = (
     TemplateFile("pyproject.toml", "pyproject.toml.j2"),
+    TemplateFile("README.md", "README.md.j2"),  # pyproject's readme points at the root
     TemplateFile("src/{slug}/__init__.py", "__init__.py.j2"),
     TemplateFile("src/{slug}/components/page.py", "page.py.j2"),
-    TemplateFile("src/{slug}/README.md", "README.md.j2"),
     TemplateFile(".gitignore", ".gitignore.j2"),
     TemplateFile("src/{slug}/components/__init__.py", "components/__init__.py.j2"),
     TemplateFile("src/{slug}/components/app_container.py", "components/app_container.py.j2"),

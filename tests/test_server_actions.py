@@ -1,9 +1,8 @@
 """
 HTTP-level tests for the server-action RPC layer.
 
-Regression coverage for ROADMAP.md Critical #1: store-bound ``@server_action``
-methods returned HTTP 404 ("Store 'counter' not found") because the per-request
-middleware wiped ``Store._registry`` and nothing re-created the store.
+Store-bound ``@server_action`` methods must resolve even though the per-request
+middleware wipes ``Store._registry``:
 
 The fix:
   * ``Store._store_blueprints`` — a persistent (never per-request-cleared)

@@ -21,8 +21,8 @@ class PluginManager(RegistryManager):
     A thin ``RegistryManager`` face (``registry="plugins"``): the shared base
     renders the reactive rows and dispatches the row action; this class only
     adds the store name and the per-row disable/enable toggle. The theme
-    manager (``<ui-theme-picker>``) is the sibling face over ``$themes``
-    (ROADMAP-THEMING.md §6.5.4). Themes (``kind == "theme"``) are filtered out
+    manager (``<ui-theme-picker>``) is the sibling face over ``$themes``.
+    Themes (``kind == "theme"``) are filtered out
     of ``$plugins.items`` by the shared registry listing — they appear only in
     the theme manager.
     """

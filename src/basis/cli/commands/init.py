@@ -4,7 +4,7 @@
 Runs a cookiecutter-style question flow (project name → shell paradigm →
 top-level stack → extras), then generates a loadable Basis app shell — workbench
 (``app``) or website (``site``) — that runs on ``basis dev --hmr`` with an SSR
-page at "/". See INIT-SHELL-PLAN.md.
+page at "/".
 """
 
 from __future__ import annotations

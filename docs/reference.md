@@ -18,6 +18,7 @@ Lookup-oriented documentation for the framework's core APIs and catalogues. For 
 ## UI Component Catalogue
 
 - **[Built-in UI Suite](04_components/ui-components.md)** — Out-of-the-box accessible primitives (`Button`, `Badge`, `Toggle`, `Toast`, `Breadcrumbs`, `CommandPalette`, `AudioRecorder`, and more).
+- **[The App Shell](04_components/shell-components.md)** — The workbench/site frames (`TitleBar`, `ActivityBar`, `Sidebar`, `Splitter`, `StatusBar`, `Stack`), sizing as props, and the compact breakpoint contract that makes them phone-correct.
 
 ## Tooling & Repository
 

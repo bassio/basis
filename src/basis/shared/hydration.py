@@ -29,8 +29,6 @@ head and body ids never collide: ``<head>`` under ``h`` (``h:0`` is the
 ``<head>`` element) and ``<body>`` under ``b`` (``b:0`` is the ``<body>``
 element, root of the app region).  The default prefix is ``"b"`` — the
 body/app region — which is what a standalone (non-Page) subtree walk gets.
-The legacy single-root ``r:`` scheme was removed when whole-page hydration
-migrated the body region to ``b:``.
 
 Text nodes cannot carry attributes, so reactive text is addressed via a
 deterministic *text ordinal* stamped on the parent element (``data-hydration-text``
@@ -466,8 +464,7 @@ def _collect_component_hydration(app):
 
 def apply_hydration_to_page(page, body_app=None):
     """Stamp the whole-document hydration surface over the Page's OWN regions —
-    ``<head>`` (``h:``) and ``<body>`` (``b:``) — in one coordinated pass
-    (HYDRATION-WHOLEPAGE.md §4.1 P4).
+    ``<head>`` (``h:``) and ``<body>`` (``b:``) — in one coordinated pass.
 
     The Page is the whole-``<html>`` document shell. Under whole-page hydration
     BOTH regions are Page-owned:
@@ -477,8 +474,7 @@ def apply_hydration_to_page(page, body_app=None):
       initial-state script, the in-tree component-style loop;
     * the **``<body>`` region** (prefix ``b:``) roots at the ``<body>`` element
       and covers the Page's body bindings AND the mounted app subtree, so the
-      whole document hydrates against ONE map (``h:`` + ``b:``), replacing the
-      old separate app-rooted ``r:`` body walk (migrate-always).
+      whole document hydrates against ONE map (``h:`` + ``b:``).
 
     ``body_app`` is the declaratively-mounted root app (when the page has one);
     its subtree's binding targets / component roots join the ``b:`` walk. When
@@ -512,7 +508,7 @@ def apply_hydration_to_page(page, body_app=None):
     # ── HEAD region (h:) ────────────────────────────────────────────────────
     if head_node is not None:
         # Stamp <head> itself as the h: region root so a head LoopBinding (the
-        # component_style_items loop, §4.1 P3) can re-point its parent — <head>
+        # component_style_items loop) can re-point its parent — <head>
         # belongs to no component, so it would never otherwise be stamped.
         head_node.setAttribute(HYDRATION_ID_ATTR, "h:0")
         report.update(

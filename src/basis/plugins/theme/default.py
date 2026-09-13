@@ -1,4 +1,4 @@
-"""The built-in ``basis`` default theme (ROADMAP-THEMING.md §5).
+"""The built-in ``basis`` default theme.
 
 A minimal, cohesive, token-only skin with light + dark variants (expressed as
 ``light-dark()`` pairs), intended as the baseline every theme competes with —
@@ -43,6 +43,15 @@ DEFAULT_TOKENS = ThemeTokens(
     radius_lg="1rem",
     shadow_sm="0 1px 2px 0 rgba(0, 0, 0, 0.05)",
     shadow_md="0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)",
+
+    # Safe-area insets (notch / home indicator). The
+    # browser's env() values (0px wherever it reports no inset: all desktops,
+    # un-notched phones), so screen-edge chrome pads with var(--safe-area-*)
+    # and is notch-aware through the theme.
+    safe_area_top="env(safe-area-inset-top, 0px)",
+    safe_area_right="env(safe-area-inset-right, 0px)",
+    safe_area_bottom="env(safe-area-inset-bottom, 0px)",
+    safe_area_left="env(safe-area-inset-left, 0px)",
 )
 
 

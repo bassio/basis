@@ -1,16 +1,12 @@
 """
-Contract harness for the effect-queue overhaul
-(HYDRATION-REPOINT-RACE-FIX-PLAN.md §5 — invariants I1–I8).
+Contract harness for the effect-queue scheduler.
 
-STATUS (2026-09-02): P1 (owner-scoped pending queues) + P2 (deterministic
-wave-based flush) LANDED together. The old module-global `_dirty_effects` bag is
-GONE; each `DependencyGraph` owns its `_pending` queue and every `EffectNode`
-carries its `owner_graph`; the flush drains graphs in creation order (older =
-store/ancestor first) in waves to quiescence. The two ordering contracts below
-were RED against the old scheduler (the global-set drain interleaved graphs);
-they are now the GREEN regression guard for the deterministic policy.
+Invariants: every ``EffectNode`` knows its owning ``DependencyGraph`` (so pending
+work is attributable to exactly one graph, and destroying a scope drops its own
+pending work), and the flush drains graphs in creation order (stores/ancestors
+before consumers) in waves to quiescence.
 
-P3 (batch + flush-boundary primitives) LANDED: `batch()` / `ReactiveBatch` hold
+`batch()` / `ReactiveBatch` hold
 all flushes for a block and drain (or `discard()`) on the outermost exit;
 `ReactiveScope.pending_count()` / `discard_pending()` give owner-scoped discard.
 
@@ -34,7 +30,7 @@ all flushes for a block and drain (or `discard()`) on the outermost exit;
 The full SSR-hydration integration of the boundary (I7 end-to-end) is P4 and is
 covered by the P5 browser harness.
 
-Empirical note (2026-09-02): for a fixed synthetic scenario the old global set's
+Empirical note: for a fixed synthetic scenario a global-set drain was stable
 pop order was stable across fresh interpreter processes (object-address
 layout), so cross-process stability was NOT the reliably-red contract — the
 GRAPH-INTERLEAVE was. In the real app the dirty-ARRIVAL order also varies with
@@ -351,7 +347,7 @@ def test_prop_sync_child_style_converges_to_forwarded_value():
     Even with the losing order (child 'style' effect reads the un-converged
     default first), quiescence re-runs it after the parent prop-sync, so the
     FINAL write is the forwarded value. (The real bug needs the DOM re-point
-    dimension — see HYDRATION-REPOINT-RACE-FIX-PLAN.md §2.4 — where that
+    dimension — see the scheduler invariants — where that
     corrective re-run can target the shadow node instead of the live SSR node;
     that is I7, fixed by the P3/P4 batch boundary.)"""
     parent = ReactiveObject()

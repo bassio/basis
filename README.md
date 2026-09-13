@@ -131,6 +131,13 @@ Beyond the core, Basis ships with what you need to build real products:
 
 ---
 
+## Contributing
+
+Basis is a new framework with an intentionally unstable API. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request — it covers the general principles this codebase is held to.
+
+---
+
 ## License
 
 [MIT](LICENSE)

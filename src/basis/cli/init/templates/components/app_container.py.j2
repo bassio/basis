@@ -36,6 +36,41 @@ import basis.plugins.ui.toast.toast  # noqa: F401  # registers <ui-toast-contain
 import basis.plugins.shell.site  # noqa: F401  # registers <shell-site> & friends
 {% endif %}
 
+{# The demo body lives here once and is inlined by BOTH paradigm branches. #}
+{% macro demo_content(example_store, example_plugin) %}
+<div class="demo-page">
+    <header class="demo-hero">
+        <span class="demo-eyebrow">Reactive starter</span>
+        <h1>{app_title}</h1>
+        <p class="demo-subtitle">A reactive Basis starter — edit <code>components/app_container.py</code>.</p>
+    </header>
+    <div class="demo-grid">
+        <section class="demo-card">
+            <div class="demo-card-head">
+                <span>Counter</span>
+                <span class="demo-tag">component state</span>
+            </div>
+            <div class="demo-counter">
+                <span class="demo-counter-value">{count}</span>
+                <button class="demo-btn demo-btn--accent" onclick="{increment}">Increment</button>
+            </div>
+        </section>
+{% if example_store %}
+        <section class="demo-card">
+            <div class="demo-card-head">
+                <span>Items <span class="demo-tag">{len($app_state.items)}</span></span>
+                <button class="demo-btn" onclick="{add_item}">Add item</button>
+            </div>
+            <ul class="demo-items">
+                <li for="item" in="{$app_state.items}"><span class="demo-dot"></span>{item}</li>
+            </ul>
+            <p class="demo-empty" if="{not $app_state.items}">Nothing here yet — click <strong>Add item</strong>.</p>
+        </section>
+{% endif %}
+    </div>
+</div>
+{% endmacro %}
+
 
 class AppContainer(Component):
     """Root component — the app shell frame (generated). Edit freely."""
@@ -54,25 +89,23 @@ class AppContainer(Component):
 {% endif %}
 {% if demo %}
     count = 0
-{% endif %}
 
-{% if demo %}
     def increment(self, event=None):
-        """Demo — reactive counter."""
+        """Demo — reactive component state."""
         self.count += 1
+
+    def toggle_theme(self, event=None):
+        """Demo — flip the theme (the theme store persists the choice)."""
+        theme_store = self.S.get("theme")
+        if theme_store is not None:
+            theme_store.set_mode("light" if theme_store.dark_mode else "dark")
 {% endif %}
 
 {% if demo and example_store %}
     async def add_item(self, event=None):
-        """Demo — call the store's canonical-path server action (full-stack RPC)."""
+        """Demo — run a server action; its new state re-renders the list (RPC)."""
         from {{ slug }}.stores.app_state import app_state
-        await app_state.add_item(f"item {len(app_state.items) + 1}")
-
-    def toggle_theme(self, event=None):
-        """Demo — flip the theme (design tokens)."""
-        theme_store = self.S.get("theme")
-        if theme_store is not None:
-            theme_store.dark_mode = not theme_store.dark_mode
+        await app_state.add_item()
 {% endif %}
 
     def style(self):
@@ -123,36 +156,104 @@ class AppContainer(Component):
         }
         .app-action:hover { color: var(--text-primary); background: var(--hover-bg); }
         .status-item { color: var(--text-muted); }
-        .activity-icon { color: var(--accent-color); }
+        .activity-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 2rem;
+            height: 2rem;
+            border-radius: var(--radius-sm);
+            color: var(--text-muted);
+            font-size: 1rem;
+            line-height: 1;
+            cursor: pointer;
+            transition: color 0.15s ease, background-color 0.15s ease;
+        }
+        .activity-icon:hover { color: var(--text-primary); background: var(--hover-bg); }
+        .activity-icon.is-active { color: var(--accent-color); }
 
 {% if demo %}
         /* --- demo: the generated starter (delete me) --- */
-        .demo-hero {
-            max-width: 40rem;
+        .demo-page {
+            max-width: 62rem;
             margin: 0 auto;
-            padding: 3rem 2rem 1.5rem;
+            padding: 2.5rem 2rem 4rem;
+{% if is_app %}
+            /* The workbench main area is a fixed-height, `overflow: hidden`
+               flex column, so the content owns its own scroll region. */
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+{% endif %}
         }
-        .demo-hero h1 { margin: 0 0 0.4rem; font-size: 1.9rem; }
-        .demo-subtitle { margin: 0 0 1.75rem; color: var(--text-secondary); }
-        .demo-subtitle code {
+        .demo-hero { margin: 0 0 2.25rem; text-align: center; }
+        .demo-eyebrow {
+            display: inline-block;
+            margin-bottom: 0.9rem;
+            padding: 0.25rem 0.65rem;
+            border-radius: 999px;
+            background: var(--accent-bg);
+            color: var(--accent-text);
+            font-size: 0.7rem;
+            font-weight: 650;
+            letter-spacing: 0.09em;
+            text-transform: uppercase;
+        }
+        .demo-hero h1 { margin: 0 0 0.6rem; font-size: clamp(1.9rem, 3.5vw, 2.6rem); }
+        .demo-subtitle {
+            max-width: 32rem;
+            margin: 0 auto;
+            color: var(--text-secondary);
+        }
+        .demo-subtitle code, .demo-panel-text code {
             font-family: var(--font-mono);
             font-size: 0.9em;
             background: var(--bg-tertiary);
             padding: 0.15em 0.4em;
             border-radius: var(--radius-sm);
         }
+
+        /* Two cards side by side when there is room, stacked when there is not. */
+        .demo-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+            gap: 1.25rem;
+            align-items: start;
+        }
         .demo-card {
             background: var(--bg-secondary);
             border: 1px solid var(--border-soft);
             border-radius: var(--radius-lg);
             box-shadow: var(--shadow-sm);
+            overflow: hidden;
+        }
+        .demo-card-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            padding: 0.8rem 1.15rem;
+            border-bottom: 1px solid var(--border-soft);
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+        .demo-tag {
+            padding: 0.15rem 0.5rem;
+            border-radius: 999px;
+            background: var(--bg-tertiary);
+            color: var(--text-muted);
+            font-size: 0.68rem;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            font-variant-numeric: tabular-nums;
         }
         .demo-counter {
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 1.5rem;
-            padding: 1.25rem 1.5rem;
+            padding: 1.25rem 1.15rem;
         }
         .demo-counter-value {
             font-size: 2.4rem;
@@ -161,23 +262,29 @@ class AppContainer(Component):
             color: var(--accent-color);
             font-variant-numeric: tabular-nums;
         }
-        .demo-list { max-width: 40rem; margin: 1rem auto 3rem; padding: 0 2rem; }
-        .demo-card-head {
+        .demo-items { margin: 0; padding: 0; list-style: none; }
+        .demo-items li {
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            gap: 1rem;
-            padding: 0.85rem 1.25rem;
-            border-bottom: 1px solid var(--border-soft);
-            font-weight: 550;
-        }
-        .demo-card ul { margin: 0; padding: 0; list-style: none; }
-        .demo-card li {
-            padding: 0.65rem 1.25rem;
-            color: var(--text-primary);
+            gap: 0.65rem;
+            padding: 0.6rem 1.15rem;
             border-bottom: 1px solid var(--border-soft);
         }
-        .demo-card li:last-child { border-bottom: none; }
+        .demo-items li:last-child { border-bottom: none; }
+        .demo-dot {
+            flex: none;
+            width: 0.4rem;
+            height: 0.4rem;
+            border-radius: 50%;
+            background: var(--accent-color);
+        }
+        .demo-empty {
+            margin: 0;
+            padding: 1.5rem 1.15rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            text-align: center;
+        }
         .demo-btn {
             font: inherit;
             font-weight: 550;
@@ -196,14 +303,23 @@ class AppContainer(Component):
             color: var(--accent-text);
         }
         .demo-btn--accent:hover { background: var(--accent-color); filter: brightness(1.05); }
-        .panel {
+        .demo-panel {
             margin: 0.75rem;
             padding: 1rem;
             background: var(--bg-secondary);
             border: 1px solid var(--border-soft);
             border-radius: var(--radius-md);
+        }
+        .demo-panel-title {
+            margin: 0 0 0.35rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        .demo-panel-text {
+            margin: 0;
             color: var(--text-secondary);
-            font-size: 0.9rem;
+            font-size: 0.85rem;
+            line-height: 1.45;
         }
 {% endif %}
         """
@@ -215,51 +331,42 @@ class AppContainer(Component):
             <shell-stack direction="column" size="1 1 auto">
 {% if titlebar %}
                 <shell-title-bar height="{titlebar_height}">
+{% if sidebar_left %}
+                    {# The sidebar's toggle: docked on a desktop, a drawer on a phone. #}
+                    <shell-sidebar-trigger target="#sidebarLeft"></shell-sidebar-trigger>
+{% endif %}
                     <span class="app-title">{app_title}</span>
-{% if demo and example_store %}
+{% if demo %}
                     <span class="app-actions">
                         <button class="app-action" onclick="{toggle_theme}" title="Toggle theme">◐</button>
                     </span>
 {% endif %}
                 </shell-title-bar>
 {% endif %}
-                <shell-stack direction="row" size="1 1 auto">
+                {# `layout="workbench"` is the phone arrangement: at the compact breakpoint
+                   the row restacks, the primary surface comes first and the activity bar
+                   becomes the bottom navigation. The chrome below is unchanged. #}
+                <shell-stack direction="row" size="1 1 auto" layout="workbench">
 {% if activitybar %}
                     <shell-activity-bar width="{activitybar_width}">
-                        <span slot="top" class="activity-icon">◆</span>
+                        <span slot="top" class="activity-icon is-active" title="Explorer">▤</span>
+                        <span slot="bottom" class="activity-icon" title="Settings">⚙</span>
                     </shell-activity-bar>
 {% endif %}
 {% if sidebar_left %}
-                    <shell-sidebar-left width="{sidebar_left_width}" collapsible="{sidebar_left_collapsible}">
+                    <shell-sidebar-left id="sidebarLeft" width="{sidebar_left_width}" collapsible="{sidebar_left_collapsible}">
 {% if demo %}
-                        <div class="panel"><p>Left panel</p></div>
+                        <div class="demo-panel">
+                            <p class="demo-panel-title">Sidebar</p>
+                            <p class="demo-panel-text">App-owned chrome — edit <code>components/sidebar.py</code>.</p>
+                        </div>
 {% endif %}
                     </shell-sidebar-left>
                     <shell-splitter direction="horizontal"></shell-splitter>
 {% endif %}
                     <shell-main-container>
 {% if demo %}
-                        <div class="demo-hero">
-                            <h1>{app_title}</h1>
-                            <p class="demo-subtitle">A reactive Basis starter — edit <code>components/app_container.py</code>.</p>
-                            <div class="demo-card demo-counter">
-                                <span class="demo-counter-value">{count}</span>
-                                <button class="demo-btn demo-btn--accent" onclick="{increment}">Increment</button>
-                            </div>
-                        </div>
-{% if demo and example_store %}
-                        <div class="demo-list">
-                            <div class="demo-card">
-                                <div class="demo-card-head">
-                                    <span>Items</span>
-                                    <button class="demo-btn" onclick="{add_item}">Add item</button>
-                                </div>
-                                <ul>
-                                    <li for="item" in="{$app_state.items}">{item}</li>
-                                </ul>
-                            </div>
-                        </div>
-{% endif %}
+{{ demo_content(example_store, example_plugin) | indent(24, true) -}}
 {% endif %}
 {% if example_plugin %}
                         <ui-region name="workspace-center"></ui-region>
@@ -289,27 +396,7 @@ class AppContainer(Component):
 {% endif %}
                 <shell-main>
 {% if demo %}
-                    <div class="demo-hero">
-                        <h1>{app_title}</h1>
-                        <p class="demo-subtitle">A reactive Basis starter — edit <code>components/app_container.py</code>.</p>
-                        <div class="demo-card demo-counter">
-                            <span class="demo-counter-value">{count}</span>
-                            <button class="demo-btn demo-btn--accent" onclick="{increment}">Increment</button>
-                        </div>
-                    </div>
-{% if demo and example_store %}
-                    <div class="demo-list">
-                        <div class="demo-card">
-                            <div class="demo-card-head">
-                                <span>Items</span>
-                                <button class="demo-btn" onclick="{add_item}">Add item</button>
-                            </div>
-                            <ul>
-                                <li for="item" in="{$app_state.items}">{item}</li>
-                            </ul>
-                        </div>
-                    </div>
-{% endif %}
+{{ demo_content(example_store, example_plugin) | indent(20, true) -}}
 {% endif %}
 {% if example_plugin %}
                     <ui-region name="workspace-center"></ui-region>

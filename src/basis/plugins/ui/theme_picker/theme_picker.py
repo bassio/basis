@@ -1,4 +1,4 @@
-"""The theme manager — ``<ui-theme-picker>`` (ROADMAP-THEMING.md §6.5.4).
+"""The theme manager — ``<ui-theme-picker>``.
 
 A ``RegistryManager`` face over ``$themes`` (the theme catalog): lists every
 installed theme (from the shared registry, ``kind == "theme"``) with its name,

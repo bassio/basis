@@ -1,4 +1,4 @@
-"""Lazy plugin command groups in the CLI (CLI-EXTENSIBILITY.md §6.11).
+"""Lazy plugin command groups in the CLI.
 
 Covers: the import-free cli/ existence check, the LazyGroup import-on-first-use
 semantics (root help is import-free, dispatch imports), reserved/identifier

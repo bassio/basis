@@ -127,8 +127,7 @@ class HMRClient:
 
         # Re-resolve the component's live <style> tags by selector and rewrite
         # them in place. Styles live in-tree in the Page <head> (the
-        # component_style_items loop, §4.1 P3) — there is no body injection to
-        # track (that machinery is gone, §4.1 P5), so a selector
+        # component_style_items loop), so a selector
         # re-resolution at update time is the single source of truth and never
         # trusts a stale element reference across a loop reconciliation.
         for se in document.querySelectorAll(
@@ -234,7 +233,7 @@ class HMRClient:
             new_mod = importlib.import_module(module)
         except Exception as e:
             self._notify(f"Re-import of {module} failed: {e}", error=True)
-            # Restore the old module reference so the app keeps working.
+            # Restore the module reference so the app keeps working.
             sys.modules[module] = mod
             return
 
@@ -248,7 +247,7 @@ class HMRClient:
         }
 
         # 5a. Re-apply template refreshes to subclass classes (from other modules)
-        # that were previously hot-refreshed from this module.
+        # that are hot-refreshed from this module.
         refreshed = 0
         for sub, base_name in list(self._refreshed_subclasses.get(module, {}).items()):
             new_base = new_classes.get(base_name)

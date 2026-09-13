@@ -8,9 +8,7 @@ class Toggle(Component):
     parent-driven: bind it (e.g. ``value="{$store.flag}"``) so external changes
     move the switch, and handle the bubbling ``change`` event to write state
     back (or persist it, e.g. through a store action on the owner).  The
-    control never writes outside its own ``value`` — the old ``update`` prop
-    (backed by the removed ``SetterBinding``) routed a raw, unpersisted
-    ``$store.attr`` write.
+    control never writes outside its own ``value``: the owner persists.
     """
 
     __tag__ = "ui-toggle"

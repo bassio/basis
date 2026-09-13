@@ -1,9 +1,9 @@
 """
-Declarative root app (HYDRATION-WHOLEPAGE.md §4.1 S1/S3) — server surface.
+Declarative root app — server surface.
 
 A ``Page`` mounts its ``root_component`` as a NESTED ``ChildBinding`` under a
 hyphenated host tag in its ``<body>`` app slot — "the root is just another
-component" — instead of the engine imperatively mounting it at the
+component" — not by the engine imperatively mounting it at the
 ``basis:app-root`` comment.
 
 These tests pin:
@@ -13,8 +13,7 @@ These tests pin:
 * the root's own template content lives INSIDE the host;
 * real-Page styles still ship in-tree in the ``<head>`` (nothing body-injected);
 * a root WITHOUT a declared hyphen tag mounts under a kebab-derived host tag
-  (``display: contents`` so it adds no box) — every boot path is declarative
-  (§4.1 P5); there is no legacy imperative mount left.
+  (``display: contents`` so it adds no box) — every boot path is declarative.
 """
 import re
 
@@ -81,7 +80,7 @@ def test_non_hyphen_tagged_root_mounts_under_derived_tag():
     app.include_page("/plain", page_cls=MyPage)
     html = TestClient(app).get("/plain").text
 
-    # §4.1 P5: a root that does NOT declare a hyphenated __tag__ still mounts
+    # A root that does NOT declare a hyphenated __tag__ still mounts
     # declaratively — the framework derives a kebab-case host tag from the class
     # name (PlainRoot → plain-root) and gives it `display: contents` so it adds
     # no box. No app-root comment marker survives.

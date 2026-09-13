@@ -32,6 +32,7 @@ class TabsBar(Component):
         .shell-tabs-bar {
             display: flex;
             box-sizing: border-box;
+            flex: 0 0 var(--shell-tabsbar-height, 32px);
             background: var(--bg-secondary, #26263a);
             overflow: hidden;
         }
@@ -43,7 +44,7 @@ class TabsBar(Component):
 
     def template(self):
         """
-        <div class="shell-tabs-bar" style="flex: 0 0 {height};" data-border="{border}">
+        <div class="shell-tabs-bar" style="--shell-tabsbar-height: {height};" data-border="{border}">
             <shell-stack direction="{direction}" gap="{gap}" align="{align}" size="1 1 auto">
                 <slot></slot>
             </shell-stack>

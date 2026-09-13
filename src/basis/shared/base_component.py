@@ -71,8 +71,8 @@ def _find_anchor_comment(container, anchor_data):
 
     Duck-typed across the server ``Comment`` node (``nodeName == "#comment"`` +
     ``data``) and the browser DOM comment (same ``nodeName`` / ``data``).
-    Comments are never hydration targets, so they are safe inert markers for
-    whole-page in-tree chrome (§4.1 P3).
+    Comments are never hydration targets, so they are safe inert anchors for
+    server-assembled chrome.
     """
     try:
         child_nodes = getattr(container, "childNodes", None)
@@ -126,10 +126,10 @@ def _mount_root_providers(cls, container):
     root class ``cls`` registry sweep declares, as siblings ahead of the root.
 
     This is the provider step shared by :meth:`BaseComponent.mount_with_providers`
-    and the Page's declarative root mount (HYDRATION-WHOLEPAGE.md §4.1 S1 — the
-    root as a nested ``ChildBinding`` under its hyphenated ``__tag__``), so both
-    use the exact same provider sweep instead of forking it. Returns the mounted
-    provider list (each already appended to ``container``).
+    and the Page's declarative root mount (the root as a nested ``ChildBinding``
+    under its hyphenated ``__tag__``), so both use the same provider sweep
+    instead of forking it. Returns the mounted provider list (each already
+    appended to ``container``).
     """
     mounted_stores = set()
     mounted_models = set()
@@ -401,7 +401,6 @@ class BaseComponent(ReactiveObject):
         #set kwargs
         setattr(cls, "_creation_kwargs", kwargs)
 
-        ###Client
         cls._initialize_blueprint()
 
         cls._analyze_creation_args()
@@ -452,11 +451,8 @@ class BaseComponent(ReactiveObject):
     def __init_self_attr_bindings__(self, **attrs_dict):
         for k, v in attrs_dict.items():
             self.__dict__[k] = v
-            #self.__element__.setAttribute(k, v)
 
         attr_names = [k for k in attrs_dict.keys()]
-
-        #print("attrs_dict", attrs_dict, self.__class__)
 
         self_attr_binding_blueprints = [bp for bp in self.__class__.__binding_blueprints__
                                         if bp.binding_class == SelfAttributeBinding]
@@ -484,8 +480,6 @@ class BaseComponent(ReactiveObject):
 
         new_instance.__init_selfbinding__()
 
-        #new_instance.__init_self_attr_bindings__(**kwargs)
-        
         new_instance.__init_slot_bindings__()
 
         new_instance.fill_slots(container)
@@ -495,10 +489,6 @@ class BaseComponent(ReactiveObject):
         new_instance.__init_fields__()
 
         new_instance.on_mounted()
-
-        #with new_instance.refrain() as refrained:
-        #    for k, v in kwargs.items():
-        #        setattr(refrained, k, v)
 
         return new_instance
 
@@ -567,8 +557,7 @@ class BaseComponent(ReactiveObject):
     def destroy(self):
         """Unmount this component and its whole mounted subtree. Idempotent.
 
-        The single framework-owned teardown chokepoint (COMPONENT-LIFECYCLE-
-        PLAN.md §3.1). Runs in a fixed order:
+        The single framework-owned teardown chokepoint. Runs in a fixed order:
           1. mark destroyed (idempotency guard);
           2. tear down JS subresources (``_teardown_js``);
           3. detach every binding + destroy the root scope
@@ -757,8 +746,6 @@ class BaseComponent(ReactiveObject):
             except:
                 continue
         
-        #print("####### blueprints", cls._creation_kwargs)
-
         cls.__binding_blueprints__.extend(blueprints)
 
     @classmethod
@@ -795,8 +782,6 @@ class BaseComponent(ReactiveObject):
             element = node
 
             tag_name = element.tagName.lower()
-            #if tag_name in ['style', 'script'] and not element.hasAttribute('text-content'):
-            #    return []
 
             element_attrs = list(element.getAttributeNames())
             event_attrs = [a for a in element_attrs if a.startswith("on")]
@@ -978,10 +963,6 @@ class BaseComponent(ReactiveObject):
         return blueprints
 
     def __init_bindings__(self):
-        # print(f"__init_bindings__ of {self.__class__}")
-        
-        #print("__binding_blueprints__", self.__class__.__binding_blueprints__)
-        
         nodes = self._get_instance_nodes()
 
         for blueprint in self.__class__.__binding_blueprints__:
@@ -996,8 +977,6 @@ class BaseComponent(ReactiveObject):
                 if binding:
                     self.add_binding(binding)
 
-        #print(f"Bindings of {self.__class__}:", self.__bindings__)
-        
         # register this component for `#name` references under its identity
         # (__component_id__, plus the root element's id when present)
         self_element = self.__element__
@@ -1026,15 +1005,11 @@ class BaseComponent(ReactiveObject):
 
     def __init_fields__(self):
         cls = self.__class__
-        
-        # print(f"__init_fields__ : {cls} fields: ", self.__fields__)
 
         fields_on_class = [attr for attr in self.__fields__ \
                                 if (attr not in self.__dict__) and \
                                 (attr in cls.__dict__) \
                                 and (not inspect.isfunction(getattr(cls, attr)))]
-        
-        # print(f"fields_on_class of {cls} : ", fields_on_class)
 
         # Collect dependencies from computed properties
         for name, member in inspect.getmembers(cls):
@@ -1048,7 +1023,6 @@ class BaseComponent(ReactiveObject):
         with self.refrain() as refrained:
 
             for field in fields_on_class:
-                # print(f"setting attr from class {self.__class__.__name__} on the instance: {field}, with value {cls.__dict__[field]}")
                 setattr(refrained, field, cls.__dict__[field])
 
             for field in self.__fields__:
@@ -1065,13 +1039,11 @@ class BaseComponent(ReactiveObject):
                         setattr(refrained, field, store_instance)
                         store_instance.add_subscription(self, attr_name, scope=self._scope)
                     else:
-                        # Register pending subscription
                         if store_name not in Store._pending_subscriptions:
                             Store._pending_subscriptions[store_name] = []
                         
                         Store._pending_subscriptions[store_name].append((self, attr_name))
                     
-                    # Register in DAG (even if pending)
                     self._dag.get_or_create_state(field)
                 
                 elif field.startswith("#"):
@@ -1085,7 +1057,6 @@ class BaseComponent(ReactiveObject):
                             
                             component_instance.add_subscription(
                                 self, attr_name, ref_name=component_name, scope=self._scope)
-                            # Register in DAG
                             self._dag.get_or_create_state(field)
 
                         else:
@@ -1096,7 +1067,6 @@ class BaseComponent(ReactiveObject):
 
                             self.__class__._pending_subscriptions[component_name].append((self, attr_name))
 
-                            # Register in DAG (even if pending, we want the node)
                             self._dag.get_or_create_state(field)
                 
                     else:
@@ -1105,11 +1075,9 @@ class BaseComponent(ReactiveObject):
 
                         
                 else:
-                    # Register standard fields as StateNodes in the DAG
                     self._dag.get_or_create_state(field)
                     refrained.force_react(field)
 
-            # Register computed properties in the DAG
             self._init_computed()
 
 
@@ -1152,9 +1120,6 @@ class BaseComponent(ReactiveObject):
                 named_children[slot_attr].append(child)
             else:
                 default_children.append(child)
-        
-        #print("Filling slots: default_children", default_children)
-        #print("Filling slots: named_children", named_children)
 
         for sb in named_slot_bindings:
             slot_node = sb.node
@@ -1164,9 +1129,6 @@ class BaseComponent(ReactiveObject):
 
             if named_children_to_insert:
                 slot_node.replaceWith(*named_children_to_insert)
-            #else:
-            #    # Fallback to slot's own child nodes
-            #    slot_node.replaceWith(*slot_node.children)
             
         # Fill each <slot> in order
         for sb in default_slot_bindings:
@@ -1176,9 +1138,6 @@ class BaseComponent(ReactiveObject):
             
             if default_children_to_insert:
                 slot_node.replaceWith(*default_children_to_insert)
-            #else:
-            #    # Fallback to slot's own child nodes
-            #    slot_node.replaceWith(*slot_node.children)
 
 
     def __getattribute__(self, name):
@@ -1208,8 +1167,6 @@ class BaseComponent(ReactiveObject):
 
     def __setattr__(self, name, value):
 
-        # print(f"inside __setattr__ of {self} for the attr {name}")
-
         if name.startswith("$"):
             store_name, attr_name = name.strip("$").split(".")
             store_instance = self.__class__.S[store_name]
@@ -1219,7 +1176,6 @@ class BaseComponent(ReactiveObject):
             except KeyError:
                 old_value = None
             
-            # print(f"calling __setattr__ on {store_instance} called for {attr_name}, old value {old_value}, new value {value}")
             setattr(store_instance, attr_name, value)
 
         elif name.startswith("#"):
@@ -1232,8 +1188,7 @@ class BaseComponent(ReactiveObject):
                 old_value = None
             
             setattr(component_instance, attr_name, value)
-            # print(f"calling __setattr__ on {component_instance} called for {attr_name}, old value {old_value}, new value {value}")
-            #the component_instance should then react from its instance !
+            # The component instance reacts from its own scope.
 
         else:
             # Delegate standard attribute handling to ReactiveObject
@@ -1241,9 +1196,6 @@ class BaseComponent(ReactiveObject):
     
     @classmethod
     def mount(cls, container, replace=False, **attributes):
-        
-        # print(f"mount: starting mounting {cls}, with attributes: {attributes}")
-
         container = container
 
         new_instance = cls.initialize(container, **attributes)
@@ -1267,8 +1219,6 @@ class BaseComponent(ReactiveObject):
                                                           childinstance=child_instance,
                                                           ))
 
-        # print(f"mount: finished mounting {cls}")
-
         return new_instance
 
 
@@ -1281,8 +1231,7 @@ class BaseComponent(ReactiveObject):
 
         Exposes the component *class* too (not just name/css), so a Page's
         in-tree component-style loop can filter by class module while sharing
-        the exact same set/order the legacy body injection once produced
-        (§4.1 P3 — in-tree chrome superseded the injection).
+        this single set/order.
         """
         sources: list[tuple] = []
         mains: list[tuple] = []
@@ -1368,9 +1317,9 @@ class BaseComponent(ReactiveObject):
             new_fragment = self.__template__
             old_element.replaceWith(new_fragment)
 
-            # 4. Restore state and trigger updates.
-            # The refrain() __exit__ already triggers the affected fields on the
-            # fresh DAG, so no extra trigger_batch is needed here.
+            # 4. Restore state. __init_fields__ already force-triggered every plain
+            # field against the fresh DAG and rendered the new fragment, so this only
+            # has to fire for values that actually differ.
             with self.refrain() as refrained:
                 for k, v in state.items():
                     setattr(refrained, k, v)
@@ -1387,7 +1336,6 @@ class BaseComponent(ReactiveObject):
         """Hot-swap this instance to a fully new class definition (exact-class match)."""
         print(f"HMR: Hot-swapping instance {self} to {new_cls}")
         state = self._capture_state()
-        # Update class reference, then re-render from the new class blueprint.
         self.__class__ = new_cls
         self._rerender_after_swap(state)
 
@@ -1430,7 +1378,6 @@ class BaseComponent(ReactiveObject):
         if len(cls_attrs_order) > 0:
 
             members = inspect.getmembers_static(cls)
-            #print("members :::", members)
 
             subclass_members = [(k, v) for k, v in members
                                 if inspect.isclass(v) \

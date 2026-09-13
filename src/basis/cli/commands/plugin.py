@@ -44,7 +44,7 @@ def plugin_list(
 
     def _plugins_only(plugins):
         # Themes (kind == "theme") are managed under `basis theme` — the same
-        # split as the plugin manager vs. the theme manager (ROADMAP-THEMING).
+        # split as the plugin manager vs. the theme manager.
         return [p for p in plugins if getattr(p, "kind", "plugin") == "plugin"]
 
     project_dir = resolve_project_dir()

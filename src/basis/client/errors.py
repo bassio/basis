@@ -12,8 +12,8 @@ surfaces every failure as structured data — ``window.__basisErrors`` plus a
 
 The visual surface is a proper reactive component — ``<basis-error-overlay>``
 (``basis/client/errors_component.py``) — mounted automatically when the page
-carries the dev marker (``<meta name="basis-mode" content="dev">``, stamped by
-the server when running with HMR / ``basis dev``) or when forced via
+carries the dev marker (``<meta name="basis-dev-mode" content="True">``,
+stamped by the server when running with HMR / ``basis dev``) or when forced via
 :func:`set_overlay_enabled`.  This module is the plumbing only: sink, dedup,
 global/event dispatch, SSR replay, and overlay mounting.  The component renders
 reactively from the records pushed to it (no imperative DOM building here).
@@ -54,7 +54,7 @@ _overlay = None
 
 def set_overlay_enabled(value) -> None:
     """Force the overlay on/off.  ``None`` (default) auto-detects from the
-    page's dev marker (``<meta name="basis-mode" content="dev">``)."""
+    page's dev marker (``<meta name="basis-dev-mode" content="True">``)."""
     global _overlay_override
     _overlay_override = value
 
@@ -69,10 +69,11 @@ def _read_dev_mode() -> bool:
     if document is None:
         return False
     try:
-        meta = document.querySelector('meta[name="basis-mode"]')
+        meta = document.querySelector('meta[name="basis-dev-mode"]')
         if meta is None or not hasattr(meta, "getAttribute"):
             return False
-        return (meta.getAttribute("content") or "") == "dev"
+        # content is the str() of the server-side bool ("True"/"False").
+        return (meta.getAttribute("content") or "").strip().lower() == "true"
     except Exception:
         return False
 

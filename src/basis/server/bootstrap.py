@@ -278,8 +278,7 @@ class BootstrapMixin:
             self.routes.append(shared_mount)
 
         # Raw vendored JS libraries for @js_component. Served as plain static
-        # assets — not Python, so nothing is VFS-transformed. See
-        # JS-COMPONENT-PLAN.md.
+        # assets — not Python, so nothing is VFS-transformed.
         if not self._has_route(name="basis_js"):
             js_mount = Mount("/basis/js", static_cls(packages=[('basis', 'static/js')]), name='basis_js')
             self.routes.append(js_mount)

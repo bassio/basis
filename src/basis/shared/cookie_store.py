@@ -16,9 +16,9 @@ server actions. Dirty tracking is automatic — only a changed preference
 rewrites the cookie, and the framework never interprets the payload (it just
 round-trips ``(cookie_name, cookie_value)``).
 
-This is the shared primitive behind ``$theme``'s ``basis_theme`` cookie
-(ROADMAP-THEMING.md §4.2 / §6.5.3); future preference stores (sidebar state,
-layout, locale, …) subclass it the same way.
+This is the shared primitive behind ``$theme``'s ``basis_theme`` cookie;
+future preference stores (sidebar state, layout, locale, …) subclass it the same
+way.
 """
 
 import json

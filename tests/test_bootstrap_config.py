@@ -1,5 +1,5 @@
 """
-Tests for the per-page manifest bootstrap (BOOTSTRAP-CONFIG-PLAN.md).
+Tests for the per-page manifest bootstrap.
 
 Covers:
 * ``basis.bootstrap`` is ALWAYS present in /pyscript.json (bare or per-page).

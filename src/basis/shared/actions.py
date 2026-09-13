@@ -31,7 +31,6 @@ def server_action(func: T) -> T:
             from basis.shared.store import Store
             if args and isinstance(args[0], Store):
                 store_name = args[0].get_store_name()
-                # Remove 'self' from args for the network call
                 args = args[1:]
 
             return await call_action(path, store_name, *args, **kwargs)

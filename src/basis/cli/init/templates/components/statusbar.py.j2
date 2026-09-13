@@ -15,7 +15,7 @@ class MyStatusBar(StatusBar):
 
     def template(self):
         """
-        <div class="shell-status-bar" style="flex: 0 0 {height};" data-border="{border}">
+        <div class="shell-status-bar" style="--shell-statusbar-height: {height}; --shell-statusbar-mobile-height: {mobile_height};" data-border="{border}" data-mobile="{mobile}">
             <shell-stack direction="{direction}" gap="{gap}" align="{align}" justify="{justify}" size="1 1 auto">
                 <slot></slot>
             </shell-stack>
