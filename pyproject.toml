@@ -1,6 +1,6 @@
 [project]
 name = "basis-framework"
-version = "0.1.2"
+version = "0.1.3"
 description = "A full-stack python reactive web components framework"
 readme = "README.md"
 license = { text = "MIT" }
