@@ -348,11 +348,13 @@ class Schedule(Component):
             transition: all 0.2s ease;
             white-space: nowrap;
         }
-        .schedule-all-day-chip:hover {
-            background: color-mix(in srgb, var(--accent-color, #007acc) 18%, transparent);
-            border-color: color-mix(in srgb, var(--accent-color, #007acc) 40%, transparent);
-            transform: translateY(-1px);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        @media (hover: hover) {
+            .schedule-all-day-chip:hover {
+                background: color-mix(in srgb, var(--accent-color, #007acc) 18%, transparent);
+                border-color: color-mix(in srgb, var(--accent-color, #007acc) 40%, transparent);
+                transform: translateY(-1px);
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            }
         }
 
         /* ── Column Headers ─────────────────────────────────── */
@@ -438,9 +440,11 @@ class Schedule(Component):
             cursor: pointer;
             transition: transform 0.15s ease, box-shadow 0.15s ease;
         }
-        .schedule-entry:hover {
-            transform: scale(1.003) translateX(1px);
-            z-index: 10;
+        @media (hover: hover) {
+            .schedule-entry:hover {
+                transform: scale(1.003) translateX(1px);
+                z-index: 10;
+            }
         }
         .schedule-entry-card {
             display: flex;
@@ -455,9 +459,11 @@ class Schedule(Component):
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
             transition: box-shadow 0.15s ease, border-color 0.15s ease;
         }
-        .schedule-entry:hover .schedule-entry-card {
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-            border-color: color-mix(in srgb, var(--accent-color, #007acc) 35%, var(--border-color, #dcdcdc));
+        @media (hover: hover) {
+            .schedule-entry:hover .schedule-entry-card {
+                box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+                border-color: color-mix(in srgb, var(--accent-color, #007acc) 35%, var(--border-color, #dcdcdc));
+            }
         }
         .schedule-entry-time {
             display: flex;

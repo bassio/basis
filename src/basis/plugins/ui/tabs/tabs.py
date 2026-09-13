@@ -92,9 +92,27 @@ class Tabs(Component):
             transition: all 0.15s ease;
         }
 
-        .add-tab-button:hover {
+        @media (hover: hover) {
+            .add-tab-button:hover {
+                background: var(--hover-bg, rgba(255, 255, 255, 0.06));
+                color: var(--text-primary, #dcddde);
+            }
+        }
+
+        .add-tab-button:active {
             background: var(--hover-bg, rgba(255, 255, 255, 0.06));
-            color: var(--text-primary, #dcddde);
+        }
+
+        .add-tab-button:focus-visible {
+            outline: 2px solid var(--accent-color, #007acc);
+            outline-offset: 2px;
+        }
+
+        @media (pointer: coarse) {
+            .add-tab-button {
+                min-width: var(--touch-target, 44px);
+                min-height: var(--touch-target, 44px);
+            }
         }
         """
 

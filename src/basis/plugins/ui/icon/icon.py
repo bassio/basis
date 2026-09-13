@@ -28,8 +28,18 @@ class Icon(Component):
     interactive = False  # Python bool — pointer cursor + hover
 
     @computed
-    def active_class(self):
-        return "active" if self.active else ""
+    def classes(self):
+        """``ui-icon`` plus its modifiers, joined so an absent one leaves no gap.
+
+        A class is how a glyph carries its state: a clickable icon is styleable
+        without sniffing a boolean's Python spelling out of a DOM attribute.
+        """
+        parts = ["ui-icon"]
+        if self.active:
+            parts.append("active")
+        if self.interactive:
+            parts.append("interactive")
+        return " ".join(parts)
 
     @computed
     def style_attr(self):
@@ -59,12 +69,26 @@ class Icon(Component):
             user-select: none;
         }
 
-        .ui-icon[data-interactive="True"] {
+        .ui-icon.interactive {
             cursor: pointer;
         }
 
-        .ui-icon[data-interactive="True"]:hover {
+        @media (hover: hover) {
+            .ui-icon.interactive:hover {
+                color: var(--text-primary, #e0e0e0);
+            }
+        }
+
+        .ui-icon.interactive:active {
             color: var(--text-primary, #e0e0e0);
+        }
+
+        /* A finger needs a real hit area around a glyph. */
+        @media (pointer: coarse) {
+            .ui-icon.interactive {
+                min-width: var(--touch-target, 44px);
+                min-height: var(--touch-target, 44px);
+            }
         }
 
         .ui-icon.active {
@@ -74,5 +98,5 @@ class Icon(Component):
 
     def template(self):
         """
-        <div class="ui-icon {active_class}" title="{title}" data-view="{view}" data-interactive="{interactive}" onclick="{handle_click}" style="{style_attr}">{content}</div>
+        <div class="{classes}" title="{title}" data-view="{view}" onclick="{handle_click}" style="{style_attr}">{content}</div>
         """

@@ -130,22 +130,31 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
 
         @self.middleware("http")
         async def clear_basis_registries_middleware(request: Request, call_next):
+            from basis.shared.context import request_var
             from basis.shared.store import Store
             from basis.shared.base_component import BaseComponent
             from basis.shared.router import Route
 
-            # Reset global registries to isolate per-request SSR state and avoid DetachedInstanceError.
-            # RPC endpoints are EXEMPT: store-bound @server_action methods must be able to resolve
-            # their (persistent) store instance — see Store._store_blueprints / Store.reinstantiate.
-            if request.url.path != "/basis/api/action":
-                Store._registry.clear()
-                Store._pending_subscriptions.clear()
-                BaseComponent._instance_registry.clear()
-                BaseComponent._pending_subscriptions.clear()
-                Route._route_registry.clear()
+            # Bind the in-flight request for EVERY HTTP request, so plugin code
+            # that is never handed it — an action body, a route helper, a store
+            # hook — reaches it via current_request(). The render and RPC entry
+            # points bind it too: both are reachable without this middleware
+            # (direct calls, tests).
+            token = request_var.set(request)
+            try:
+                # Reset global registries to isolate per-request SSR state and avoid DetachedInstanceError.
+                # RPC endpoints are EXEMPT: store-bound @server_action methods must be able to resolve
+                # their (persistent) store instance — see Store._store_blueprints / Store.reinstantiate.
+                if request.url.path != "/basis/api/action":
+                    Store._registry.clear()
+                    Store._pending_subscriptions.clear()
+                    BaseComponent._instance_registry.clear()
+                    BaseComponent._pending_subscriptions.clear()
+                    Route._route_registry.clear()
 
-            response = await call_next(request)
-            return response
+                return await call_next(request)
+            finally:
+                request_var.reset(token)
 
         # HMR WebSocket endpoint — registered exactly once (regardless of how many
         # component directories are mounted) so the client always has a stable /ws/hmr.

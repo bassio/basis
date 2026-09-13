@@ -61,6 +61,17 @@ no horizontal overflow — plus that the frame is unchanged at 1280×720 and tha
 the drawer is closed on first paint. Every case also requires a clean hydration
 report.
 
+## Touch & pointer (M1.5)
+
+`test_touch.py` serves `/touch` (`browser_app/components/touch_panel.py`: a
+Button, an interactive Icon, a closable Tab, and the `$device` capability fields)
+and asserts at the same `iphone` descriptor that `$device.hover` corrects the
+server's neutral to `False`, that a tap does not latch hover paint on the button,
+that the button and icon are finger-sized while the tab close glyph keeps its
+size and grows only its hit area, and that `Tab` still paints a focus ring. The
+server counterpart (`tests/test_touch_pointer.py`) checks the same contract as
+text across the whole catalogue.
+
 ## Next (M5.3c)
 
 A real-device smoke list and published boot-budget numbers (M3.4), plus a WebKit

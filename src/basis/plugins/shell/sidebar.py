@@ -175,6 +175,7 @@ class SidebarTrigger(Component):
     __tag__ = "shell-sidebar-trigger"
 
     target = ""  # CSS selector of the sidebar host to toggle
+    label = "Toggle sidebar"  # the button's tooltip
 
     def _target_sidebar(self):
         """The target sidebar's component instance, or ``None``."""
@@ -217,15 +218,28 @@ class SidebarTrigger(Component):
             transition: all 0.2s;
         }
 
-        .shell-sidebar-trigger:hover {
+        @media (hover: hover) {
+            .shell-sidebar-trigger:hover {
+                background-color: var(--hover-bg, #2a2a3e);
+                color: var(--text-primary, #e0e0e0);
+            }
+        }
+
+        .shell-sidebar-trigger:active {
             background-color: var(--hover-bg, #2a2a3e);
-            color: var(--text-primary, #e0e0e0);
+        }
+
+        @media (pointer: coarse) {
+            .shell-sidebar-trigger {
+                min-width: var(--touch-target, 44px);
+                min-height: var(--touch-target, 44px);
+            }
         }
         """
 
     def template(self):
         """
-        <button type="button" class="shell-sidebar-trigger" onclick="{toggle_sidebar}" title="Toggle sidebar">
+        <button type="button" class="shell-sidebar-trigger" onclick="{toggle_sidebar}" title="{label}">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
         </button>
         """

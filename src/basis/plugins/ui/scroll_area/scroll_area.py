@@ -73,8 +73,10 @@ class ScrollArea(Component):
             background-clip: content-box;
         }
 
-        .ui-scroll-area-viewport::-webkit-scrollbar-thumb:hover {
-            background-color: var(--text-secondary, #868b94);
+        @media (hover: hover) {
+            .ui-scroll-area-viewport::-webkit-scrollbar-thumb:hover {
+                background-color: var(--text-secondary, #868b94);
+            }
         }
 
         /* Visibility: hover mode */
@@ -83,15 +85,26 @@ class ScrollArea(Component):
             --scrollbar-thumb: transparent;
         }
 
-        ui-scroll-area[visibility="hover"]:hover,
-        :host([visibility="hover"]:hover) {
-            --scrollbar-thumb: var(--border-color, #dee2e6);
+        @media (hover: hover) {
+            ui-scroll-area[visibility="hover"]:hover,
+            :host([visibility="hover"]:hover) {
+                --scrollbar-thumb: var(--border-color, #dee2e6);
+            }
         }
 
         /* Visibility: always mode */
         ui-scroll-area[visibility="always"],
         :host([visibility="always"]) {
             --scrollbar-thumb: var(--border-color, #dee2e6);
+        }
+
+        /* With no hover to answer with, "hover" would mean "never visible" —
+           a finger has no way to summon the scrollbar. */
+        @media (hover: none) {
+            ui-scroll-area[visibility="hover"],
+            :host([visibility="hover"]) {
+                --scrollbar-thumb: var(--border-color, #dee2e6);
+            }
         }
         """
 

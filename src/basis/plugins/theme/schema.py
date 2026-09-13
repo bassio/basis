@@ -60,6 +60,10 @@ TOKEN_SLOTS: dict[str, str] = {
     "safe_area_right": "size",
     "safe_area_bottom": "size",
     "safe_area_left": "size",
+    # The minimum hit area on a coarse (finger) pointer. Components apply it
+    # under a ``(pointer: coarse)`` guard rather than globally: a dense toolbar
+    # is correct with a mouse and correct with a finger only if it grows.
+    "touch_target": "size",
 }
 
 
@@ -133,6 +137,7 @@ class ThemeTokens:
     safe_area_right: str | None = None
     safe_area_bottom: str | None = None
     safe_area_left: str | None = None
+    touch_target: str | None = None
 
     @classmethod
     def from_dict(

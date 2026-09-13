@@ -70,7 +70,7 @@ region. See `docs/05_reactivity/ssr-hydration.md`.
 | `pyscript_json_url` | `str` | `"/pyscript.json"` | URL of the manifest PyScript uses to resolve imports. |
 | `initial_state_json` | `str` | `"{}"` | Serialized store state injected during SSR; read by the client at boot. |
 | `viewport` | `str` | `width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content` | The layout-viewport `<meta>`: `viewport-fit=cover` opts into `env(safe-area-inset-*)` on notched devices; `interactive-widget=resizes-content` makes the on-screen keyboard resize the layout instead of covering it. Override per page (e.g. `interactive-widget=resizes-visual`). |
-| `viewport_base_css` | `str` | framework mobile base CSS | The in-tree `<style id="basis-viewport">` content: `touch-action: manipulation` on interactive controls (no double-tap zoom / 300 ms tap delay) and no iOS auto font-inflation. |
+| `viewport_base_css` | `str` | framework mobile base CSS | The in-tree `<style id="basis-viewport">` content: `touch-action: manipulation` on interactive controls (no double-tap zoom / 300 ms tap delay), no iOS auto font-inflation, and a coarse-pointer `min-height` on real form controls. |
 | `apple_web_app` | `bool` | `True` | Emit the iOS `apple-mobile-web-app-*` home-screen meta (inert until the page is added to the home screen). Set `False` to omit all three. |
 | `apple_status_bar_style` | `str` | `"black-translucent"` | iOS standalone status-bar style. `black-translucent` rides on the shell's safe-area padding; a document-flow page that doesn't pad its top edge should use `"default"`. |
 
@@ -91,7 +91,10 @@ box (see `ROADMAP-MOBILE.md` M1.1 / `MOBILE-M1.1-PLAN.md`):
   the layout). Override on a subclass to opt out.
 - **Framework base CSS** — the in-tree `<style id="basis-viewport">`
   (`viewport_base_css`) sets `touch-action: manipulation` on interactive
-  controls and stops iOS auto font-inflation. App-level mobile guidance is in
+  controls, stops iOS auto font-inflation, and gives real form controls
+  (`input` / `select` / `textarea`) a finger-sized `min-height` under
+  `@media (pointer: coarse)` (see [Touch & Pointer](touch-and-pointer.md)).
+  App-level mobile guidance is in
   the generated `static/app.css`.
 - **Browser/OS chrome color** — `theme-color` follows the active `$theme` via
   the core `$meta` store: the theme contributes the resolved color and the

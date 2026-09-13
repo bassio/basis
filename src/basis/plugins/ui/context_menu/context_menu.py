@@ -114,16 +114,34 @@ class ContextMenu(Component):
             width: 100%;
         }
 
-        .ui-context-menu-item:hover {
+        @media (hover: hover) {
+            .ui-context-menu-item:hover {
+                background: var(--hover-bg, rgba(0, 0, 0, 0.05));
+            }
+
+            .ui-context-menu-danger:hover {
+                background: rgba(239, 68, 68, 0.08);
+            }
+        }
+
+        .ui-context-menu-item:active {
             background: var(--hover-bg, rgba(0, 0, 0, 0.05));
+        }
+
+        .ui-context-menu-item:focus-visible {
+            outline: 2px solid var(--accent-color, #007acc);
+            outline-offset: -2px;
         }
 
         .ui-context-menu-danger {
             color: #ef4444;
         }
 
-        .ui-context-menu-danger:hover {
-            background: rgba(239, 68, 68, 0.08);
+        /* Rows are ~28px tall: fine for a cursor, too small for a thumb. */
+        @media (pointer: coarse) {
+            .ui-context-menu-item {
+                min-height: var(--touch-target, 44px);
+            }
         }
         """
 

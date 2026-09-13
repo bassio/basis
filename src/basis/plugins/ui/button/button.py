@@ -58,6 +58,12 @@ class Button(Component):
             user-select: none;
         }
 
+        /* Keyboard focus: a control that suppresses the UA ring draws its own. */
+        .ui-btn:focus-visible {
+            outline: 2px solid var(--accent-color, #007acc);
+            outline-offset: 2px;
+        }
+
         /* ripple pseudo-element */
         .ui-btn::after {
             content: '';
@@ -77,6 +83,11 @@ class Button(Component):
         .ui-btn-md { font-size: 0.875rem; padding: 0.45rem 1rem;   }
         .ui-btn-lg { font-size: 1rem;     padding: 0.6rem 1.35rem; }
 
+        /* A dense button is right for a mouse and too small for a finger. */
+        @media (pointer: coarse) {
+            .ui-btn-sm, .ui-btn-md { min-height: var(--touch-target, 44px); }
+        }
+
         /* ── Variants ───────────────────────────────────────── */
         /* Primary */
         .ui-btn-primary {
@@ -85,10 +96,12 @@ class Button(Component):
             border-color: transparent;
             box-shadow: 0 1px 4px rgba(0, 122, 204, 0.25);
         }
-        .ui-btn-primary:hover:not(:disabled) {
-            background-color: color-mix(in srgb, var(--accent-color, #007acc) 85%, black);
-            box-shadow: 0 4px 12px rgba(0, 122, 204, 0.35);
-            transform: translateY(-1px);
+        @media (hover: hover) {
+            .ui-btn-primary:hover:not(:disabled) {
+                background-color: color-mix(in srgb, var(--accent-color, #007acc) 85%, black);
+                box-shadow: 0 4px 12px rgba(0, 122, 204, 0.35);
+                transform: translateY(-1px);
+            }
         }
         .ui-btn-primary:active:not(:disabled) { transform: translateY(0); }
 
@@ -98,11 +111,14 @@ class Button(Component):
             color: var(--text-primary, #2e2e2e);
             border-color: var(--border-color, #dcdcdc);
         }
-        .ui-btn-secondary:hover:not(:disabled) {
-            background-color: var(--hover-bg, #f5f5f5);
-            border-color: var(--text-secondary, #7a7a7a);
-            transform: translateY(-1px);
+        @media (hover: hover) {
+            .ui-btn-secondary:hover:not(:disabled) {
+                background-color: var(--hover-bg, #f5f5f5);
+                border-color: var(--text-secondary, #7a7a7a);
+                transform: translateY(-1px);
+            }
         }
+        .ui-btn-secondary:active:not(:disabled) { background-color: var(--hover-bg, #f5f5f5); }
 
         /* Ghost */
         .ui-btn-ghost {
@@ -110,7 +126,13 @@ class Button(Component):
             color: var(--text-secondary, #7a7a7a);
             border-color: transparent;
         }
-        .ui-btn-ghost:hover:not(:disabled) {
+        @media (hover: hover) {
+            .ui-btn-ghost:hover:not(:disabled) {
+                background-color: var(--hover-bg, rgba(0,0,0,0.06));
+                color: var(--text-primary, #2e2e2e);
+            }
+        }
+        .ui-btn-ghost:active:not(:disabled) {
             background-color: var(--hover-bg, rgba(0,0,0,0.06));
             color: var(--text-primary, #2e2e2e);
         }
@@ -121,9 +143,14 @@ class Button(Component):
             color: var(--accent-color, #007acc);
             border-color: var(--accent-color, #007acc);
         }
-        .ui-btn-outline:hover:not(:disabled) {
+        @media (hover: hover) {
+            .ui-btn-outline:hover:not(:disabled) {
+                background-color: color-mix(in srgb, var(--accent-color, #007acc) 10%, transparent);
+                transform: translateY(-1px);
+            }
+        }
+        .ui-btn-outline:active:not(:disabled) {
             background-color: color-mix(in srgb, var(--accent-color, #007acc) 10%, transparent);
-            transform: translateY(-1px);
         }
 
         /* Danger */
@@ -133,11 +160,14 @@ class Button(Component):
             border-color: transparent;
             box-shadow: 0 1px 4px rgba(239, 68, 68, 0.25);
         }
-        .ui-btn-danger:hover:not(:disabled) {
-            background-color: #dc2626;
-            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35);
-            transform: translateY(-1px);
+        @media (hover: hover) {
+            .ui-btn-danger:hover:not(:disabled) {
+                background-color: #dc2626;
+                box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35);
+                transform: translateY(-1px);
+            }
         }
+        .ui-btn-danger:active:not(:disabled) { background-color: #dc2626; }
 
         /* ── Disabled & Loading states ──────────────────────── */
         .ui-btn:disabled,

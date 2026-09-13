@@ -55,8 +55,22 @@ class AccordionItem(Component):
             display: none;
         }
 
-        .ui-accordion-trigger:hover {
-            text-decoration: underline;
+        /* The UA ring is suppressed on the trigger, so draw one for the keyboard. */
+        .ui-accordion-trigger:focus-visible {
+            outline: 2px solid var(--accent-color, #007acc);
+            outline-offset: 2px;
+        }
+
+        @media (hover: hover) {
+            .ui-accordion-trigger:hover {
+                text-decoration: underline;
+            }
+        }
+
+        @media (pointer: coarse) {
+            .ui-accordion-trigger {
+                min-height: var(--touch-target, 44px);
+            }
         }
 
         .accordion-icon {

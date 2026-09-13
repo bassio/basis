@@ -33,6 +33,17 @@ button, a, input, select, textarea, [role="button"] {
     /* no double-tap zoom, no 300ms tap delay on interactive controls */
     touch-action: manipulation;
 }
+
+/* A finger needs a finger-sized field. Dense chrome (tabs, toolbars, list rows)
+   sizes itself per component with the same token, because a blanket rule would
+   stretch layouts that are deliberately compact. */
+@media (pointer: coarse) {
+    input:not([type="checkbox"]):not([type="radio"]),
+    select,
+    textarea {
+        min-height: var(--touch-target, 44px);
+    }
+}
 """
 
 def page_aware_config_url(base_url: str, request) -> str:

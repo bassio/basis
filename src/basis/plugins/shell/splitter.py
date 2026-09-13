@@ -19,7 +19,7 @@ Placement: between any two children of a ``Stack``, gated by an ``if=`` binding
 conditioned on the adjacent component being resizeable, e.g.::
 
     <shell-stack direction="row">
-        <shell-sidebar side="left" resizeable="{left_resizeable}"></shell-sidebar>
+        <shell-sidebar side="left"></shell-sidebar>
         <shell-splitter if="{left_resizeable}" direction="horizontal"></shell-splitter>
         <shell-main-container></shell-main-container>
     </shell-stack>
@@ -27,10 +27,6 @@ conditioned on the adjacent component being resizeable, e.g.::
 The drag handlers are client-only (the server just records them). Siblings whose
 host is ``display: contents`` (typical shell parts) are resolved to their real
 inner box before resizing.
-
-This is the canonical resize primitive: ``basis.plugins.ui.split_pane``
-(``SplitPane`` / ``SplitPaneItem`` / ``SplitHandle``) is slated for deprecation
-in favour of ``Stack`` + ``Splitter`` once existing apps migrate.
 
 At the compact breakpoint the divider is dropped: a 4px drag target is not a touch
 affordance, and a phone frame stacks its panes instead of dividing them (see the
@@ -67,8 +63,15 @@ shell-splitter {
     cursor: row-resize;
 }
 
-.shell-splitter:hover, .shell-splitter[data-dragging="true"] {
+/* Dragging is a touch interaction too: only the hover cue is capability-gated. */
+.shell-splitter[data-dragging="true"] {
     background: var(--accent-color, #007acc);
+}
+
+@media (hover: hover) {
+    .shell-splitter:hover {
+        background: var(--accent-color, #007acc);
+    }
 }
 """
 

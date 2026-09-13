@@ -70,8 +70,18 @@ class Toggle(Component):
             align-items: center;
             cursor: pointer;
         }
+        /* Visually hidden, still focusable: ``display: none`` would drop the
+           control out of the tab order and out of the accessibility tree. */
         .toggle-checkbox {
-            display: none;
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0,0,0,0);
+            white-space: nowrap;
+            border: 0;
         }
         .switch {
             position: relative;
@@ -84,14 +94,28 @@ class Toggle(Component):
             transition: background-color 0.2s;
             border: 2px solid transparent;
         }
-        .switch-container:hover .switch {
-            background-color: #d4d4d8;
+        @media (hover: hover) {
+            .switch-container:hover .switch {
+                background-color: #d4d4d8;
+            }
+            .toggle-checkbox:checked + .switch:hover {
+                background-color: var(--accent-color, #005a9e);
+            }
         }
         .toggle-checkbox:checked + .switch {
             background-color: var(--accent-color, #007acc);
         }
-        .toggle-checkbox:checked + .switch:hover {
-            background-color: var(--accent-color, #005a9e);
+
+        /* The input is the focusable control; the ring belongs on the track. */
+        .toggle-checkbox:focus-visible + .switch {
+            outline: 2px solid var(--accent-color, #007acc);
+            outline-offset: 2px;
+        }
+
+        @media (pointer: coarse) {
+            .switch-container {
+                min-height: var(--touch-target, 44px);
+            }
         }
         .thumb {
             pointer-events: none;

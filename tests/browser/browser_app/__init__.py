@@ -17,6 +17,7 @@ from basis.server.app import Basis
 
 from browser_app.components.page import CounterPage
 from browser_app.components.shell_page import ShellPage
+from browser_app.components.touch_page import TouchPage
 
 app = Basis()
 
@@ -26,3 +27,4 @@ app.bootstrap()
 
 app.serve("/")(CounterPage)
 app.serve("/shell")(ShellPage)
+app.serve("/touch")(TouchPage)

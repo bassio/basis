@@ -252,9 +252,32 @@ class Calendar(Component):
             font-weight: 600;
         }
 
-        .calendar-btn:hover {
+        .calendar-select:focus-visible {
+            outline: 2px solid var(--accent-color, #007acc);
+            outline-offset: 1px;
+        }
+
+        @media (hover: hover) {
+            .calendar-btn:hover {
+                background: var(--hover-bg, #f1f3f5);
+                border-color: var(--text-secondary, #7a7a7a);
+            }
+        }
+
+        .calendar-btn:active {
             background: var(--hover-bg, #f1f3f5);
-            border-color: var(--text-secondary, #7a7a7a);
+        }
+
+        .calendar-btn:focus-visible {
+            outline: 2px solid var(--accent-color, #007acc);
+            outline-offset: 2px;
+        }
+
+        @media (pointer: coarse) {
+            .calendar-btn {
+                min-width: var(--touch-target, 44px);
+                min-height: var(--touch-target, 44px);
+            }
         }
 
         .calendar-weekdays {
@@ -298,8 +321,22 @@ class Calendar(Component):
             opacity: 0.4;
         }
 
-        .day-cell:hover {
+        @media (hover: hover) {
+            .day-cell:hover {
+                background: var(--hover-bg, #e9ecef);
+            }
+        }
+
+        .day-cell:active {
             background: var(--hover-bg, #e9ecef);
+        }
+
+        /* Day cells shrink to a seventh of the grid: keep them thumb-sized. */
+        @media (pointer: coarse) {
+            .day-cell {
+                min-height: var(--touch-target, 44px);
+                border-radius: var(--radius-md, 0.5rem);
+            }
         }
 
         .day-cell.is-today {

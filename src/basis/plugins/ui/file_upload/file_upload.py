@@ -362,10 +362,12 @@ class FileUpload(Component):
             user-select: none;
         }
 
-        .ui-upload-dropzone:hover:not(.disabled) {
-            border-color: var(--accent-color, #3b82f6);
-            background: rgba(59, 130, 246, 0.05);
-            transform: scale(1.005);
+        @media (hover: hover) {
+            .ui-upload-dropzone:hover:not(.disabled) {
+                border-color: var(--accent-color, #3b82f6);
+                background: rgba(59, 130, 246, 0.05);
+                transform: scale(1.005);
+            }
         }
 
         .ui-upload-dropzone.ui-upload-dragging:not(.disabled) {
@@ -389,9 +391,11 @@ class FileUpload(Component):
             transition: transform 0.2s ease;
         }
 
-        .ui-upload-dropzone:hover:not(.disabled) .ui-upload-icon {
-            transform: translateY(-2px);
-            color: var(--accent-color, #3b82f6);
+        @media (hover: hover) {
+            .ui-upload-dropzone:hover:not(.disabled) .ui-upload-icon {
+                transform: translateY(-2px);
+                color: var(--accent-color, #3b82f6);
+            }
         }
 
         /* ── Dropzone Text ──────────────────────────────────── */
@@ -499,10 +503,29 @@ class FileUpload(Component):
             z-index: 5;
         }
 
-        .ui-upload-file-remove:hover {
+        @media (hover: hover) {
+            .ui-upload-file-remove:hover {
+                background: rgba(239, 68, 68, 0.15);
+                color: #ef4444;
+                transform: scale(1.05);
+            }
+        }
+
+        .ui-upload-file-remove:active {
             background: rgba(239, 68, 68, 0.15);
             color: #ef4444;
-            transform: scale(1.05);
+        }
+
+        .ui-upload-file-remove:focus-visible {
+            outline: 2px solid var(--accent-color, #3b82f6);
+            outline-offset: 2px;
+        }
+
+        @media (pointer: coarse) {
+            .ui-upload-file-remove {
+                min-width: var(--touch-target, 44px);
+                min-height: var(--touch-target, 44px);
+            }
         }
 
         /* ── Progress Indicators ────────────────────────────── */

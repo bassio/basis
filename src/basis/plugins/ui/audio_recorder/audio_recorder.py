@@ -574,9 +574,11 @@ class AudioRecorder(Component):
             z-index: 10;
         }
 
-        .ui-recorder-btn:hover:not(:disabled) {
-            transform: scale(1.06);
-            box-shadow: 0 6px 20px rgba(139, 92, 246, 0.6);
+        @media (hover: hover) {
+            .ui-recorder-btn:hover:not(:disabled) {
+                transform: scale(1.06);
+                box-shadow: 0 6px 20px rgba(139, 92, 246, 0.6);
+            }
         }
 
         .ui-recorder-btn:active:not(:disabled) {

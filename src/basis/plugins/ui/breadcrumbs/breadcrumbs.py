@@ -64,7 +64,13 @@ class Breadcrumbs(Component):
             transition: color 0.15s ease;
         }
 
-        .ui-breadcrumbs-link a:hover {
+        @media (hover: hover) {
+            .ui-breadcrumbs-link a:hover {
+                color: var(--accent-color, #7f6df2);
+            }
+        }
+
+        .ui-breadcrumbs-link a:active {
             color: var(--accent-color, #7f6df2);
         }
 

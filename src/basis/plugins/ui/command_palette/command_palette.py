@@ -175,6 +175,11 @@ class CommandPalette(Component):
             gap: 0.75rem;
         }
 
+        /* The borderless input suppresses the UA ring; the row carries it. */
+        .ui-palette-header:focus-within {
+            box-shadow: inset 0 -2px 0 0 var(--accent-color, #007acc);
+        }
+
         .ui-palette-search-icon {
             font-size: 1.1rem;
             color: var(--text-secondary, #6b7280);

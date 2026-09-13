@@ -6,6 +6,7 @@ the default that a fresh ``basis init`` app renders.
 """
 
 from basis.plugins.theme.schema import ThemeDefinition, ThemeTokens
+from basis.shared.pointer import TOUCH_TARGET
 
 
 DEFAULT_TOKENS = ThemeTokens(
@@ -52,6 +53,10 @@ DEFAULT_TOKENS = ThemeTokens(
     safe_area_right="env(safe-area-inset-right, 0px)",
     safe_area_bottom="env(safe-area-inset-bottom, 0px)",
     safe_area_left="env(safe-area-inset-left, 0px)",
+
+    # Minimum hit area on a finger. 44px is the platform guideline (Apple HIG /
+    # WCAG 2.5.5 target size); apps that need denser chrome lower it here.
+    touch_target=TOUCH_TARGET,
 )
 
 

@@ -104,7 +104,8 @@ the same control:
 `ShellSidebarTrigger` (`<shell-sidebar-trigger target="#sidebarLeft">`) flips whichever
 state fits the viewport (see §4). It writes to the target's **component instance**, not to
 a DOM attribute, so the sidebar's own bindings re-render and several triggers pointing at
-one sidebar always agree.
+one sidebar always agree. `label` is the button's tooltip — name the pane the trigger
+toggles (`<shell-sidebar-trigger target="#sidebarRightPane" label="Toggle right sidebar">`).
 
 ```html
 <shell-sidebar-trigger target="#sidebarLeft"></shell-sidebar-trigger>
@@ -211,8 +212,6 @@ round-trip, no layout shift after hydration.
   when resizing is optional.
 - **`TabsBar`** (`<shell-tabs-bar>`) — a fixed-height strip skeleton; put `ui-tabs` or
   your own tabs inside.
-
-`ui-split-pane` predates these primitives and is on its way out in their favour.
 
 ---
 

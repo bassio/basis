@@ -172,7 +172,24 @@ class RegistryManager(Component):
             cursor: pointer;
         }
 
-        .ui-registry-manager-toggle:hover {
-            filter: brightness(1.1);
+        @media (hover: hover) {
+            .ui-registry-manager-toggle:hover {
+                filter: brightness(1.1);
+            }
+        }
+
+        .ui-registry-manager-toggle:active {
+            filter: brightness(0.95);
+        }
+
+        .ui-registry-manager-toggle:focus-visible {
+            outline: 2px solid var(--accent-color, #007acc);
+            outline-offset: 2px;
+        }
+
+        @media (pointer: coarse) {
+            .ui-registry-manager-toggle {
+                min-height: var(--touch-target, 44px);
+            }
         }
         """

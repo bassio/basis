@@ -105,8 +105,21 @@ class TreeNode(Component):
             gap: 0.45rem;
         }
 
-        .ui-tree-node-row:hover {
+        @media (hover: hover) {
+            .ui-tree-node-row:hover {
+                background-color: var(--hover-bg, rgba(0, 0, 0, 0.05));
+            }
+        }
+
+        .ui-tree-node-row:active {
             background-color: var(--hover-bg, rgba(0, 0, 0, 0.05));
+        }
+
+        /* Rows are the tree's only tap surface: they must be finger-sized. */
+        @media (pointer: coarse) {
+            .ui-tree-node-row {
+                min-height: var(--touch-target, 44px);
+            }
         }
 
         .ui-tree-node-row.ui-tree-node-selected {

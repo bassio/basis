@@ -44,9 +44,16 @@ class SplitHandle(Component):
             margin-bottom: -4px;
         }
 
-        ui-split-handle:hover, ui-split-handle[data-dragging="true"] {
+        ui-split-handle[data-dragging="true"] {
             background-color: var(--accent-color, #007acc);
-            border-color: rgba(0, 122, 204, 0.3); /* Slightly more visible semi-transparent blue */
+            border-color: rgba(0, 122, 204, 0.3);
+        }
+
+        @media (hover: hover) {
+            ui-split-handle:hover {
+                background-color: var(--accent-color, #007acc);
+                border-color: rgba(0, 122, 204, 0.3);
+            }
         }
         """
 

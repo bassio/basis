@@ -258,6 +258,21 @@ def test_sidebar_trigger_renders_button():
     assert 'title="Toggle sidebar"' in html
 
 
+def test_sidebar_trigger_labels_the_pane_it_toggles():
+    """The tooltip is the app's, so it can name the pane."""
+    app = _app_with_shell()
+
+    class Root(Component):
+        """
+        <div class="root">
+            <shell-sidebar-trigger target="#rightPane" label="Toggle right sidebar"></shell-sidebar-trigger>
+        </div>
+        """
+
+    html = _render(app, Root, "/test_sidebar_trigger_label.py")
+    assert 'title="Toggle right sidebar"' in html
+
+
 # ---------------------------------------------------------------------------
 # Site (document-flow) layout — Header / Main / Footer / SiteShell.
 # ---------------------------------------------------------------------------

@@ -145,6 +145,7 @@ class VFSRegistry:
             "js.py",
             "media.py",
             "breakpoints.py",
+            "pointer.py",
             "meta.py",
             "device.py",
             "network.py",

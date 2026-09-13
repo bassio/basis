@@ -49,6 +49,7 @@ src/basis/
     ├── router.py         # RouterStore, Route (<basis-route>), Link (<basis-link>)
     ├── media.py          # media() — named CSS media queries as reactive store fields
     ├── breakpoints.py    # The viewport breakpoint contract (tier constants + query / @media forms)
+    ├── pointer.py        # The input-capability contract (hover / pointer queries + touch target)
     ├── device.py         # $device context store (viewport, tier, pointer, hover, reduced motion)
     ├── network.py        # $network context store (online, effective type, save-data)
     ├── page.py           # Page shell component
@@ -68,7 +69,7 @@ src/basis/
 ## Directory & Module Details
 
 - **`src/basis/cli/`**: Implements the `basis` command-line utility (`basis dev`, `basis init`, `basis plugin list`) using Typer and Rich.
-- **`src/basis/plugins/ui/`**: The official `ui` plugin — the pre-built accessible UI primitives, one package per family directly under the plugin — `Button`, `Badge`, `Toggle`, `Toast`, `Breadcrumbs`, `CommandPalette`, `AudioRecorder`, `Accordion`, `Calendar`, `Card`, `Checkbox`, `ContextMenu`, `FileUpload`, `TextInput`, `Modal`, `Schedule`, `ScrollArea`, `Select`, `Sidebar`, `SplitPane`, `Tabs`, `TreeView`. See [Built-in UI Suite](../04_components/ui-components.md).
+- **`src/basis/plugins/ui/`**: The official `ui` plugin — the pre-built accessible UI primitives, one package per family directly under the plugin — `Button`, `Badge`, `Toggle`, `Toast`, `Breadcrumbs`, `CommandPalette`, `AudioRecorder`, `Accordion`, `Calendar`, `Card`, `Checkbox`, `ContextMenu`, `FileUpload`, `TextInput`, `Modal`, `Schedule`, `ScrollArea`, `Select`, `Sidebar`, `Tabs`, `TreeView`. See [Built-in UI Suite](../04_components/ui-components.md).
 - **`src/basis/plugins/shell/`**: The official `shell` plugin — the app frame (workbench vs site), sizing-as-props, the drag `Splitter`, and the compact-breakpoint arrangement that makes the chrome phone-correct. See [The App Shell](../04_components/shell-components.md).
 - **`src/basis/client/`**: Browser-side PyScript mount logic, SSR/CSR entrypoints, action invocation, and DOM hydration.
 - **`src/basis/server/`**: FastAPI application class (`Basis`), server-side rendering pipeline, element tree builder, `.pyc` bytecode compiler, and `@server_action` RPC endpoints.

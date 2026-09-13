@@ -93,8 +93,27 @@ class Tab(Component):
             height: 0;
         }
 
-        .ui-tab-container:hover {
-            color: var(--text-primary);
+        .ui-tab-input {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        /* The input is the focusable control; the ring belongs on the visible box. */
+        .ui-tab-input:focus-visible + .ui-tab-container {
+            outline: 2px solid var(--accent-color, #007acc);
+            outline-offset: -2px;
+        }
+
+        @media (hover: hover) {
+            .ui-tab-container:hover {
+                color: var(--text-primary);
+                background: var(--hover-bg, rgba(255, 255, 255, 0.04));
+            }
+        }
+
+        .ui-tab-container:active {
             background: var(--hover-bg, rgba(255, 255, 255, 0.04));
         }
 
@@ -134,16 +153,38 @@ class Tab(Component):
             margin-right: -4px;
             opacity: 0.3;
             transition: all 0.15s ease;
+            position: relative;
         }
 
-        .ui-tab-container:hover .tab-close {
-            opacity: 0.7;
+        @media (hover: hover) {
+            .ui-tab-container:hover .tab-close {
+                opacity: 0.7;
+            }
+
+            .tab-close:hover {
+                opacity: 1 !important;
+                background: rgba(255, 255, 255, 0.12);
+                color: var(--text-primary);
+            }
         }
 
-        .tab-close:hover {
-            opacity: 1 !important;
-            background: rgba(255, 255, 255, 0.12);
-            color: var(--text-primary);
+        /* A thumb cannot aim at 32px tall, nor at a 16px glyph inside it. */
+        @media (pointer: coarse) {
+            .ui-tab-container {
+                height: var(--touch-target, 44px);
+            }
+
+            /* Without hover the glyph keeps its emphasis, not loses it. */
+            .tab-close {
+                opacity: 0.6;
+            }
+
+            /* Keep the 16px glyph, grow the hit area to the target size. */
+            .tab-close::after {
+                content: '';
+                position: absolute;
+                inset: calc((var(--touch-target, 44px) - 16px) / -2);
+            }
         }
 
         ui-tab.dragging {

@@ -81,7 +81,7 @@ def test_ui_icon_inactive_has_no_active_class():
     assert 'class="ui-icon active"' not in html
 
 
-def test_ui_icon_interactive_renders_data_attr():
+def test_ui_icon_interactive_renders_class():
     class Root(Component):
         """
         <div class="root">
@@ -91,7 +91,7 @@ def test_ui_icon_interactive_renders_data_attr():
         flag = True
 
     html = _render(Root, "/test_ui_icon_interactive.py")
-    assert 'data-interactive="True"' in html
+    assert 'class="ui-icon interactive"' in html
 
 
 def test_ui_icon_size_and_color_style():

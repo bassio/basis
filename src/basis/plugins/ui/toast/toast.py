@@ -141,10 +141,30 @@ class Toast(Component):
             opacity: 0.6;
         }
 
-        .toast-close:hover {
+        @media (hover: hover) {
+            .toast-close:hover {
+                background: var(--hover-bg, rgba(0,0,0,0.05));
+                opacity: 1;
+                transform: scale(1.1);
+            }
+        }
+
+        .toast-close:active {
             background: var(--hover-bg, rgba(0,0,0,0.05));
             opacity: 1;
-            transform: scale(1.1);
+        }
+
+        .toast-close:focus-visible {
+            outline: 2px solid var(--accent-color, #007acc);
+            outline-offset: 2px;
+        }
+
+        @media (pointer: coarse) {
+            .toast-close {
+                min-width: var(--touch-target, 44px);
+                min-height: var(--touch-target, 44px);
+                opacity: 1;
+            }
         }
 
         @keyframes toast-in {

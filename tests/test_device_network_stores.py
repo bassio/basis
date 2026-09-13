@@ -14,6 +14,7 @@ from basis.shared.breakpoints import compact_query, medium_query
 from basis.shared.device import DeviceStore, ensure_device_store
 from basis.shared.media import MediaQuery
 from basis.shared.network import NetworkStore, ensure_network_store
+from basis.shared.pointer import HOVER_QUERY
 from basis.shared.store import FRAMEWORK_STORE_NAMES, Store
 
 DEVICE_NEUTRALS = {
@@ -89,7 +90,7 @@ def test_capability_fields_are_declared_media_queries():
     """``hover`` / ``reduced_motion`` / the viewport tier are media features."""
     declared = DeviceStore.declared_media()
     assert set(declared) == {"hover", "reduced_motion", "compact", "medium"}
-    assert declared["hover"].query == "(hover: hover)"
+    assert declared["hover"].query == HOVER_QUERY
     assert declared["hover"].default is True  # desktop-first neutral
     assert declared["reduced_motion"].query == "(prefers-reduced-motion: reduce)"
     assert declared["reduced_motion"].default is False

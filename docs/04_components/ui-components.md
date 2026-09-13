@@ -4,6 +4,8 @@ Basis ships with a built-in suite of UI components (`basis.plugins.ui`) designed
 
 The UI suite ships as an official in-tree plugin (`ui`, under `basis.plugins.ui`), registered through the standard `basis.plugins` entry point. When `app.bootstrap()` runs, Basis auto-registers the plugin and serves its component files at `/basis/plugins/ui` so the client VFS can import them; you then import the components you actually use (e.g. `import basis.plugins.ui.button.button`), exactly as you would any component module.
 
+Every component here works with a mouse, a finger and a keyboard: hover styles are capability-guarded, touch targets follow `--touch-target`, and a suppressed focus ring is always replaced. The rule and the per-family details are in [Touch &amp; Pointer](touch-and-pointer.md).
+
 ---
 
 ## 1. Button (`<ui-button>`)
@@ -361,30 +363,7 @@ A collapsible sidebar container.
 
 ---
 
-## 20. Split Pane (`<ui-split-pane>` / `<ui-pane>` / `<ui-split-handle>`)
-
-Draggable, resizable panes for building complex layouts.
-
-```html
-<ui-split-pane direction="horizontal">
-    <ui-pane initial-size="220px" min_size="160px">Left</ui-pane>
-    <ui-split-handle></ui-split-handle>
-    <ui-pane initial-size="100%">Main content</ui-pane>
-</ui-split-pane>
-```
-
-### Attributes
-
-| Component | Attribute | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `<ui-split-pane>` | `direction` | `'horizontal'` | `'horizontal' \| 'vertical'` split orientation. |
-| `<ui-pane>` | `initial_size` | `'auto'` | Initial size (CSS length or percentage). |
-| `<ui-pane>` | `min_size` / `max_size` | `'0px'` / `'none'` | Resize constraints. |
-| `<ui-split-handle>` | `direction` | `'horizontal'` | Orientation of the draggable handle. |
-
----
-
-## 21. Tabs (`<ui-tabs>` / `<ui-tab>`)
+## 20. Tabs (`<ui-tabs>` / `<ui-tab>`)
 
 A tabbed interface with closable tabs, optional add button, and drag reordering.
 
@@ -410,7 +389,7 @@ A tabbed interface with closable tabs, optional add button, and drag reordering.
 
 ---
 
-## 22. Tree View (`<ui-tree-view>`)
+## 21. Tree View (`<ui-tree-view>`)
 
 A recursive file/folder explorer.
 
@@ -456,11 +435,11 @@ theme.set_mode("dark")          # "light" | "dark"
 theme.set_accent("#e63946")     # accent override layered on the theme
 ```
 
-The **installed themes** live on the sibling **`$themes`** catalog store (a `kind`-filtered slice of the shared registry — see [Theme Manager](#24-theme-manager-ui-theme-picker)).
+The **installed themes** live on the sibling **`$themes`** catalog store (a `kind`-filtered slice of the shared registry — see [Theme Manager](#23-theme-manager-ui-theme-picker)).
 
 ---
 
-## 23. Plugin Manager (`<ui-plugin-manager>`)
+## 22. Plugin Manager (`<ui-plugin-manager>`)
 
 A live plugin manager bound to the app's `$plugins` registry store. It lists every registered
 plugin (state, prefix, action count, dependencies) and provides a per-plugin toggle that calls
@@ -479,7 +458,7 @@ hydrated into `#basis-initial-state`), so no wiring is needed.
 
 ---
 
-## 24. Theme Manager (`<ui-theme-picker>`)
+## 23. Theme Manager (`<ui-theme-picker>`)
 
 A live theme manager bound to the `$themes` catalog store. It lists every installed theme
 (name, modes, version, state) and provides an **Apply** button that calls `$theme.set_theme(id)`, plus a

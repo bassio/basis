@@ -115,9 +115,24 @@ class Badge(Component):
             line-height: 1;
             transition: opacity 0.15s, background-color 0.15s;
         }
-        .ui-badge-remove:hover {
-            opacity: 1;
-            background-color: rgba(0,0,0,0.12);
+        @media (hover: hover) {
+            .ui-badge-remove:hover {
+                opacity: 1;
+                background-color: rgba(0,0,0,0.12);
+            }
+        }
+
+        .ui-badge-remove:focus-visible {
+            outline: 2px solid var(--accent-color, #007acc);
+            outline-offset: 1px;
+        }
+
+        /* The remove button is 1em wide — unusable as a finger target. */
+        @media (pointer: coarse) {
+            .ui-badge-remove {
+                min-width: var(--touch-target, 44px);
+                min-height: var(--touch-target, 44px);
+            }
         }
         """
 

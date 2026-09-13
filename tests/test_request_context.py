@@ -7,6 +7,9 @@ dispatch, and released afterwards so nothing downstream observes a stale request
 import asyncio
 from types import SimpleNamespace
 
+from fastapi import Request
+from fastapi.testclient import TestClient
+
 from basis.server.app import Basis
 from basis.server.render import render_page
 from basis.server.rpc import make_action_handler
@@ -55,6 +58,46 @@ def _build_app():
 def test_current_request_is_none_outside_a_request():
     assert current_request() is None
     assert request_var.get() is None
+
+
+def test_http_routes_see_the_request_sync_and_async():
+    """Every HTTP request is bound, not only the render and action entry points.
+
+    Without this, a plugin route calling ``current_user()`` would silently get
+    ``None`` — it holds the request, but nothing bound the contextvar for it.
+
+    Identity is asserted on the ASGI *scope*, not on the ``Request`` wrapper: the
+    middleware builds its own ``Request`` over the same scope, so the two objects
+    differ while the request they describe is the same one (and ``state``, being
+    backed by the scope, is shared — which is what lets a resolver memoize once
+    per request instead of once per caller).
+    """
+    app = Basis()
+
+    @app.get("/probe-sync")
+    def sync_route(request: Request):
+        held = current_request()
+        bound = held is not None
+        request.state.marker = "set-by-route"
+        return {
+            "bound": bound,
+            "same_scope": bound and held.scope is request.scope,
+            "shares_state": bound and held.state.marker == "set-by-route",
+        }
+
+    @app.get("/probe-async")
+    async def async_route(request: Request):
+        held = current_request()
+        bound = held is not None
+        return {"bound": bound, "same_scope": bound and held.scope is request.scope}
+
+    client = TestClient(app)
+    assert client.get("/probe-sync").json() == {
+        "bound": True,
+        "same_scope": True,
+        "shares_state": True,
+    }
+    assert client.get("/probe-async").json() == {"bound": True, "same_scope": True}
 
 
 def test_render_binds_request_for_store_hooks_and_releases_it():

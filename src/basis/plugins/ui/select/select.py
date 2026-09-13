@@ -103,7 +103,7 @@ class Select(Component):
         .ui-select-md .ui-select-field { font-size: 0.875rem; padding: 0.45rem 0.75rem; }
         .ui-select-lg .ui-select-field { font-size: 1rem;     padding: 0.6rem 0.9rem; }
 
-        .ui-select-field:focus {
+        .ui-select-field:focus-visible {
             border-color: var(--accent-color, #007acc);
             box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color, #007acc) 15%, transparent);
         }
@@ -116,7 +116,7 @@ class Select(Component):
         .ui-select-error .ui-select-field {
             border-color: #ef4444;
         }
-        .ui-select-error .ui-select-field:focus {
+        .ui-select-error .ui-select-field:focus-visible {
             box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
         }
 

@@ -20,8 +20,10 @@ class Card(Component):
             transition: border-color 0.2s ease, box-shadow 0.2s ease;
             box-sizing: border-box;
         }
-        ui-card:hover {
-            border-color: var(--border-hover, #3d4663);
+        @media (hover: hover) {
+            ui-card:hover {
+                border-color: var(--border-hover, #3d4663);
+            }
         }
         .ui-card {
             display: flex;

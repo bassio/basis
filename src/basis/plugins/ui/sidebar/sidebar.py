@@ -239,9 +239,26 @@ class SidebarMenuButton(Component):
             font-weight: 600;
         }
         
-        .sidebar-menu-button:hover {
+        @media (hover: hover) {
+            .sidebar-menu-button:hover {
+                background-color: var(--hover-bg, #f5f5f5);
+                color: var(--text-primary, #2e2e2e);
+            }
+        }
+
+        .sidebar-menu-button:active {
             background-color: var(--hover-bg, #f5f5f5);
-            color: var(--text-primary, #2e2e2e);
+        }
+
+        .sidebar-menu-button:focus-visible {
+            outline: 2px solid var(--accent-color, #007acc);
+            outline-offset: -2px;
+        }
+
+        @media (pointer: coarse) {
+            .sidebar-menu-button {
+                min-height: var(--touch-target, 44px);
+            }
         }
         """
     def template(self):
@@ -305,10 +322,28 @@ class SidebarTrigger(Component):
             cursor: pointer;
             transition: all 0.2s;
         }
-        .ui-sidebar-trigger:hover {
+        @media (hover: hover) {
+            .ui-sidebar-trigger:hover {
+                background-color: rgba(73, 80, 87, 0.15);
+                color: var(--text-primary, #2e2e2e);
+                transform: scale(1.05);
+            }
+        }
+
+        .ui-sidebar-trigger:active {
             background-color: rgba(73, 80, 87, 0.15);
-            color: var(--text-primary, #2e2e2e);
-            transform: scale(1.05);
+        }
+
+        .ui-sidebar-trigger:focus-visible {
+            outline: 2px solid var(--accent-color, #007acc);
+            outline-offset: 2px;
+        }
+
+        @media (pointer: coarse) {
+            .ui-sidebar-trigger {
+                min-width: var(--touch-target, 44px);
+                min-height: var(--touch-target, 44px);
+            }
         }
         """
 

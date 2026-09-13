@@ -80,8 +80,17 @@ class Checkbox(Component):
         .ui-checkbox-lg .ui-checkbox-box { width: 1.35rem; height: 1.35rem; border-radius: 0.35rem; }
 
         /* Hover */
-        .ui-checkbox-label:hover .ui-checkbox-box {
-            border-color: var(--accent-color, #007acc);
+        @media (hover: hover) {
+            .ui-checkbox-label:hover .ui-checkbox-box {
+                border-color: var(--accent-color, #007acc);
+            }
+        }
+
+        /* A 1.125rem box is a precise mouse target, not a finger one. */
+        @media (pointer: coarse) {
+            .ui-checkbox-label {
+                min-height: var(--touch-target, 44px);
+            }
         }
 
         /* Focus-visible ring via native focus propagation */
@@ -218,8 +227,16 @@ class RadioGroup(Component):
                 border-color     0.15s ease,
                 background-color 0.15s ease;
         }
-        .ui-radio-label:hover .ui-radio-circle {
-            border-color: var(--accent-color, #007acc);
+        @media (hover: hover) {
+            .ui-radio-label:hover .ui-radio-circle {
+                border-color: var(--accent-color, #007acc);
+            }
+        }
+
+        @media (pointer: coarse) {
+            .ui-radio-label {
+                min-height: var(--touch-target, 44px);
+            }
         }
         .ui-radio-native:checked + .ui-radio-circle {
             border-color: var(--accent-color, #007acc);
