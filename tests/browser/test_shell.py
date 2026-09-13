@@ -63,6 +63,26 @@ def _display(page, selector):
     )
 
 
+def _wait_settled(page, selector, predicate, timeout):
+    """Wait until *selector*'s rect satisfies *predicate* with its slide finished.
+
+    The drawer animates ``left``/``right`` over 0.25s, so a wait that only checks
+    the rect can hand a mid-transition value to the near-exact assertions below.
+    Requiring the transition to have stopped (``getAnimations`` also reports
+    finished ones, hence the ``playState`` test) makes the read deterministic.
+    """
+    page.wait_for_function(
+        f"""() => {{
+            const el = document.querySelector("{selector}");
+            if (!el) return false;
+            if (el.getAnimations().some(a => a.playState === "running")) return false;
+            const r = el.getBoundingClientRect();
+            return {predicate};
+        }}""",
+        timeout=timeout,
+    )
+
+
 def test_compact_viewport_rearranges_the_workbench(app_server, mobile_context, request):
     timeout = _timeout_ms(request)
     page = mobile_context("iphone").new_page()
@@ -110,11 +130,8 @@ def test_compact_drawer_opens_and_closes(app_server, mobile_context, request):
     assert closed["right"] <= 1, closed
 
     # The title bar's toggle opens the drawer at this tier.
-    page.tap(TOGGLE)
-    page.wait_for_function(
-        "() => document.querySelector('.shell-sidebar').getBoundingClientRect().x >= 0",
-        timeout=10000,
-    )
+    page.tap(TOGGLE, timeout=timeout)
+    _wait_settled(page, SIDEBAR, "r.x >= 0", timeout)
     opened = _box(page, SIDEBAR)
     assert opened["x"] == pytest.approx(0, abs=1.5), opened
     assert opened["width"] <= page.evaluate("() => window.innerWidth"), opened
@@ -122,10 +139,7 @@ def test_compact_drawer_opens_and_closes(app_server, mobile_context, request):
     # The backdrop covers the page behind the panel, so a tap outside the drawer
     # lands on it and closes the drawer.
     page.mouse.click(page.evaluate("() => window.innerWidth - 8"), opened["y"] + 8)
-    page.wait_for_function(
-        "() => document.querySelector('.shell-sidebar').getBoundingClientRect().right <= 1",
-        timeout=10000,
-    )
+    _wait_settled(page, SIDEBAR, "r.right <= 1", timeout)
 
 
 def test_regular_viewport_keeps_the_desktop_frame(app_server, page, request):
