@@ -1,4 +1,5 @@
 import dataclasses
+import inspect
 import json
 import sys
 from typing import Any
@@ -63,6 +64,27 @@ def attach_app_to_store(store, app) -> None:
         refresh = getattr(store, "_refresh_from_app", None)
         if refresh is not None:
             refresh()
+
+
+async def run_apply_request(store, request) -> None:
+    """Run *store*'s ``apply_request(request)`` hook, if it defines one.
+
+    The hook is how a store reads request-scoped state before anything is
+    rendered or serialized (``$theme`` reads its ``basis_theme`` cookie; a
+    session store resolves its session cookie). It may be sync or async. A hook
+    that raises is ignored — a broken request read must not take down the page or
+    the action.
+    """
+    apply_request = getattr(store, "apply_request", None)
+    if not callable(apply_request):
+        return
+    try:
+        if inspect.iscoroutinefunction(apply_request):
+            await apply_request(request)
+        else:
+            apply_request(request)
+    except Exception:
+        pass
 
 
 # Framework-provided control-plane stores. These are always serialized into

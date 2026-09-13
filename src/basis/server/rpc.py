@@ -119,6 +119,52 @@ def _log_rpc_error(path: str, exc: Exception):
     logger.error(f"Error executing server action '{path}': {exc}")
 
 
+async def _handle_action(app, request: Request):
+    """Dispatch one action: resolve it, apply request hooks, run it, respond."""
+    from basis.shared.store import attach_app_to_store, run_apply_request
+
+    payload = await _read_rpc_payload(request)
+    path = payload.get("path")
+    if not path:
+        raise HTTPException(status_code=400, detail="'path' is required")
+    vfs = getattr(app, "vfs", None)
+    vfs_map = getattr(vfs, "vfs_to_server_module", {}) if vfs is not None else {}
+    func = _registry_action(path, vfs_map)
+    store = _resolve_rpc_store(payload.get("store_name"))
+    attach_app_to_store(store, app)
+    # Request-pref hook: a store may opt in by defining
+    # ``apply_request(request)`` (e.g. ``$theme`` reads its ``basis_theme``
+    # cookie) so the server-side store reflects the persisted prefs BEFORE
+    # a server action runs. Mirrors the SSR/CSR initial-state generation
+    # (render.py). Without this, ``set_theme``/``set_mode`` run
+    # on a server store that has neither the persisted prefs applied nor a
+    # clean per-request reset (RPC is exempt from the registry clear), so
+    # the action's ``new_state`` clobbers the OTHER preference on the
+    # client — e.g. applying a theme while in dark mode reverts to light.
+    await run_apply_request(store, request)
+    try:
+        result = await _run_action(
+            func, store, payload.get("args", []), payload.get("kwargs", {})
+        )
+        response = _rpc_response(result, store)
+        # Request-pref persistence hook: a store may opt in by defining
+        # ``persist_prefs()`` → ``(cookie_name, cookie_value) | None`` (e.g.
+        # ``$theme`` writes the ``basis_theme`` cookie so reloads stay
+        # themed). Core stays generic — it never interprets the values.
+        persist = getattr(store, "persist_prefs", None)
+        if callable(persist):
+            pref = persist()
+            if pref is not None:
+                cookie_name, cookie_value = pref
+                response.set_cookie(
+                    cookie_name, cookie_value, path="/", samesite="lax"
+                )
+        return response
+    except Exception as e:
+        _log_rpc_error(path, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def make_action_handler(app):
     """Build the async POST handler bound to *app*.
 
@@ -126,54 +172,17 @@ def make_action_handler(app):
     (``_requires_app``) are always attached to the real Basis instance, even if
     the app is mounted under another ASGI application.
     """
-    from basis.shared.store import attach_app_to_store
+    from basis.shared.context import request_var
 
     async def action_handler(request: Request):
-        payload = await _read_rpc_payload(request)
-        path = payload.get("path")
-        if not path:
-            raise HTTPException(status_code=400, detail="'path' is required")
-        vfs = getattr(app, "vfs", None)
-        vfs_map = getattr(vfs, "vfs_to_server_module", {}) if vfs is not None else {}
-        func = _registry_action(path, vfs_map)
-        store = _resolve_rpc_store(payload.get("store_name"))
-        attach_app_to_store(store, app)
-        # Request-pref hook: a store may opt in by defining
-        # ``apply_request(request)`` (e.g. ``$theme`` reads its ``basis_theme``
-        # cookie) so the server-side store reflects the persisted prefs BEFORE
-        # a server action runs. Mirrors the SSR/CSR initial-state generation
-        # (page.py / render.py). Without this, ``set_theme``/``set_mode`` run
-        # on a server store that has neither the persisted prefs applied nor a
-        # clean per-request reset (RPC is exempt from the registry clear), so
-        # the action's ``new_state`` clobbers the OTHER preference on the
-        # client — e.g. applying a theme while in dark mode reverts to light.
-        apply_request = getattr(store, "apply_request", None)
-        if callable(apply_request):
-            try:
-                apply_request(request)
-            except Exception:
-                pass
+        # Everything the dispatch runs — the action body, a store's
+        # ``apply_request`` hook — can reach the request via
+        # ``current_request()``; actions are never handed it themselves.
+        token = request_var.set(request)
         try:
-            result = await _run_action(
-                func, store, payload.get("args", []), payload.get("kwargs", {})
-            )
-            response = _rpc_response(result, store)
-            # Request-pref persistence hook: a store may opt in by defining
-            # ``persist_prefs()`` → ``(cookie_name, cookie_value) | None`` (e.g.
-            # ``$theme`` writes the ``basis_theme`` cookie so reloads stay
-            # themed). Core stays generic — it never interprets the values.
-            persist = getattr(store, "persist_prefs", None)
-            if callable(persist):
-                pref = persist()
-                if pref is not None:
-                    cookie_name, cookie_value = pref
-                    response.set_cookie(
-                        cookie_name, cookie_value, path="/", samesite="lax"
-                    )
-            return response
-        except Exception as e:
-            _log_rpc_error(path, e)
-            raise HTTPException(status_code=500, detail=str(e))
+            return await _handle_action(app, request)
+        finally:
+            request_var.reset(token)
 
     return action_handler
 

@@ -16,9 +16,26 @@ base_url_var: ContextVar[Optional[str]] = ContextVar("base_url", default=None)
 # On the client, this remains None (stores use REST/WebSocket endpoints).
 db_session_var: ContextVar[Optional[Any]] = ContextVar("db_session", default=None)
 
+# The in-flight HTTP request, bound by the server for the duration of a page
+# render (both engines) and of a server-action dispatch. Plugins derive
+# request-scoped values from it: the framework hands over the request, never a
+# domain concept. On the client it stays None — request-scoped state arrives
+# there as hydrated store state.
+request_var: ContextVar[Optional[Any]] = ContextVar("basis_request", default=None)
+
 def get_base_url() -> Optional[str]:
     """Return the current base URL if set in the context."""
     return base_url_var.get()
+
+
+def current_request() -> Optional[Any]:
+    """The in-flight request, or None on the client / outside a request.
+
+    The hook that lets a plugin reach the request from code the framework does
+    not pass it to — an action body (a store's ``apply_request`` already gets it)
+    or any helper those call.
+    """
+    return request_var.get()
 
 
 class ContextVarProxyDict(dict):

@@ -1,9 +1,6 @@
-import json
-
 from basis.shared.component import Component, IS_CLIENT
 from basis.shared.element import Element, DocumentType
-from basis.shared.store import Store, attach_app_to_store, FRAMEWORK_STORE_NAMES
-from basis.shared.serialization import json_dumps_script_safe
+from basis.shared.store import Store
 
 #: A Page's client blueprint must come from a structure-preserving document
 #: parser: ``<template>.innerHTML`` drops the ``<html>/<head>/<body>`` wrappers,
@@ -619,9 +616,13 @@ class Page(Component):
 
         Internal — the single server-side page-render funnel both the SSR and
         CSR engines end in; serve pages via ``PageResponse.from_page()`` /
-        ``render_page()`` instead. ``stamp_hydration`` asks for the whole-page
-        hydration pass (SSR only), with ``body_app`` the declaratively-mounted
-        root app whose subtree joins the ``b:`` walk.
+        ``render_page()`` instead. ``initial_state_json`` is built by the engine
+        that called us (``server/render.py`` runs the same collect →
+        request-hooks → serialize pipeline for both modes), so a store's
+        request-time projection cannot depend on the render mode.
+        ``stamp_hydration`` asks for the whole-page hydration pass (SSR only),
+        with ``body_app`` the declaratively-mounted root app whose subtree joins
+        the ``b:`` walk.
         """
         # Page-aware PyScript config: the per-page manifest is served at
         # ?url=<route> (the endpoint injects this page's bootstrap under
@@ -640,54 +641,12 @@ class Page(Component):
         if pages is not None and url is not None:
             pages.setdefault(url.path, self.__class__)
 
-        # Page-level store names: the page's explicit store subset, or empty
-        # (default-all). Framework control-plane stores always hydrate.
-        declared_stores = getattr(self.__class__, "stores", None)
-        page_store_names = _page_store_names(declared_stores) if declared_stores else []
-
-        if initial_state_json is None:
-            initial_state = {}
-            names = set(page_store_names) or set(Store.all_names())
-            # Framework control-plane stores ($plugins, $regions) must hydrate on
-            # every page regardless of the page's store subset.
-            names |= set(FRAMEWORK_STORE_NAMES)
-
-            # Attach app-bound stores and run every store's per-request hook
-            # (``apply_request``, e.g. ``$theme`` reading its ``basis_theme``
-            # cookie) BEFORE any store is serialized: a hook that CONTRIBUTES to
-            # another store (``$theme`` → ``$meta`` theme-color) must have run
-            # first, and two phases keep that deterministic regardless of
-            # set-iteration order.
-            for name in names:
-                instance = Store._registry.get(name) or Store.resolve(name)
-                # App-bound stores (``_requires_app``, e.g. ``$plugins``) hold a
-                # listing that requires the owning app. ``Store.resolve``
-                # rebuilds a fresh instance with no ``_app``, so attach it +
-                # recompute or the initial state serializes empty (the client
-                # then hydrates a stale/empty view).
-                attach_app_to_store(instance, request.app)
-                apply_request = getattr(instance, "apply_request", None)
-                if callable(apply_request):
-                    try:
-                        apply_request(request)
-                    except Exception:
-                        pass
-
-            # Serialize every store (request hooks already applied).
-            for name in names:
-                instance = Store._registry.get(name) or Store.resolve(name)
-                initial_state[name] = instance.serialize()
-            if initial_state:
-                # Script-safe JSON: the page template HTML-escapes the
-                # interpolated value (``&`` → ``&amp;``), but script content is
-                # NOT entity-decoded by the browser, so json.loads(textContent)
-                # would hydrate the ESCAPED string. json_dumps_script_safe
-                # escapes ``<``, ``>`` and ``&`` as \uXXXX sequences: they
-                # survive template escaping unchanged, ``</script>`` cannot
-                # break out, and json.loads decodes them back.
-                initial_state_json = json_dumps_script_safe(initial_state)
-
-        self.initial_state_json = initial_state_json
+        # ``initial_state_json`` is built by the render engines: both run the same
+        # collect → request-hooks → serialize pipeline (``server/render.py``), so
+        # SSR and CSR hydrate from identical state. A caller that assembles the
+        # shell directly keeps the class default.
+        if initial_state_json is not None:
+            self.initial_state_json = initial_state_json
 
         # Assembly-time chrome: the viewport <style>, the component-style loop
         # and the dev-mode meta are owned reactive nodes of the Page template.
