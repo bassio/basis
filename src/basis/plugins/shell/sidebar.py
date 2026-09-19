@@ -19,7 +19,7 @@ Both are ordinary props, so a store or a template binding can drive them. The
 current viewport tier uses.
 """
 from basis.shared.breakpoints import compact_block
-from basis.shared.component import Component, IS_CLIENT
+from basis.shared.component import Component, IS_CLIENT, scoped
 from basis.shared.js import py_event
 from basis.shared.reactive import computed
 
@@ -32,7 +32,10 @@ else:
 from basis.plugins.shell.stack import Stack  # noqa: F401
 
 _BASE_CSS = """
-shell-sidebar {
+/* The host is inert: the panel below is the real box, and therefore the flex item. The
+   stylesheet is scoped to this component's own tag, so the rule follows a subclass's tag
+   (``@scoped``) — a hand-written tag list would have to be kept in step with it. */
+:scope {
     display: contents;
 }
 
@@ -146,7 +149,10 @@ class Sidebar(Component):
         if event.target == self.__element__:
             self.open = False
 
-    style = _BASE_CSS + compact_block(_COMPACT_CSS)
+    @classmethod
+    @scoped
+    def style(cls):
+        return _BASE_CSS + compact_block(_COMPACT_CSS)
 
     def template(self):
         """
@@ -198,9 +204,10 @@ class SidebarTrigger(Component):
         else:
             sidebar.collapsed = not getattr(sidebar, "collapsed", False)
 
+    @scoped
     def style(self):
         """
-        shell-sidebar-trigger {
+        :scope {
             display: contents;
         }
 

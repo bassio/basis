@@ -219,7 +219,7 @@ def test_plain_loop_exposes_body_bindings_for_hydration():
         assert b.component_instance is mounted      # owner-bound
         assert b.scope is not None                   # per-item scope overlay
         assert hasattr(b, "node")
-    assert lb.component_children() == []            # plain loop: no component roots
+    assert list(lb.get_child_bindings()) == []      # plain loop: no child components
 
     # Simulate a hydration re-point of one body binding to its SSR node.
     ssr_node = Element("div", attrs={"data-hydration-id": "b:0:0"}, children=[])

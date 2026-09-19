@@ -1,4 +1,4 @@
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 
 class Card(Component):
     """
@@ -6,9 +6,10 @@ class Card(Component):
     """
     __tag__ = "ui-card"
 
+    @scoped
     def style(self):
         """
-        ui-card {
+        :scope {
             display: flex;
             flex-direction: column;
             width: 100%;
@@ -21,7 +22,7 @@ class Card(Component):
             box-sizing: border-box;
         }
         @media (hover: hover) {
-            ui-card:hover {
+            :scope:hover {
                 border-color: var(--border-hover, #3d4663);
             }
         }
@@ -47,9 +48,10 @@ class CardHeader(Component):
     """
     __tag__ = "ui-card-header"
 
+    @scoped
     def style(self):
         """
-        ui-card-header {
+        :scope {
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -78,9 +80,10 @@ class CardTitle(Component):
     """
     __tag__ = "ui-card-title"
 
+    @scoped
     def style(self):
         """
-        ui-card-title {
+        :scope {
             font-size: 0.75rem;
             font-weight: 600;
             text-transform: uppercase;
@@ -115,9 +118,10 @@ class CardContent(Component):
     """
     __tag__ = "ui-card-content"
 
+    @scoped
     def style(self):
         """
-        ui-card-content {
+        :scope {
             display: flex;
             flex-direction: column;
             padding: 16px;
@@ -148,9 +152,10 @@ class CardFooter(Component):
     """
     __tag__ = "ui-card-footer"
 
+    @scoped
     def style(self):
         """
-        ui-card-footer {
+        :scope {
             display: flex;
             align-items: center;
             justify-content: space-between;

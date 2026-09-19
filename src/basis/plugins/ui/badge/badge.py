@@ -1,4 +1,4 @@
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 
 
 class Badge(Component):
@@ -26,10 +26,11 @@ class Badge(Component):
         if el:
             el.style.display = "none"
 
+    @scoped
     def style(self):
         """
         /* ── Host ───────────────────────────────────────────── */
-        ui-badge {
+        :scope {
             display: inline-flex;
         }
 

@@ -11,10 +11,10 @@ declaring, so the compact breakpoint can restate any of it: the prop stays the s
 source of truth and a media query still gets to override the result.
 """
 from basis.shared.breakpoints import compact_block
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 
 _BASE_CSS = """
-shell-stack {
+:scope {
     display: contents;
 }
 
@@ -63,7 +63,10 @@ class Stack(Component):
     overflow = "hidden"
     layout = "none"         # "none" | "column" | "workbench" (compact arrangement)
 
-    style = _BASE_CSS + compact_block(_COMPACT_CSS)
+    @classmethod
+    @scoped
+    def style(cls):
+        return _BASE_CSS + compact_block(_COMPACT_CSS)
 
     def template(self):
         """

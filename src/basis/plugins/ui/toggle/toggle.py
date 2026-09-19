@@ -1,4 +1,4 @@
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 
 
 class Toggle(Component):
@@ -9,6 +9,11 @@ class Toggle(Component):
     move the switch, and handle the bubbling ``change`` event to write state
     back (or persist it, e.g. through a store action on the owner).  The
     control never writes outside its own ``value``: the owner persists.
+
+    ``label`` names the switch (the control is a ``<label>``, so the text is the
+    control's own accessible name, not a decoration next to it). ``arrangement`` is
+    ``auto`` — the switch, labelled or not — or ``row``, a full-width settings row with
+    the label at its start and the control at its end.
     """
 
     __tag__ = "ui-toggle"
@@ -16,6 +21,8 @@ class Toggle(Component):
     second = ""
     value = ""
     checked = False
+    label = ""
+    arrangement = "auto"   # auto | row
 
     def __init_bindings__(self):
         super().__init_bindings__()
@@ -60,15 +67,33 @@ class Toggle(Component):
         is_checked = bool(getattr(checkbox, "checked", False)) if checkbox else False
         self.value = self.second if is_checked else self.first
 
+    @scoped
     def style(self):
         """
-        ui-toggle {
+        :scope {
             display: inline-flex;
+        }
+        /* A settings row is full width, so the host stops shrink-wrapping for it. */
+        :scope:has(> .switch-container[data-arrangement="row"]) {
+            display: block;
         }
         .switch-container {
             display: inline-flex;
             align-items: center;
+            gap: 0.55rem;
             cursor: pointer;
+        }
+        .toggle-label {
+            font-size: 0.875rem;
+            color: var(--text-primary, #2e2e2e);
+        }
+        /* The row: the label takes the line's start, the control its end. */
+        .switch-container[data-arrangement="row"] {
+            display: flex;
+            justify-content: space-between;
+            gap: 1rem;
+            width: 100%;
+            min-height: var(--row-height, 2rem);
         }
         /* Visually hidden, still focusable: ``display: none`` would drop the
            control out of the tab order and out of the accessibility tree. */
@@ -135,7 +160,8 @@ class Toggle(Component):
 
     def template(self):
         """
-        <label class="switch-container">
+        <label class="switch-container" data-arrangement="{arrangement}">
+            <span class="toggle-label" if="{label}">{label}</span>
             <input type="checkbox" class="toggle-checkbox" onchange="{on_change}" value="{value}" />
             <span class="switch">
                 <span class="thumb"></span>

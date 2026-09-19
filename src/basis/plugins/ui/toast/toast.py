@@ -1,5 +1,6 @@
+from basis.shared.breakpoints import compact_block
+from basis.shared.component import Component, extra_style, scoped
 from basis.shared.store import Store
-from basis.shared.component import Component
 from dataclasses import dataclass
 import sys
 
@@ -66,9 +67,10 @@ class Toast(Component):
     # lets a custom store instance be wired in (e.g. a scoped/per-plugin store).
     store = None
 
+    @scoped
     def style(self):
         """
-        ui-toast {
+        :scope {
             display: block;
             margin-bottom: 0.75rem;
             pointer-events: auto;
@@ -260,18 +262,66 @@ class Toast(Component):
             window.setTimeout(init_proxy, 50)
 
 
+def _bottom(selector: str) -> str:
+    """The bottom-strip arrangement for *selector* — one body, two callers.
+
+    ``bottom`` asks for it at every viewport; ``auto`` asks for it only at the compact
+    breakpoint. A toast is a card floating above the edge rather than a panel flush with
+    it, so the strip takes the page gutter on both sides plus the safe area below, and
+    the card spans the width a phone actually has instead of a desktop minimum.
+    """
+    return f"""\
+{selector} {{
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: var(--page-gutter, 1.5rem);
+    padding-bottom: calc(var(--page-gutter, 1.5rem) + var(--safe-area-bottom, env(safe-area-inset-bottom, 0px)));
+}}
+
+{selector} .toast-body {{
+    min-width: 0;
+    max-width: none;
+}}
+"""
+
+
+_BOTTOM_CSS = _bottom('.ui-toast-stack[data-arrangement="bottom"]')
+_COMPACT_BOTTOM_CSS = _bottom('.ui-toast-stack[data-arrangement="auto"]')
+
+
 class ToastContainer(Component):
     """
     Manager component that renders all active toasts.
+
+    Attributes:
+        arrangement: "auto" | "corner" | "bottom" (default: "auto" — a corner stack on
+                     a desktop that spans the bottom edge at the compact breakpoint)
     """
     __tag__ = "ui-toast-container"
 
+    arrangement = "auto"
+
+    # Where the stack sits. An additive block, so an app can restate an arrangement
+    # without copying this stylesheet; ``corner`` needs no rule — the corner stack is the
+    # base component.
+    @classmethod
+    @scoped
+    @extra_style
+    def arrangements(cls):
+        return _BOTTOM_CSS + compact_block(_COMPACT_BOTTOM_CSS)
+
+    @scoped
     def style(self):
         """
-        ui-toast-container {
+        :scope {
+            display: contents;
+        }
+
+        .ui-toast-stack {
             position: fixed;
-            bottom: 2rem;
             right: 2rem;
+            bottom: 2rem;
             z-index: 10000;
             display: flex;
             flex-direction: column-reverse;
@@ -282,7 +332,7 @@ class ToastContainer(Component):
 
     def template(self):
         """
-        <div class="ui-toast-stack">
+        <div class="ui-toast-stack" data-arrangement="{arrangement}">
             <ui-toast 
                 for="t" in="{$toast.toasts}" 
                 key="{t.id}"

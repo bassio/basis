@@ -19,7 +19,7 @@ SHELL_URL = "/shell"
 
 ACTIVITY_BAR = ".shell-activity-bar"
 SIDEBAR = ".shell-sidebar"
-MAIN = ".shell-main-container"
+MAIN = ".shell-pane"
 SPLITTER = ".shell-splitter"
 STATUS_BAR = ".shell-status-bar"
 TITLE_BAR = ".shell-title-bar"
@@ -157,6 +157,12 @@ def test_regular_viewport_keeps_the_desktop_frame(app_server, page, request):
     assert bar["right"] <= sidebar["x"] + 1, (bar, sidebar)
     assert sidebar["right"] <= main["x"] + 1, (sidebar, main)
     assert bar["height"] > bar["width"]
+
+    # The sidebar holds the width it was given. Its host is scoped transparent, so the
+    # panel is the flex item; if the host were a real box the sidebar would size to its
+    # own content and these numbers would be the content's.
+    assert sidebar["width"] == pytest.approx(240, abs=0.5), sidebar
+    assert main["right"] == pytest.approx(page.viewport_size["width"], abs=1.5), main
 
     # The desktop chrome is intact: full-height title bar, live divider, status bar.
     assert title["height"] == pytest.approx(48, abs=1.5), title

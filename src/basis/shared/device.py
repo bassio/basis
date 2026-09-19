@@ -48,7 +48,7 @@ would only appear after the browser answered.
 
 from basis.shared.breakpoints import compact_query, medium_query
 from basis.shared.media import media
-from basis.shared.pointer import HOVER_QUERY
+from basis.shared.pointer import HOVER_QUERY, REDUCED_MOTION_QUERY
 from basis.shared.reactive import computed
 from basis.shared.store import Store, ensure_store
 
@@ -77,7 +77,7 @@ class DeviceStore(Store):
     # ``MediaQueryList`` and one ``change`` listener per query for the whole page, and
     # makes each answer an ordinary reactive field that serialises, hydrates and reacts.
     hover = media(HOVER_QUERY, default=True)
-    reduced_motion = media("(prefers-reduced-motion: reduce)")
+    reduced_motion = media(REDUCED_MOTION_QUERY)
 
     # The viewport tier's boundaries, declared the same way (see
     # ``basis.shared.breakpoints``). ``regular`` is the remainder, so it needs no third

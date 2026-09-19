@@ -34,6 +34,10 @@ import basis.plugins.ui.toast.toast  # noqa: F401  # registers <ui-toast-contain
    <shell-main>/<shell-footer> directly (no app chrome subclasses), so import
    the module that registers them. #}
 import basis.plugins.shell.site  # noqa: F401  # registers <shell-site> & friends
+{% else %}
+{# The app frame wraps its chrome bars in the same shared regions, so a scaffolded
+   app and a scaffolded site read the same way: header / workspace or main / footer. #}
+import basis.plugins.shell.regions  # noqa: F401  # registers <shell-header>/<shell-footer>
 {% endif %}
 
 {# The demo body lives here once and is inlined by BOTH paradigm branches. #}
@@ -330,18 +334,20 @@ class AppContainer(Component):
         <div class="app-container">
             <shell-stack direction="column" size="1 1 auto">
 {% if titlebar %}
-                <shell-title-bar height="{titlebar_height}">
+                <shell-header border="none">
+                    <shell-title-bar height="{titlebar_height}">
 {% if sidebar_left %}
-                    {# The sidebar's toggle: docked on a desktop, a drawer on a phone. #}
-                    <shell-sidebar-trigger target="#sidebarLeft"></shell-sidebar-trigger>
+                        {# The sidebar's toggle: docked on a desktop, a drawer on a phone. #}
+                        <shell-sidebar-trigger target="#sidebarLeft"></shell-sidebar-trigger>
 {% endif %}
-                    <span class="app-title">{app_title}</span>
+                        <span class="app-title">{app_title}</span>
 {% if demo %}
-                    <span class="app-actions">
-                        <button class="app-action" onclick="{toggle_theme}" title="Toggle theme">◐</button>
-                    </span>
+                        <span class="app-actions">
+                            <button class="app-action" onclick="{toggle_theme}" title="Toggle theme">◐</button>
+                        </span>
 {% endif %}
-                </shell-title-bar>
+                    </shell-title-bar>
+                </shell-header>
 {% endif %}
                 {# `layout="workbench"` is the phone arrangement: at the compact breakpoint
                    the row restacks, the primary surface comes first and the activity bar
@@ -378,9 +384,11 @@ class AppContainer(Component):
 {% endif %}
                 </shell-stack>
 {% if statusbar %}
-                <shell-status-bar height="{statusbar_height}">
-                    <span class="status-item">Ready</span>
-                </shell-status-bar>
+                <shell-footer border="none">
+                    <shell-status-bar height="{statusbar_height}">
+                        <span class="status-item">Ready</span>
+                    </shell-status-bar>
+                </shell-footer>
 {% endif %}
             </shell-stack>
             <ui-toast-container></ui-toast-container>

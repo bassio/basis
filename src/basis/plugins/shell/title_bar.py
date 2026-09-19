@@ -1,20 +1,25 @@
-"""The ``TitleBar`` — the top bar of the shell (the classic IDE title bar).
+"""The ``TitleBar`` — the classic title bar: a bar that sits inside a ``Header``.
 
 Sizing (``height``) is a prop, and at the compact breakpoint the bar becomes the
 phone's shorter top app bar (``mobile_height``).
 """
 from basis.shared.breakpoints import compact_block
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 
 _BASE_CSS = """
-shell-title-bar {
+:scope {
     display: contents;
 }
 
 .shell-title-bar {
     display: flex;
     box-sizing: border-box;
-    flex: 0 0 var(--shell-titlebar-height, 48px);
+    /* A bar states its own height and full width rather than a flex basis: it may sit
+       in a row region (a site header) or a column region (the app frame), and a flex
+       basis would be read as a *width* inside a row. */
+    flex: 0 0 auto;
+    width: 100%;
+    height: var(--shell-titlebar-height, 48px);
     background: var(--bg-secondary, #26263a);
     overflow: hidden;
     /* Notch guard (M1.1 D6, tokenized in M1.2): keep content clear of
@@ -33,7 +38,7 @@ shell-title-bar {
 
 _COMPACT_CSS = """
 .shell-title-bar {
-    flex: 0 0 var(--shell-titlebar-mobile-height, 44px);
+    height: var(--shell-titlebar-mobile-height, 44px);
 }
 """
 
@@ -55,7 +60,10 @@ class TitleBar(Component):
     justify = "space-between"
     border = "bottom"   # "none" | "bottom" | "top" | "all"
 
-    style = _BASE_CSS + compact_block(_COMPACT_CSS)
+    @classmethod
+    @scoped
+    def style(cls):
+        return _BASE_CSS + compact_block(_COMPACT_CSS)
 
     def template(self):
         """

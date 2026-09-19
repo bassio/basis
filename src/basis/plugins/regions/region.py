@@ -10,7 +10,7 @@ shrinks with the ``$regions`` store (which is app-housed and page-scoped): the
 boot, and runtime add/remove re-runs a scoped re-sync of this region only.
 """
 
-from basis.shared.component import Component, in_ssr_hydration
+from basis.shared.component import Component, in_ssr_hydration, scoped
 
 from basis.plugins.regions.registry import mount_component
 from basis.plugins.regions.store import ensure_region_registry
@@ -135,9 +135,10 @@ class Region(Component):
                 # One broken contribution must not break the whole region.
                 continue
 
+    @scoped
     def style(self):
         """
-        ui-region {
+        :scope {
             display: contents;
         }
 

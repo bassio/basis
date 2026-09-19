@@ -1,6 +1,6 @@
 """The ``<ui-theme-provider>`` element — injects design tokens as CSS variables."""
 
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 from basis.shared.reactive import computed
 from basis.plugins.theme.default import DEFAULT_TOKENS
 from basis.plugins.theme.schema import TOKEN_SLOTS, css_var
@@ -20,9 +20,10 @@ class ThemeProvider(Component):
     """
     __tag__ = "ui-theme-provider"
 
+    @scoped
     def style(self):
         return """
-        ui-theme-provider {
+        :scope {
             display: contents;
         }
         """

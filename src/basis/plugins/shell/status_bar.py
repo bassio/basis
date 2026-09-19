@@ -1,21 +1,27 @@
-"""The ``StatusBar`` — the bottom bar of the shell (the classic IDE status bar).
+"""The ``StatusBar`` — the classic status bar: a thin bar that sits inside a ``Footer``.
 
 At the compact breakpoint the bar is dropped by default: a phone rarely has room for a
 status strip beside the bottom navigation, and silently stacking two bottom bars reads
 as a bug. An app that wants it back asks for the slim variant with ``mobile="slim"``.
+Because a region sizes to its content, hiding the bar collapses the footer with it.
 """
 from basis.shared.breakpoints import compact_block
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 
 _BASE_CSS = """
-shell-status-bar {
+:scope {
     display: contents;
 }
 
 .shell-status-bar {
     display: flex;
     box-sizing: border-box;
-    flex: 0 0 var(--shell-statusbar-height, 28px);
+    /* A bar states its own height and full width rather than a flex basis: it may sit
+       in a row region or a column region, and a flex basis is read as a *width* inside
+       a row. */
+    flex: 0 0 auto;
+    width: 100%;
+    height: var(--shell-statusbar-height, 28px);
     background: var(--bg-secondary, #26263a);
     overflow: hidden;
     /* Notch guard (M1.1 D6, tokenized in M1.2): keep content clear of
@@ -38,7 +44,7 @@ _COMPACT_CSS = """
 }
 
 .shell-status-bar[data-mobile="slim"] {
-    flex: 0 0 var(--shell-statusbar-mobile-height, 22px);
+    height: var(--shell-statusbar-mobile-height, 22px);
 }
 """
 
@@ -62,7 +68,10 @@ class StatusBar(Component):
     justify = "flex-start"
     border = "top"   # "none" | "top" | "bottom" | "all"
 
-    style = _BASE_CSS + compact_block(_COMPACT_CSS)
+    @classmethod
+    @scoped
+    def style(cls):
+        return _BASE_CSS + compact_block(_COMPACT_CSS)
 
     def template(self):
         """

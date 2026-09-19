@@ -8,7 +8,7 @@ registry name, the literal store reference in their template (reactivity needs
 it), and :meth:`primary_action`.
 """
 
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 
 
 class RegistryManager(Component):
@@ -59,9 +59,10 @@ class RegistryManager(Component):
         reqs = info.get("requires") or []
         return ", ".join(reqs) if reqs else "none"
 
+    @scoped
     def style(self):
         """
-        ui-plugin-manager, ui-theme-picker {
+        :scope {
             display: block;
         }
 

@@ -1,10 +1,41 @@
-from basis.shared.component import Component, IS_CLIENT
+from basis.shared.breakpoints import compact_block
+from basis.shared.component import Component, IS_CLIENT, extra_style, scoped
 from basis.shared.reactive import computed
 
 if IS_CLIENT:
     from pyscript import window, ffi
 else:
     window = ffi = None
+
+
+def _fullscreen(selector: str) -> str:
+    """The fullscreen arrangement for *selector* — one body, two callers.
+
+    ``fullscreen`` asks for it at every viewport; ``auto`` asks for it only at the compact
+    breakpoint, where a drop-down dialog competes with the on-screen keyboard for the
+    same space. The dialog already scrolls its results, so giving it the screen costs
+    nothing but the chrome.
+    """
+    return f"""\
+{selector} {{
+    padding-top: 0;
+}}
+
+{selector} .ui-palette-dialog {{
+    max-width: none;
+    height: 100dvh;
+    max-height: 100dvh;
+    border: none;
+    border-radius: 0;
+    padding-top: var(--safe-area-top, env(safe-area-inset-top, 0px));
+    padding-bottom: var(--safe-area-bottom, env(safe-area-inset-bottom, 0px));
+}}
+"""
+
+
+_FULLSCREEN_CSS = _fullscreen('.ui-palette-overlay[data-arrangement="fullscreen"]')
+_COMPACT_FULLSCREEN_CSS = _fullscreen('.ui-palette-overlay[data-arrangement="auto"]')
+
 
 class CommandPalette(Component):
     """
@@ -16,6 +47,8 @@ class CommandPalette(Component):
         query:       Bound text search filter
         commands:    List of command dicts: [{"id", "label", "shortcut", "category", "action"}]
         active_index: Highlighting index
+        arrangement: "auto" | "dialog" | "fullscreen" (default: "auto" — a drop-down
+                     dialog that fills the screen at the compact breakpoint)
     """
     __tag__ = "ui-command-palette"
 
@@ -24,6 +57,7 @@ class CommandPalette(Component):
     query = ""
     commands = []
     active_index = 0
+    arrangement = "auto"
 
     def __init__(self):
         super().__init__()
@@ -125,9 +159,19 @@ class CommandPalette(Component):
     def stop_propagation(self, event):
         event.stopPropagation()
 
+    # Where the palette sits. An additive block, so an app can restate an arrangement
+    # without copying this stylesheet; ``dialog`` needs no rule — the drop-down dialog is
+    # the base component.
+    @classmethod
+    @scoped
+    @extra_style
+    def arrangements(cls):
+        return _FULLSCREEN_CSS + compact_block(_COMPACT_FULLSCREEN_CSS)
+
+    @scoped
     def style(self):
         """
-        ui-command-palette {
+        :scope {
             display: contents;
         }
 
@@ -286,7 +330,7 @@ class CommandPalette(Component):
 
     def template(self):
         """
-        <div class="ui-palette-overlay {open and 'ui-palette-open' or ''}" onclick="{on_overlay_click}">
+        <div class="ui-palette-overlay {open and 'ui-palette-open' or ''}" data-arrangement="{arrangement}" onclick="{on_overlay_click}">
             <div class="ui-palette-dialog" onclick="{stop_propagation}">
                 <div class="ui-palette-header">
                     <span class="ui-palette-search-icon">🔍</span>

@@ -1,4 +1,4 @@
-"""Input-capability media queries — the pointer counterpart of ``breakpoints``.
+"""Capability media queries — the user-agent counterpart of ``breakpoints``.
 
 Hover is **decoration** in Basis. It may add emphasis; it may never be the only way
 to see or reach something, because a touch engine answers ``:hover`` on tap and —
@@ -28,6 +28,22 @@ COARSE_QUERY = "(pointer: coarse)"
 #: against this set).
 POINTER_QUERIES = (HOVER_QUERY, NO_HOVER_QUERY, COARSE_QUERY)
 
+#: The user asks the system for less movement.
+REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)"
+
+#: Every user-preference query the framework speaks (the mobile audit allows these
+#: alongside :data:`POINTER_QUERIES`).
+PREFERENCE_QUERIES = (REDUCED_MOTION_QUERY,)
+
 #: The touch-target floor, and the fallback for the ``--touch-target`` theme token:
 #: a page rendered without a theme provider still gets finger-sized controls.
 TOUCH_TARGET = "44px"
+
+
+def reduced_motion_block(css: str) -> str:
+    """Wrap *css* so it applies only while the user asks for less movement.
+
+    Endless or sweeping motion (a shimmer, an indeterminate bar) is the case this
+    exists for: a loading placeholder still has to say "working" without moving.
+    """
+    return f"@media {REDUCED_MOTION_QUERY} {{\n{css}\n}}"

@@ -132,8 +132,8 @@ def test_loop_hydration_helpers_recurse_into_nested_loops():
     texts = [n.textContent for n in outer.text_binding_nodes()]
     assert "a1" in texts and "a2" in texts and "b1" in texts, texts
 
-    # Plain nested loop -> no custom-element component roots at any level.
-    assert outer.component_children() == []
+    # Plain nested loop -> no component children at any level.
+    assert list(outer.get_child_bindings()) == []
 
 
 def test_repoint_to_ssr_custom_element_children_repoint():

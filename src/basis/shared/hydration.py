@@ -45,7 +45,6 @@ from collections import defaultdict
 
 # Marker attribute names shared by both sides.
 HYDRATION_ID_ATTR = "data-hydration-id"
-COMPONENT_HYDRATION_ID_ATTR = "data-component-hydration-id"
 TEXT_ORDINALS_ATTR = "data-hydration-text"
 
 
@@ -149,38 +148,34 @@ def iter_tree_paths(root, prefix="b"):
 # Marker stamping
 # ---------------------------------------------------------------------------
 
-def apply_hydration_markers(root, binding_nodes, component_nodes, prefix="b"):
-    """Stamp ``data-hydration-id`` / ``data-component-hydration-id``.
+def apply_hydration_markers(root, binding_nodes, prefix="b"):
+    """Stamp ``data-hydration-id`` on every binding target under ``root``.
 
     * membership is set-based (O(nodes) instead of O(nodes x bindings));
     * stamping problems are surfaced in the returned report instead of being
       swallowed by a bare ``except: pass``.
 
-    ``binding_nodes`` and ``component_nodes`` are iterables of element nodes
-    (binding targets from ``marked_for_hydration()`` and component roots).
-    ``prefix`` names the walk's root region (see ``iter_tree_paths``): the body/app
-    subtree uses the default ``"b"``, and a Page's ``<head>`` region uses
-    ``"h"``, keeping ids across regions differentiated.
+    ``binding_nodes`` is an iterable of element nodes (binding targets from
+    ``marked_for_hydration()``). ``prefix`` names the walk's root region (see
+    ``iter_tree_paths``): the body/app subtree uses the default ``"b"``, and a
+    Page's ``<head>`` region uses ``"h"``, keeping ids across regions
+    differentiated.
 
-    Returns a ``dict`` mapping path -> ``{"binding": bool, "component": bool}``
-    for every stamped node (an audit trail for mismatch diagnostics).
+    Returns the set of stamped paths (an audit trail for mismatch diagnostics).
+    A component root is just another binding target here: every component carries
+    a ``SelfBinding``, so its root is stamped by the binding walk and needs no
+    marker of its own.
     """
     binding_ids = {id(n) for n in binding_nodes}
-    component_ids = {id(n) for n in component_nodes}
-    report: dict[str, dict] = {}
+    stamped: set[str] = set()
 
     for node, path in iter_tree_paths(root, prefix=prefix):
-        is_binding = id(node) in binding_ids
-        is_component = id(node) in component_ids
-        if not (is_binding or is_component):
+        if id(node) not in binding_ids:
             continue
-        if is_binding:
-            node.setAttribute(HYDRATION_ID_ATTR, path)
-        if is_component:
-            node.setAttribute(COMPONENT_HYDRATION_ID_ATTR, path)
-        report[path] = {"binding": is_binding, "component": is_component}
+        node.setAttribute(HYDRATION_ID_ATTR, path)
+        stamped.add(path)
 
-    return report
+    return stamped
 
 
 def build_hydration_map(root, prefix="b"):
@@ -292,17 +287,19 @@ def repoint_loop_to_ssr(binding, ssr_parent, report=None):
         if it.instance is not None:
             # Custom-element loop child: keep the ChildBinding + instance link
             # on the live wrapper (the child's own initialize_ssr hydrates its
-            # subtree when it is a component root).
+            # subtree when it is a component root). The child's PROP bindings
+            # still live in this item's body bindings, so they are re-pointed
+            # below like any other.
             if it.child_binding is not None:
                 it.child_binding.node = ssr_item
             try:
                 setattr(ssr_item, '__basis_instance__', it.instance)
             except Exception:
                 pass
-            continue
-        # Plain LoopItem: re-point each body binding by relative path.
-        client_paths = _loop_relative_path_map(old_node)
-        ssr_paths = _loop_relative_path_map(ssr_item)
+        else:
+            # Plain LoopItem: re-point each body binding by relative path.
+            client_paths = _loop_relative_path_map(old_node)
+            ssr_paths = _loop_relative_path_map(ssr_item)
         for b in it.bindings:
             if type(b).__name__ == "LoopBinding":
                 # Inner loop: resolve its SSR parent structurally from its
@@ -352,6 +349,18 @@ def repoint_loop_to_ssr(binding, ssr_parent, report=None):
                     # also absent from SSR; nothing to do.
                     continue
                 b.node = ssr_node
+                # A child wrapper and the prop bindings beside it both target the
+                # child's host, and a prop reaches the live child through the
+                # `__basis_instance__` link on that node. The SSR tree arrives as
+                # HTML, so it carries no such link: restore it, or a bound prop
+                # updates a detached node and the row keeps the value it was
+                # built with.
+                if (type(b).__name__ == "ChildBinding"
+                        and b.childinstance is not None):
+                    try:
+                        setattr(ssr_node, "__basis_instance__", b.childinstance)
+                    except Exception:
+                        pass
                 if hasattr(b, "attach"):
                     repointed_attachments.append(b)
     return repointed_attachments
@@ -436,13 +445,11 @@ def stamp_text_ordinals(root, text_nodes):
 def _collect_component_hydration(app):
     """Every hydration target owned by the subtree rooted at ``app``.
 
-    Returns ``(binding_nodes, text_nodes, component_nodes)``:
+    Returns ``(binding_nodes, text_nodes)``:
     * ``binding_nodes`` — every marked-for-hydration node across the app's
       recursive bindings (incl. loop item wrappers / loop-body bindings);
     * ``text_nodes`` — every ``TextBinding`` node plus loop-body text binding
-      nodes (exposed for ordinal stamping);
-    * ``component_nodes`` — the root element of ``app`` plus every recursively
-      mounted child component's root (custom-element loop children included).
+      nodes (exposed for ordinal stamping).
     """
     binding_nodes = []
     text_nodes = []
@@ -454,12 +461,7 @@ def _collect_component_hydration(app):
             # Loop body TextBindings live in LoopItem.bindings (not reachable
             # via get_bindings recursion) — expose them for ordinal stamping.
             text_nodes.extend(b.text_binding_nodes())
-    component_nodes = [app.__element__]
-    component_nodes.extend(
-        cb.childinstance.__element__
-        for cb in app.get_child_bindings(recursive=True)
-    )
-    return binding_nodes, text_nodes, component_nodes
+    return binding_nodes, text_nodes
 
 
 def apply_hydration_to_page(page, body_app=None):
@@ -477,11 +479,11 @@ def apply_hydration_to_page(page, body_app=None):
       whole document hydrates against ONE map (``h:`` + ``b:``).
 
     ``body_app`` is the declaratively-mounted root app (when the page has one);
-    its subtree's binding targets / component roots join the ``b:`` walk. When
-    it is ``None`` (static page), only the head region is stamped.
+    its subtree's binding targets join the ``b:`` walk. When it is ``None``
+    (static page), only the head region is stamped.
 
     ``page`` is the mounted ``Page`` instance (``__element__`` = the ``<html>``
-    root). Returns the marker report (path -> flags) for diagnostics.
+    root).
     """
     html_root = page.__element__
     head_node = None
@@ -492,12 +494,11 @@ def apply_hydration_to_page(page, body_app=None):
             head_node = child
         elif tag == "body":
             body_node = child
-    report = {}
 
     # Page-owned binding nodes + text nodes (head AND body bindings). Passing
     # every node to each region's membership set is safe: a region's walk only
     # stamps the nodes it actually visits, so a body node never leaks into the
-    # ``h:`` report (and vice-versa).
+    # ``h:`` region (and vice-versa).
     page_binding_nodes = []
     page_text_nodes = []
     for b in getattr(page, "__bindings__", ()):
@@ -511,34 +512,23 @@ def apply_hydration_to_page(page, body_app=None):
         # component_style_items loop) can re-point its parent — <head>
         # belongs to no component, so it would never otherwise be stamped.
         head_node.setAttribute(HYDRATION_ID_ATTR, "h:0")
-        report.update(
-            apply_hydration_markers(head_node, page_binding_nodes, [], prefix="h")
-        )
+        apply_hydration_markers(head_node, page_binding_nodes, prefix="h")
         stamp_text_ordinals(head_node, page_text_nodes)
 
     # ── BODY region (b:) ────────────────────────────────────────────────────
     if body_node is not None:
         body_binding_nodes = list(page_binding_nodes)
         body_text_nodes = list(page_text_nodes)
-        body_component_nodes = []
         if body_app is not None:
-            app_bindings, app_texts, app_components = _collect_component_hydration(
-                body_app
-            )
+            app_bindings, app_texts = _collect_component_hydration(body_app)
             body_binding_nodes.extend(app_bindings)
             body_text_nodes.extend(app_texts)
-            body_component_nodes = app_components
         # Stamp <body> itself as the b: region root (b:0) so a Page body
         # LoopBinding (e.g. a user-stylesheet <link> loop) can re-point its
         # parent — <body> belongs to no component, mirroring the h:0 rule.
         body_node.setAttribute(HYDRATION_ID_ATTR, "b:0")
-        report.update(
-            apply_hydration_markers(
-                body_node, body_binding_nodes, body_component_nodes, prefix="b"
-            )
-        )
+        apply_hydration_markers(body_node, body_binding_nodes, prefix="b")
         stamp_text_ordinals(body_node, body_text_nodes)
-    return report
 
 
 # ---------------------------------------------------------------------------

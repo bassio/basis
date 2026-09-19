@@ -10,10 +10,10 @@ Primitives:
 
 Default chrome (each in its own module):
 - ``AppShell`` — the whole frame (title bar / workspace / status bar),
-- ``TitleBar``, ``StatusBar``, ``Workspace``,
+- ``TitleBar``, ``StatusBar``, ``Pane``,
 - ``Sidebar`` (``side="left" | "right"``) + ``SidebarLeft`` / ``SidebarRight``
   (thin distinct-tag subclasses for DX) + ``SidebarTrigger``,
-- ``ActivityBar``, ``MainContainer``, ``TabsBar``.
+- ``ActivityBar``, ``TabsBar``.
 
 Site (document-flow) layout:
 - ``Header`` / ``Main`` / ``Footer`` (semantic ``<header>`` / ``<main>`` /
@@ -39,11 +39,11 @@ from basis.plugins.shell.activity_bar import ActivityBar
 from basis.plugins.shell.title_bar import TitleBar
 from basis.plugins.shell.status_bar import StatusBar
 from basis.plugins.shell.sidebar import Sidebar, SidebarLeft, SidebarRight, SidebarTrigger
-from basis.plugins.shell.main_container import MainContainer
+from basis.plugins.shell.pane import Pane
 from basis.plugins.shell.tabs_bar import TabsBar
-from basis.plugins.shell.workspace import Workspace
 from basis.plugins.shell.app_shell import AppShell
-from basis.plugins.shell.site import Header, Main, Footer, SiteShell
+from basis.plugins.shell.regions import Header, Main, Footer
+from basis.plugins.shell.site import SiteShell
 
 plugin = shell_plugin
 
@@ -56,12 +56,11 @@ __all__ = [
     "AppShell",
     "TitleBar",
     "StatusBar",
-    "Workspace",
     "Sidebar",
     "SidebarLeft",
     "SidebarRight",
     "SidebarTrigger",
-    "MainContainer",
+    "Pane",
     "TabsBar",
     "Header",
     "Main",

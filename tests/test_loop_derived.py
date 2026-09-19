@@ -199,6 +199,51 @@ def test_item_reuse_recomputes_derived():
     assert "14" in _text_of(mounted.__element__)
 
 
+def test_item_reuse_recomputes_a_derived_read_by_a_component_prop():
+    """The same reuse contract for a loop written ON the component element: its props
+    are evaluated per item too, so a reused item must re-derive for them."""
+    class Row(Component):
+        __tag__ = "t-derived-prop-row"
+
+        shown = ""
+
+        def template(self):
+            """<div class="t-derived-row" data-shown="{shown}">row</div>"""
+
+    class Owner(Component):
+        items = []
+
+        @derived
+        def doubled(self, it):
+            return it["n"] * 2
+
+        def template(self):
+            """
+            <div>
+                <t-derived-prop-row for="it" in="{items}" key="id"
+                                    shown="{doubled}"></t-derived-prop-row>
+            </div>
+            """
+
+    def shown():
+        return [
+            node.getAttribute("data-shown")
+            for node in mounted.__element__.descendants
+            if getattr(node, "getAttribute", None)
+            and node.getAttribute("class") == "t-derived-row"
+        ]
+
+    mounted = _mount(Owner)
+    mounted.items = [{"id": 1, "n": 5}]
+    loop = _loop(mounted)
+    entry = loop.instances[1]
+    assert shown() == ["10"]
+
+    mounted.items = [{"id": 1, "n": 7}]  # same key, new value
+    assert loop.instances[1] is entry     # reused, not rebuilt
+    assert shown() == ["14"]
+
+
 def test_per_item_derived_nodes_are_independent():
     """Each item owns its own derived ComputedNode; reusing item A's key does
     not touch item B's memo."""

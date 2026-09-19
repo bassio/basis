@@ -627,3 +627,55 @@ def test_js_component_destroy_blocks_pending_boot():
     assert inst._destroyed is True
     assert inst._js_booted is False
     assert inst._destroyed or not inst._js_booted  # the post-await guard holds
+
+
+# ---------------------------------------------------------------------------
+# Nested children declared in the class body
+# ---------------------------------------------------------------------------
+
+def _child_of(owner, cls):
+    """The mounted child instance of *owner* whose class is *cls*."""
+    return next(
+        b.childinstance
+        for b in owner.__bindings__
+        if isinstance(b, ChildBinding) and isinstance(b.childinstance, cls)
+    )
+
+
+class _Panel(Component):
+    """A component whose child is declared as a class in its own body."""
+
+    __tag__ = "x-life-panel"
+
+    class Body(Component):
+        __tag__ = "x-life-panel-body"
+
+        def template(self):
+            """<div class="body">body</div>"""
+
+    def template(self):
+        """<section class="panel"><x-life-panel-body></x-life-panel-body></section>"""
+
+
+def test_a_class_in_a_component_body_mounts_as_its_child():
+    panel = _mount(_Panel)
+
+    assert "panel" in panel.__element__.getAttribute("class")
+    assert isinstance(_child_of(panel, _Panel.Body), _Panel.Body)
+
+
+def test_nested_children_are_collected_when_the_class_is_defined():
+    assert _Panel.__dict__["__nested_children__"] == [_Panel.Body]
+
+
+def test_the_nested_child_lookup_is_not_a_scan(monkeypatch):
+    """``mount()`` asks each instance for them, so ``get_nested_children`` only reads what
+    the class already knows. Re-deriving the answer per mount — an ``inspect`` walk of the
+    class — is what made a loop of components cost O(n²)."""
+
+    def rescan(cls):
+        raise AssertionError("get_nested_children re-derived the answer")
+
+    monkeypatch.setattr(_Panel, "_find_nested_children", classmethod(rescan))
+
+    assert _Panel.get_nested_children() == [_Panel.Body]

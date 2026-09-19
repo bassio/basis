@@ -5,7 +5,7 @@ interactive tabs. Tab behavior (selection, close, drag, add) is a generic ui
 concern, so apps put ``<ui-tabs>`` / ``<ui-tab>`` (from ``basis.plugins.ui.tabs``)
 or their own tabs inside this slot — the shell does not reimplement tabs.
 """
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 
 
 class TabsBar(Component):
@@ -23,9 +23,10 @@ class TabsBar(Component):
     align = "center"
     border = "bottom"   # "none" | "bottom" | "top" | "all"
 
+    @scoped
     def style(self):
         """
-        shell-tabs-bar {
+        :scope {
             display: contents;
         }
 

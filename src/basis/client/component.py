@@ -516,17 +516,18 @@ def _fallback_rerender(ssr_root, shadow, report, snapshot=None):
         # that would wipe non-app body siblings — e.g. the user stylesheet
         # <link>s Page._render() appends at the END of <body>. Remove only the
         # app-owned nodes (injected component <style>s + the marked component
-        # roots), move the shadow app in, then re-append the non-app siblings
-        # AFTER it so the user stylesheet still loads last (the "your CSS comes
-        # later" cascade contract).
+        # roots and their binding nodes), move the shadow app in, then re-append
+        # the non-app siblings AFTER it so the user stylesheet still loads last
+        # (the "your CSS comes later" cascade contract).
         def _is_app_owned(node):
             if getattr(node, "nodeType", None) != 1:  # element only
                 return False
             if node.hasAttribute("data-component-class"):
                 return True
+            # A component root is a binding node like any other (its SelfBinding
+            # marks it), so the id marker already covers it.
             return (
                 node.hasAttribute("data-hydration-id")
-                or node.hasAttribute("data-component-hydration-id")
                 or node.hasAttribute("data-hydration-text")
             )
 

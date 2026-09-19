@@ -64,3 +64,28 @@ def compact_block(css: str) -> str:
         style = _BASE_CSS + compact_block(_COMPACT_CSS)
     """
     return f"@media {compact_query()} {{\n{css}\n}}"
+
+
+def container_block(name: str, css: str) -> str:
+    """Wrap *css* so it applies only while the nearest ``name`` container is narrow.
+
+    The box-scope sibling of :func:`compact_block`, at the same boundary: a component can
+    be compact because of the room it was *given* rather than because of the device. A
+    list inside a 240px sidebar and the same list inside a 1040px pane are two different
+    layouts at one viewport, and only a container query can tell them apart.
+
+    The querying element may not be its own container, so the component that *wants* the
+    answer does not declare it — the box that owns the room does::
+
+        .shell-sidebar {
+            container-type: inline-size;
+            container-name: pane;
+        }
+
+    ``container-type: inline-size`` sizes the box as if it had no contents, which is free
+    for a box whose width is already definite (a set width, a flex basis, a grid track) and
+    fatal for a content-sized one: declaring it there collapses the box to zero. That is
+    why the framework names no containers of its own and each caller opts in where it
+    knows the width.
+    """
+    return f"@container {name} (max-width: {COMPACT_MAX_WIDTH}px) {{\n{css}\n}}"

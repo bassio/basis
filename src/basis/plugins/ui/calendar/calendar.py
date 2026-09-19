@@ -1,4 +1,5 @@
-from basis.shared.component import Component
+from basis.shared.breakpoints import compact_block
+from basis.shared.component import Component, extra_style, scoped
 from basis.shared.reactive import computed
 import datetime
 import calendar
@@ -9,6 +10,19 @@ try:
 except ImportError:
     window = document = ffi = None
     IS_CLIENT = False
+
+#: A phone gives the calendar the whole width, and a week is a seventh of it: the only
+#: slack left to spend on the day targets is the frame's own padding and the grid gaps.
+_COMPACT_CSS = """
+:scope {
+    max-width: none;
+    padding: 8px;
+}
+
+.calendar-grid {
+    gap: 2px;
+}
+"""
 
 
 class Calendar(Component):
@@ -183,9 +197,10 @@ class Calendar(Component):
                 ffi.to_js({"detail": {"selected_date": self.selected_date}, "bubbles": True})
             ))
 
+    @scoped
     def style(self):
         """
-        ui-calendar {
+        :scope {
             display: block;
             width: 100%;
             max-width: 380px;
@@ -255,6 +270,11 @@ class Calendar(Component):
         .calendar-select:focus-visible {
             outline: 2px solid var(--accent-color, #007acc);
             outline-offset: 1px;
+        }
+
+        .calendar-btn-icon {
+            width: 14px;
+            height: 14px;
         }
 
         @media (hover: hover) {
@@ -352,6 +372,14 @@ class Calendar(Component):
         }
         """
 
+    # Additive, so the base stylesheet above keeps its own shape and the compact
+    # arrangement is one block a reader can find.
+    @classmethod
+    @scoped
+    @extra_style
+    def compact(cls):
+        return compact_block(_COMPACT_CSS)
+
     def template(self):
         """
         <div>
@@ -380,7 +408,7 @@ class Calendar(Component):
                 <div class="calendar-controls">
                     <button class="calendar-btn" onclick="{on_prev}">⟵</button>
                     <button class="calendar-btn" onclick="{on_today}" title="Go to Today">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 14px; height: 14px;">
+                        <svg class="calendar-btn-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
                             <line x1="16" y1="2" x2="16" y2="6"></line>
                             <line x1="8" y1="2" x2="8" y2="6"></line>

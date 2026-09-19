@@ -20,6 +20,11 @@ and the loop-body binding never re-renders when the store changes — see
 LOOP-BINDING-STORE-REACTIVITY.md (Option A).  ``_register_owner_effect``
 restores that subscription (the missing "first mile").
 
+The props of a component mounted by a loop written on its OWN element have the
+same need and no body binding to carry it, so ``wire_child_props`` registers them
+through ``_register_owner_effect`` too (``ChildPropsBinding``): one rule for
+per-item data, whether it lands on an element or on a child component.
+
 This module must not import ``bindings.py`` (the binding classes import this
 module); everything here is duck-typed against the server ``Element`` model and
 the browser DOM, and against ``LoopItem`` / ``LoopBinding`` by attribute.
@@ -241,6 +246,27 @@ class LoopItem:
 # Body builder
 # ---------------------------------------------------------------------------
 
+class ChildPropsBinding:
+    """A custom-element loop item's props, in the shape the owner wiring wants.
+
+    ``_register_owner_effect`` needs two things from a loop-body binding: the fields it
+    reads and an update that re-syncs them. The props of a loop written ON the component
+    element are exactly that — they read owner/store state and sync it to the child —
+    without owning a DOM node or a listener of their own.
+    """
+    __slots__ = ("builder", "item", "fields")
+
+    def __init__(self, builder, item, fields):
+        self.builder = builder
+        self.item = item
+        self.fields = fields
+
+    def update(self):
+        if self.item.instance is None:
+            return
+        self.builder.push_child_props(self.item.instance, self.item.scope)
+
+
 class LoopBodyBuilder:
     """Builds per-item ``LoopItem`` bodies for a loop.
 
@@ -264,13 +290,20 @@ class LoopBodyBuilder:
             cloned.removeAttribute(a)
         return cloned
 
-    def child_props(self, item_value):
+    def child_props(self, item_value, scope=None):
         """Per-item prop dict for a custom-element loop child: the loop variable
         plus every attribute on the template that contains a ``{expr}``
-        (loop-control attributes are never passed down as props)."""
+        (loop-control attributes are never passed down as props).
+
+        Evaluated like a loop-body binding — the owner as context, the item's scope
+        for the loop variable — so a prop can read the item, owner fields, @derived
+        values and ``$store.*`` alike.  ``wire_child_props`` subscribes the owner to
+        what they read, so they follow state instead of waiting for a loop re-run."""
         props = {self.item: item_value}
         if "-" not in str.lower(self.clone.tagName):
             return props
+        if scope is None:
+            scope = LoopScope({self.item: item_value}, parent=self.enclosing_scope)
         for c_attr in self.clone.getAttributeNames():
             if c_attr in ("for", "in", "key", "index") or c_attr in props:
                 continue
@@ -280,14 +313,41 @@ class LoopBodyBuilder:
             )
             if has_expr:
                 props[c_attr] = safe_format(
-                    c_attr_value, props, ALLOWED_BUILTINS,
+                    c_attr_value, self.component_instance, ALLOWED_BUILTINS,
                     component=self.component_instance,
                     binding_type="LoopBinding",
                     template=c_attr_value,
+                    scope=scope,
                 )
             else:
                 props[c_attr] = c_attr_value
         return props
+
+    def push_child_props(self, instance, scope):
+        """Set every per-item prop on ``instance`` from the scope's current item
+        value, in one refrain batch (one re-render, not one per prop)."""
+        props = self.child_props(scope.vars[self.item], scope)
+        with instance.refrain() as refrained:
+            for k, v in props.items():
+                setattr(refrained, k, v)
+
+    def wire_child_props(self, item, fields):
+        """Wire a custom-element item's props the way a body binding is wired.
+
+        A loop written ON the component element has no body bindings, so nothing
+        subscribed the owner to the fields its props read: they were re-evaluated only
+        when the loop re-ran, and a prop driven by store or owner state kept whatever
+        it was built with. Registering the per-item @derived nodes (which ``build()``
+        does for a plain item) and then handing the props to the same
+        ``_register_owner_effect`` gives both shapes of loop child one model.
+
+        Call this BEFORE mounting the child: the props are evaluated against the item's
+        scope, so the @derived nodes have to exist by then.
+        """
+        self._register_derived(item, item.scope)
+        self._register_owner_effect(
+            ChildPropsBinding(self, item, fields), item.scope, item,
+        )
 
     def build(self, item_value, key):
         """Build a plain-element ``LoopItem``: a fresh body clone, its
@@ -366,9 +426,14 @@ class LoopBodyBuilder:
         re-run it when the derived's owner dependency changes."""
         owner = self.component_instance
         loop_vars = self._scope_var_names(scope)
-        owner_fields = [f for f in binding.fields
+        # Only a reactive binding carries ``fields``. An event listener and a child
+        # component carry none — a child's props are reactive through the attribute
+        # bindings beside it in the same body — so they contribute no owner dependency
+        # and must not be read as if they did.
+        fields = getattr(binding, "fields", ()) or ()
+        owner_fields = [f for f in fields
                         if f not in loop_vars and scope.derived_node(f) is None]
-        derived_fields = [f for f in binding.fields
+        derived_fields = [f for f in fields
                           if f not in loop_vars and scope.derived_node(f) is not None]
         if (owner_fields or derived_fields) and hasattr(binding, "update"):
             effect_name = f"loop_effect_{id(binding)}"

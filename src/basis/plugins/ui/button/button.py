@@ -1,4 +1,4 @@
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 
 
 class Button(Component):
@@ -24,10 +24,11 @@ class Button(Component):
     icon       = ""
     icon_right = ""
 
+    @scoped
     def style(self):
         """
         /* ── ui-button host ─────────────────────────────────── */
-        ui-button {
+        :scope {
             display: inline-flex;
         }
 
@@ -79,8 +80,13 @@ class Button(Component):
         }
 
         /* ── Sizes ──────────────────────────────────────────── */
+        /* ``sm`` is deliberately denser than the page scale, so it states no floor. */
         .ui-btn-sm { font-size: 0.775rem; padding: 0.3rem 0.75rem; }
-        .ui-btn-md { font-size: 0.875rem; padding: 0.45rem 1rem;   }
+        .ui-btn-md {
+            font-size: 0.875rem;
+            padding: 0.45rem 1rem;
+            min-height: var(--control-height, 2rem);
+        }
         .ui-btn-lg { font-size: 1rem;     padding: 0.6rem 1.35rem; }
 
         /* A dense button is right for a mouse and too small for a finger. */

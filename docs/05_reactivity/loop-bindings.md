@@ -111,7 +111,7 @@ A hyphenated tag in a loop mounts a **real child component** per item. Per-item 
 <ui-text for="it" in="{items}" key="n" label="{it['n']}"></ui-text>
 ```
 
-Each child keeps its own component instance and event handlers. (Slot content inside a loop is not bound — see footgun #2 in [Scoping in Loops](../04_components/loop-scope.md).)
+Each child keeps its own component instance and event handlers, and hydrates like any other component: a component rendered by a loop is a child of the page's tree, so SSR stamps its subtree and the client adopts it. Its props are evaluated against the item's scope and the owner, and the owner subscribes to what they read — so a prop follows owner fields, `@derived` values and `$store.*` exactly like a loop-body binding, whether the loop is written on the component element or around it. (Slot content inside a loop is not bound — see footgun #2 in [Scoping in Loops](../04_components/loop-scope.md).)
 
 ---
 

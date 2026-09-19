@@ -16,6 +16,11 @@ hydrate the SSR tree (isomorphism: VFS namespace == import namespace).
 from basis.server.app import Basis
 
 from browser_app.components.page import CounterPage
+from browser_app.components.container_page import ContainerPage
+from browser_app.components.families_page import FamiliesPage
+from browser_app.components.loops_page import LoopsPage
+from browser_app.components.nav_page import NavPage
+from browser_app.components.overlay_page import OverlayPage
 from browser_app.components.shell_page import ShellPage
 from browser_app.components.touch_page import TouchPage
 
@@ -28,3 +33,8 @@ app.bootstrap()
 app.serve("/")(CounterPage)
 app.serve("/shell")(ShellPage)
 app.serve("/touch")(TouchPage)
+app.serve("/nav")(NavPage)
+app.serve("/overlays")(OverlayPage)
+app.serve("/container")(ContainerPage)
+app.serve("/families")(FamiliesPage)
+app.serve("/loops")(LoopsPage)

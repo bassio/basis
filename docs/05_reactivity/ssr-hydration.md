@@ -75,14 +75,6 @@ Written on every element that participates in a binding (a `{expression}` text n
 <span data-hydration-id="b:0:1">Score: 0</span>
 ```
 
-### `data-component-hydration-id`
-
-Written on the root element of each component instance, marking component boundaries.
-
-```html
-<user-card data-component-hydration-id="b:0:2">...</user-card>
-```
-
 ### `data-hydration-text`
 
 Written on the **parent** of reactive text nodes: a comma-separated list of the *ordinals* of its reactive text children (0-based, among the parent's normalized children). Because text nodes cannot carry attributes, this marker is how the client locates them deterministically.
@@ -134,7 +126,7 @@ Every page boots through ONE client driver — `basis.client.entrypoint`: the ma
 
 2. **Stage a client mount** — `Page.mount_document()` (SSR mode) mounts the whole Page (with the root component as a declarative body child) into a *detached* staging tree, then stamps `data-hydration-id` on every countable node of both regions (`h:`/`b:`) using the *same* `iter_tree_paths` algorithm the server uses. This staging tree is used only to discover bindings and paths; it is discarded once hydration completes.
 
-3. **Match components** — For each component instance, the client finds the corresponding SSR subtree by matching the component root's `data-hydration-id` against the SSR tree's `data-hydration-id`s.
+3. **Match components** — For each component instance of the page's tree, the client finds the corresponding SSR subtree by matching the component root's `data-hydration-id` against the SSR tree's `data-hydration-id`s. That set is every child component, loop children included: `get_child_bindings(recursive=True)` descends into loop items, so a component inside a loop body is adopted — and stamped — like any other child.
 
 4. **Match bindings** (`initialize_ssr`) — Before matching, the client builds **one** SSR lookup map, `{path: node}`, from every `data-hydration-id` in the tree (`build_hydration_map`). Each binding is then repointed from its staging node to the matching SSR node with two O(1) lookups:
    - **Element bindings** (events, attributes, `if`, child components, loops) are found by reading the staging node's `data-hydration-id` — which *is* the canonical path — and looking it up in the SSR map. The path is read from the stamped DOM attribute (not from proxy identity, so it is safe across Pyodide's `JsProxy` wrappers), and it is the same value on both sides by construction. Loops are the one structural special case: item wrappers and loop-body bindings are re-pointed by `data-item-key` + *relative* canonical paths (`shared/hydration.repoint_loop_to_ssr`), which also handles nested loops and custom-element loop children.

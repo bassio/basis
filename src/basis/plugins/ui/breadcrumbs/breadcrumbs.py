@@ -1,4 +1,4 @@
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 from basis.shared.reactive import computed
 
 class Breadcrumbs(Component):
@@ -30,9 +30,10 @@ class Breadcrumbs(Component):
         return result
 
 
+    @scoped
     def style(self):
         """
-        ui-breadcrumbs {
+        :scope {
             display: inline-block;
         }
 

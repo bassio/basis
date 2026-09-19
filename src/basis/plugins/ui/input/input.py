@@ -1,4 +1,4 @@
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 
 
 class TextInput(Component):
@@ -9,12 +9,13 @@ class TextInput(Component):
         label       : Floating / above label text.
         placeholder : Placeholder string.
         value       : Bound value.
-        type        : HTML input type — 'text' | 'email' | 'password' | 'search' | 'number' …
+        input_type        : HTML input type — 'text' | 'email' | 'password' | 'search' | 'number' …
         prefix_icon : Optional leading icon HTML/emoji.
         suffix_icon : Optional trailing icon HTML/emoji.
         helper      : Helper / hint text shown below the input.
         error       : Error message — when non-empty the input is styled as invalid.
         disabled    : "" | "true"
+        readonly    : "" | "true" — the value is shown but not typed (a picker's field).
         size        : 'sm' | 'md' | 'lg'
     """
     __tag__ = "ui-text-input"
@@ -22,21 +23,23 @@ class TextInput(Component):
     label       = ""
     placeholder = ""
     value       = ""
-    type        = "text"
+    input_type        = "text"
     prefix_icon = ""
     suffix_icon = ""
     helper      = ""
     error       = ""
     disabled    = ""
+    readonly    = ""
     size        = "md"   # sm | md | lg
 
     def on_input(self, event):
         self.value = event.target.value
 
+    @scoped
     def style(self):
         """
         /* ── Host ───────────────────────────────────────────── */
-        ui-text-input {
+        :scope {
             display: flex;
             flex-direction: column;
         }
@@ -129,6 +132,11 @@ class TextInput(Component):
             cursor: not-allowed;
         }
 
+        /* A picker's field is a target, not a place to type. */
+        .ui-input-field:read-only {
+            cursor: pointer;
+        }
+
         /* ── Helper / error text ────────────────────────────── */
         .ui-input-helper {
             font-size: 0.76rem;
@@ -153,10 +161,11 @@ class TextInput(Component):
                 <span class="ui-input-prefix" if="{prefix_icon}">{prefix_icon}</span>
                 <input
                     class="ui-input-field"
-                    type="{type}"
+                    type="{input_type}"
                     placeholder="{placeholder}"
                     value="{value}"
                     {disabled}
+                    {readonly}
                     oninput="{on_input}" />
                 <span class="ui-input-suffix" if="{suffix_icon}">{suffix_icon}</span>
             </div>

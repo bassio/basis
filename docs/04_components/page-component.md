@@ -168,7 +168,7 @@ async def home(request: Request):
     return await PageResponse.from_page(HomePage, request)
 ```
 
-To add a stylesheet override layer, set `Page.stylesheets` to a tuple of URLs — Basis assembles them at the **end of `<body>`** (replacing the `basis:user-stylesheets` anchor that follows the `basis:app-root` mount point), so they load after the app and after the in-tree component `<style>` elements in `<head>`, and win the cascade at equal specificity:
+To add a stylesheet override layer, set `Page.stylesheets` to a tuple of URLs — Basis assembles them at the **end of `<body>`** (replacing the `basis:user-stylesheets` anchor that follows the `basis:app-root` mount point), so they load after the app and after the in-tree component `<style>` elements in `<head>`. Component styles are [scoped](styling-components.md#4-encapsulation-with-scoped), so an override still has to out-specify the rule it replaces (or set a design token) — being later is not sufficient on its own:
 
 ```python
 class HomePage(Page):
@@ -200,3 +200,9 @@ Before generating the final HTML string, the SSR renderer:
 3. Writes that JSON into the `<script id="basis-initial-state">` block.
 
 When the page loads in the browser, the client-side Store constructor reads this element and pre-populates itself from the serialized data. This means your stores on the client already hold the server's data before any reactive bindings fire — no flash of stale content, no duplicate fetch requests.
+
+---
+
+*See also [Responsive Layout](responsive-layout.md) for what the page owns that a component
+cannot: the compact scale on `:root`, and the breakpoint the stylesheets and `$device`
+agree on.*

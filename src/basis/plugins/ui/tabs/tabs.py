@@ -1,4 +1,4 @@
-from basis.shared.component import Component, IS_CLIENT
+from basis.shared.component import Component, IS_CLIENT, scoped
 from basis.shared.reactive import computed
 
 if IS_CLIENT:
@@ -47,9 +47,10 @@ class Tabs(Component):
     def on_dragstart_internal(self, event):
         self._dragged_tab = event.target.closest("ui-tab")
 
+    @scoped
     def style(self):
         """
-        ui-tabs {
+        :scope {
             display: block;
             width: 100%;
         }

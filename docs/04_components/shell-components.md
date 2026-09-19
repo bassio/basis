@@ -18,8 +18,17 @@ which is how the `basis init` scaffold gives you app-owned chrome.
 | | Workbench (`shell-app` / a scaffolded `.app-container`) | Site (`shell-site`) |
 | :--- | :--- | :--- |
 | Mental model | Fixed viewport, inner scroll (editor / dashboard) | Document flow, the page scrolls (marketing site, docs) |
-| Parts | `TitleBar` → `Workspace` → `StatusBar` | `Header` → `Main` → `Footer` |
+| Regions | `Header` → `Main` → `Footer` | `Header` → `Main` → `Footer` |
+| Top / bottom | a `TitleBar` inside the header, a `StatusBar` inside the footer | the header *is* the nav bar, the footer *is* the page footer |
 | Height | `100dvh` with a `100vh` fallback | `min-height: 100dvh` |
+
+**Both paradigms read the same way.** `Header` and `Footer` are the document's top and
+bottom regions, and a *region sizes to its content*: it carries no height of its own, so
+the strip's height comes from whatever is inside it — nav content on a site, a chrome bar
+in an app. `TitleBar` and `StatusBar` are therefore *bars that sit inside* a region. They
+draw the strip they are (height, background, border, safe-area padding), and a region that
+nests one passes `border="none"` so the two borders do not double. Both stay first-class
+components usable on their own, and hiding a bar collapses its region with it.
 
 `AppShell` (`<shell-app>`) and `SiteShell` (`<shell-site>`) are ready-made composers, but
 they are *convenience only*: the parts work standalone, and the `basis init` scaffold
@@ -29,10 +38,12 @@ just a column stack of parts:
 ```html
 <div class="app-container">
     <shell-stack direction="column" size="1 1 auto">
-        <shell-title-bar height="48px">
-            <shell-sidebar-trigger target="#sidebarLeft"></shell-sidebar-trigger>
-            <span class="app-title">My App</span>
-        </shell-title-bar>
+        <shell-header border="none">
+            <shell-title-bar height="48px">
+                <shell-sidebar-trigger target="#sidebarLeft"></shell-sidebar-trigger>
+                <span class="app-title">My App</span>
+            </shell-title-bar>
+        </shell-header>
         <shell-stack direction="row" size="1 1 auto" layout="workbench">
             <shell-activity-bar width="56px">
                 <span slot="top">◆</span>
@@ -41,13 +52,15 @@ just a column stack of parts:
                 <div class="panel">Explorer</div>
             </shell-sidebar-left>
             <shell-splitter direction="horizontal"></shell-splitter>
-            <shell-main-container>
+            <shell-pane>
                 <span>Editor</span>
-            </shell-main-container>
+            </shell-pane>
         </shell-stack>
-        <shell-status-bar height="28px">
-            <span class="status-item">Ready</span>
-        </shell-status-bar>
+        <shell-footer border="none">
+            <shell-status-bar height="28px">
+                <span class="status-item">Ready</span>
+            </shell-status-bar>
+        </shell-footer>
     </shell-stack>
 </div>
 ```
@@ -191,12 +204,27 @@ What each part does at compact width:
 | `ActivityBar` | Bottom navigation (`mobile_height`, default `52px`), horizontal, safe-area padded |
 | `Sidebar` | Overlay drawer from its own edge, with a backdrop that closes it on tap |
 | `StatusBar` | Hidden (`mobile="hidden"`, the default) or slim (`mobile="slim"`) |
-| `MainContainer` | The primary surface (first in the workbench band) |
+| `Pane` | A content surface inside the main band (repeatable) |
 | `Splitter` | Removed from the flow |
-| `SiteShell` family | Document flow already stacks; the header/footer stay as authored |
+| `Header` | Insets its content by the page gutter, keeps the safe area; an optional `mobile_height` fixes the strip |
+| `Main` | Takes the page gutter, so the document never touches the glass |
+| `Footer` | Insets its content, and restacks its columns (`layout="column"`) |
+| `SiteShell` / `AppShell` | Reserve the strip a docked nav covers (`--shell-bottom-inset`) |
 
 Because it is all CSS, the arrangement applies the moment the page paints — no client
 round-trip, no layout shift after hydration.
+
+Two opt-outs belong to a region that *wraps a chrome bar* rather than holding content:
+`border="none"` (the bar draws the strip's own edge) and `gutter="none"` (the bar spans
+edge to edge). `AppShell` passes both, so an app's title bar looks exactly as it did
+before the regions existed.
+
+A `ui-nav` with `arrangement="auto"` leaves the header's flow at compact and pins itself
+to the bottom edge, which means it floats over whatever is under it. The nav publishes the
+height it takes as `--shell-bottom-inset` on the document root, and the frame reserves
+exactly that as padding — so the page's last content still clears the bar. It is published
+only while a docked nav exists; a custom property inherits *downwards*, which is why the
+nav publishes it and the frame spends it.
 
 ---
 
@@ -233,8 +261,10 @@ class MyTitleBar(TitleBar):
 ```
 
 Keep the part's `style()` rules composable: if you re-declare the sizing, keep it on the
-custom property (`flex: 0 0 var(--shell-titlebar-height, 48px)`) rather than hard-coding a
-length, or the compact rules will silently stop applying to your copy.
+custom property and state it as `height` plus `width: 100%`. A bar may sit in a row region
+(a site header) or a column region (the app frame), and a flex basis would be read as a
+*width* inside a row. Hard-coding a length instead silently stops the compact rules
+applying to your copy.
 
 See [Styling Components](styling-components.md) for the token/`style` mechanics and
 [Extending Components](extending-components.md) for subclassing in general.

@@ -1,9 +1,54 @@
-from basis.shared.component import Component, IS_CLIENT
+from basis.shared.breakpoints import compact_block
+from basis.shared.component import Component, IS_CLIENT, extra_style, scoped
 
 if IS_CLIENT:
     from pyscript import window, ffi
 else:
     window = ffi = None
+
+
+def _sheet(backdrop: str) -> str:
+    """The bottom-sheet arrangement for *backdrop* — one body, two callers.
+
+    ``sheet`` asks for it at every viewport; ``auto`` asks for it only at the compact
+    breakpoint, where the bottom edge of the screen is the part a thumb reaches.
+    """
+    return f"""\
+{backdrop} {{
+    align-items: flex-end;
+}}
+
+{backdrop} .ui-modal-panel {{
+    width: 100%;
+    max-width: none;
+    max-height: 90dvh;
+    border-radius: var(--radius-lg, 0.5rem) var(--radius-lg, 0.5rem) 0 0;
+    /* The home indicator would otherwise sit over the panel's last row. */
+    padding-bottom: var(--safe-area-bottom, env(safe-area-inset-bottom, 0px));
+    transform: translateY(100%);
+}}
+
+{backdrop}.ui-modal-open .ui-modal-panel {{
+    transform: translateY(0);
+}}
+"""
+
+
+_SHEET_CSS = _sheet('.ui-modal-backdrop[data-arrangement="sheet"]')
+_COMPACT_SHEET_CSS = _sheet('.ui-modal-backdrop[data-arrangement="auto"]')
+
+_FULLSCREEN_CSS = """
+.ui-modal-backdrop[data-arrangement="fullscreen"] .ui-modal-panel {
+    width: 100%;
+    max-width: none;
+    height: 100dvh;
+    max-height: 100dvh;
+    border: none;
+    border-radius: 0;
+    padding-top: var(--safe-area-top, env(safe-area-inset-top, 0px));
+    padding-bottom: var(--safe-area-bottom, env(safe-area-inset-bottom, 0px));
+}
+"""
 
 class Modal(Component):
     """
@@ -13,6 +58,9 @@ class Modal(Component):
         open              : "true" | "" (reactive attribute to control open state)
         title             : Header title string (optional)
         size              : "sm" | "md" | "lg" | "full" (default: "md")
+        arrangement       : "auto" | "dialog" | "sheet" | "fullscreen"
+                            (default: "auto" — a centred dialog that becomes a bottom
+                            sheet at the compact breakpoint)
         close_on_backdrop : "true" | "" (default: "true")
     """
     __tag__ = "ui-modal"
@@ -20,7 +68,16 @@ class Modal(Component):
     open = ""
     title = ""
     size = "md"
+    arrangement = "auto"
     close_on_backdrop = "true"
+
+    # Where the panel sits. These rules ship as an additive block, i.e. *after* the
+    # stylesheet above, so the sheet's `transform` wins the tie against the scale rules.
+    @classmethod
+    @scoped
+    @extra_style
+    def arrangements(cls):
+        return _SHEET_CSS + _FULLSCREEN_CSS + compact_block(_COMPACT_SHEET_CSS)
 
     def close(self, event=None):
         self.open = ""
@@ -37,9 +94,10 @@ class Modal(Component):
             if should_close:
                 self.close()
 
+    @scoped
     def style(self):
         """
-        ui-modal {
+        :scope {
             display: contents;
         }
         
@@ -148,7 +206,7 @@ class Modal(Component):
 
     def template(self):
         """
-        <div class="ui-modal-backdrop {open and 'ui-modal-open' or ''}" onclick="{on_backdrop_click}">
+        <div class="ui-modal-backdrop {open and 'ui-modal-open' or ''}" data-arrangement="{arrangement}" onclick="{on_backdrop_click}">
             <div class="ui-modal-panel ui-modal-{size}">
                 <div class="ui-modal-header" if="{title or True}">
                     <span class="ui-modal-title" if="{title}">{title}</span>

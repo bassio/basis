@@ -373,7 +373,9 @@ class BaseComponent(ReactiveObject):
     @classmethod
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__()
-        
+
+        setattr(cls, "__nested_children__", cls._find_nested_children())
+
         templatestr = cls._get_template_string()
         
         if not templatestr:
@@ -902,10 +904,13 @@ class BaseComponent(ReactiveObject):
                 # Standard attributes
                 for attr in standard_attrs:
                     if attr.startswith("{") and attr.endswith("}"):
+                        # ``<input {disabled}>``: the attribute's NAME is the
+                        # expression, so the element keeps the attribute while the
+                        # owner's field is truthy and drops it otherwise.
                         attr_no_braces = attr.strip("{}")
                         attr_value = element.getAttribute(attr)
                         attr_isboolean = True
-            
+
                         if (attr_value == "") or (attr_value == None):
                             attr_value = attr
 
@@ -919,18 +924,18 @@ class BaseComponent(ReactiveObject):
                         if attr_value is None:
                             continue
 
-                        fieldnames, trees_dict = extract_dependencies(attr_value, ALLOWED_BUILTINS)
-                        
-                        if trees_dict:
-                            blueprints.append(BindingBlueprint(
-                                binding_class=AttributeBinding,
-                                node_index=node_index,
-                                kwargs={'attr': attr_no_braces,
-                                        'content': attr_value,
-                                        'fields': fieldnames,
-                                        'is_boolean': attr_isboolean},
-                                ast_trees=trees_dict
-                            ))
+                    fieldnames, trees_dict = extract_dependencies(attr_value, ALLOWED_BUILTINS)
+
+                    if trees_dict:
+                        blueprints.append(BindingBlueprint(
+                            binding_class=AttributeBinding,
+                            node_index=node_index,
+                            kwargs={'attr': attr_no_braces,
+                                    'content': attr_value,
+                                    'fields': fieldnames,
+                                    'is_boolean': attr_isboolean},
+                            ast_trees=trees_dict
+                        ))
 
             # Special case for Slot
             if str.lower(element.tagName) == 'slot':
@@ -1371,31 +1376,26 @@ class BaseComponent(ReactiveObject):
     
     @classmethod
     def get_nested_children(cls):
-        nested = []
+        """The component classes declared inside this class's own body, in order.
 
-        cls_attrs_order = {key: i for i, key in enumerate(cls.__dict__.keys())}
+        Which classes those are is a property of the class *definition*, so it is
+        answered once, when the class is created: ``mount()`` asks every instance for
+        it, and an ``inspect`` scan per mount turns a loop of components into
+        quadratic work. HMR replaces a definition with a new class, which computes its
+        own answer.
+        """
+        return cls.__dict__.get("__nested_children__", ())
 
-        if len(cls_attrs_order) > 0:
-
-            members = inspect.getmembers_static(cls)
-
-            subclass_members = [(k, v) for k, v in members
-                                if inspect.isclass(v) \
-                                and v.__module__ == cls.__module__ \
-                                and v.__qualname__.startswith(cls.__qualname__ + '.') \
-                                and issubclass(v, BaseComponent)
-                                ]
-            
-            sorted_members = []
-
-            for sc_name, sc in cls.__dict__.items():
-                if (sc_name, sc) in subclass_members:
-                    sorted_members.append(sc)
-
-            return sorted_members
-                   
-        else:
-            return []
+    @classmethod
+    def _find_nested_children(cls):
+        return [
+            value
+            for value in cls.__dict__.values()
+            if inspect.isclass(value)
+            and value.__module__ == cls.__module__
+            and value.__qualname__.startswith(cls.__qualname__ + ".")
+            and issubclass(value, BaseComponent)
+        ]
 
     def has_slots(self):
         for binding in self.__bindings__:
@@ -1404,8 +1404,20 @@ class BaseComponent(ReactiveObject):
         return False
 
     def get_child_bindings(self, recursive=False):
+        """Every child component of this one, loop children included.
+
+        A component rendered by a loop is a child like any other — it hydrates its own
+        subtree and gets its own ``server_load`` — so the walk has to descend past the
+        loop, in both shapes: a loop written ON the component element (whose ChildBinding
+        the owner holds) and a component inside a plain wrapper (whose ChildBinding the
+        loop's item holds, ``LoopBinding.get_child_bindings``).
+        """
 
         first_level_bindings = [c for c in self.__bindings__ if isinstance(c, ChildBinding)]
+        if recursive:
+            for binding in self.__bindings__:
+                if isinstance(binding, LoopBinding):
+                    first_level_bindings.extend(binding.get_child_bindings())
 
         for cb in first_level_bindings:
             yield cb
@@ -1413,7 +1425,10 @@ class BaseComponent(ReactiveObject):
                 yield from cb.childinstance.get_child_bindings(recursive=True)
 
     def get_bindings(self, recursive=False):
-        
+        """Every binding of this component, recursing into child components —
+        loop children included, so their own nodes join the hydration stamping
+        surface instead of arriving unstamped."""
+
         first_level_bindings = [c for c in self.__bindings__]
         first_level_child_bindings = [c for c in first_level_bindings if isinstance(c, ChildBinding)]
 
@@ -1423,6 +1438,10 @@ class BaseComponent(ReactiveObject):
         if recursive:
             for cb in first_level_child_bindings:
                 yield from cb.childinstance.get_bindings(recursive=True)
+            for binding in self.__bindings__:
+                if isinstance(binding, LoopBinding):
+                    for cb in binding.get_child_bindings():
+                        yield from cb.childinstance.get_bindings(recursive=True)
 
     # refrain() is inherited from ReactiveObject
 

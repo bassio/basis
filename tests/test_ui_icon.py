@@ -103,5 +103,7 @@ def test_ui_icon_size_and_color_style():
         """
 
     html = _render(Root, "/test_ui_icon_style.py")
-    assert "font-size: 20px" in html
-    assert "color: red" in html
+    # Overrides travel as custom properties so a rule can still restyle the glyph
+    # (see CONTRIBUTING §14).
+    assert "--icon-size: 20px" in html
+    assert "--icon-color: red" in html

@@ -135,9 +135,10 @@ target's `data-*` attributes (the canonical idiom above), not from `self`.
   event target.
 - **Custom-element loop children**: pass per-item data via attributes; slot
   content inside a loop is unsupported today.
-- **Known gap:** custom-element loop children pass per-item data via
-  attributes only; slot content inside a loop remains unbound (footgun #2).
-  Parent fields in a plain-element loop body stay live (owner-bound).
+- **Per-item data follows state in both shapes.** A prop on the loop's component
+element and a binding in a plain wrapper are both owner-bound, so an owner or
+`$store` change re-renders the row either way (pinned by
+`tests/browser/test_loop_children.py`).
 
 *See also [Components](../tutorial.md#2-components), [Importing Components &
 the Isomorphism Principle](importing-components.md), and [SSR & Client

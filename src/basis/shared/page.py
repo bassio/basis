@@ -1,3 +1,4 @@
+from basis.shared.breakpoints import compact_block
 from basis.shared.component import Component, IS_CLIENT
 from basis.shared.element import Element, DocumentType
 from basis.shared.store import Store
@@ -21,6 +22,32 @@ from basis.shared.store import Store
 #: binding (see the ``viewport_base_css`` class attribute), never as inline
 #: template text: ``{``/``}`` inside a raw-text element would be parsed as
 #: ``{expr}`` fields.
+#:
+#: Sizing for a phone is a *scope*, not a per-component media query. A component
+#: reads ``var(--control-height, 2rem)`` and inherits whatever this block says,
+#: so the whole catalogue answers the viewport without any component owning a
+#: breakpoint. The base declarations exist so those fallbacks stay checkable
+#: (``tests/test_mobile_arrangement.py``) instead of drifting apart.
+#:
+#: The phone control height is the touch target, not a number that happens to match
+#: it: an element a thumb must hit is finger-sized by definition, and the theme owns
+#: how big that is.
+_SCALE_CSS = """\
+:root {
+    --control-height: 2rem;
+    --row-height: 2rem;
+    --page-gutter: 1.5rem;
+}
+"""
+
+_SCALE_COMPACT_CSS = """\
+:root {
+    --control-height: var(--touch-target, 44px);
+    --row-height: 3rem;
+    --page-gutter: 1rem;
+}
+"""
+
 _VIEWPORT_BASE_CSS = """\
 /* basis mobile viewport base */
 html {
@@ -44,7 +71,7 @@ button, a, input, select, textarea, [role="button"] {
         min-height: var(--touch-target, 44px);
     }
 }
-"""
+""" + _SCALE_CSS + compact_block(_SCALE_COMPACT_CSS)
 
 def page_aware_config_url(base_url: str, request) -> str:
     """Append ``?url=<route>`` to the framework's own ``pyscript.json`` config URL.

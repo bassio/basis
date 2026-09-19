@@ -1,4 +1,4 @@
-from basis.shared.component import Component, IS_CLIENT
+from basis.shared.component import Component, IS_CLIENT, scoped
 from basis.shared.js import py_event
 
 if IS_CLIENT:
@@ -31,9 +31,10 @@ class TreeView(Component):
                 ffi.to_js({"detail": {"path": path}, "bubbles": True})
             ))
 
+    @scoped
     def style(self):
         """
-        ui-tree-view {
+        :scope {
             display: block;
             width: 100%;
             user-select: none;
@@ -86,9 +87,10 @@ class TreeNode(Component):
                 ffi.to_js({"detail": {"path": self.path}, "bubbles": True})
             ))
 
+    @scoped
     def style(self):
         """
-        ui-tree-node {
+        :scope {
             display: block;
             width: 100%;
         }

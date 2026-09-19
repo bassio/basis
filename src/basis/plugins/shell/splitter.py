@@ -21,7 +21,7 @@ conditioned on the adjacent component being resizeable, e.g.::
     <shell-stack direction="row">
         <shell-sidebar side="left"></shell-sidebar>
         <shell-splitter if="{left_resizeable}" direction="horizontal"></shell-splitter>
-        <shell-main-container></shell-main-container>
+        <shell-pane></shell-pane>
     </shell-stack>
 
 The drag handlers are client-only (the server just records them). Siblings whose
@@ -33,7 +33,7 @@ affordance, and a phone frame stacks its panes instead of dividing them (see the
 ``workbench`` arrangement in ``basis.plugins.shell.stack``).
 """
 from basis.shared.breakpoints import compact_block
-from basis.shared.component import Component, IS_CLIENT
+from basis.shared.component import Component, IS_CLIENT, scoped
 
 if IS_CLIENT:
     from pyscript import window
@@ -41,7 +41,7 @@ else:
     window = None
 
 _BASE_CSS = """
-shell-splitter {
+:scope {
     display: contents;
 }
 
@@ -142,7 +142,7 @@ class Splitter(Component):
 
         self._dragging = True
         element.setAttribute("data-dragging", "true")
-        # The drag-highlight CSS targets the host (shell-splitter[data-dragging]).
+        # The drag-highlight CSS targets the host (:scope[data-dragging]).
         host.setAttribute("data-dragging", "true")
 
         self._prev_box = self._sizable_box(host.previousElementSibling)
@@ -195,7 +195,10 @@ class Splitter(Component):
         except Exception:
             pass
 
-    style = _BASE_CSS + compact_block(_COMPACT_CSS)
+    @classmethod
+    @scoped
+    def style(cls):
+        return _BASE_CSS + compact_block(_COMPACT_CSS)
 
     def template(self):
         """

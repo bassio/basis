@@ -41,10 +41,20 @@ and the query lives in one place.
 | `NO_HOVER_QUERY` | `(hover: none)` | Degrading a mode that assumed a pointer (e.g. a hover-only scrollbar) |
 | `COARSE_QUERY` | `(pointer: coarse)` | **Sizing**: the primary input is a finger |
 | `TOUCH_TARGET` | `44px` | The fallback value of the `--touch-target` token |
+| `REDUCED_MOTION_QUERY` | `(prefers-reduced-motion: reduce)` | **Motion**: a user who asked for less movement |
 
 `pointer`, not `hover`, answers the sizing question. A touchscreen laptop whose
 primary pointer is a mouse reports `pointer: fine` and keeps its dense controls,
 while its touchscreen still gets touch *events*; a phone is `coarse` throughout.
+
+Motion is a capability like any other: endless or sweeping animation is the case
+`reduced_motion_block(css)` exists for, and a family that animates stops moving under it
+without losing what it means — an indeterminate
+[`ui-progress`](ui-components.md#28-progress-ui-progress) still says "working" when it is
+still, and a [`ui-skeleton`](ui-components.md#29-skeleton-ui-skeleton) is still the shape of
+the content that has not arrived. The viewport and input queries answer *what the device
+is*; this one answers *what the user asked for*, so a component reads it directly rather
+than through a `$device` branch in a template.
 
 The same `HOVER_QUERY` is what `$device.hover` declares, so a component can style
 with CSS and behave in Python from one source:
@@ -199,6 +209,11 @@ button:
 <ui-icon content="⋮" interactive="True" onclick="{open_menu_from_button}"></ui-icon>
 ```
 
+The pointer position stops deciding where the menu is on a phone: with the default
+`arrangement="auto"` it becomes a full-width action sheet on the bottom edge, so the
+coordinates the trigger passes are simply ignored. One call site serves a right-click and
+a `⋮` button alike.
+
 `<ui-command-palette>` has the same shape: it opens on `Cmd/Ctrl+K`, so a phone
 needs an app-supplied control that flips `open`.
 
@@ -236,3 +251,8 @@ ring.
    `var(--touch-target, 44px)`.
 5. Run `pytest tests/test_touch_pointer.py` — it will tell you which of the five
    clauses you missed.
+
+---
+
+*See also [Responsive Layout](responsive-layout.md) — the viewport counterpart of this
+page: how a component rearranges itself, and why a capability query is not a breakpoint.*

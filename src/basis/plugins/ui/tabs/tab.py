@@ -1,4 +1,4 @@
-from basis.shared.component import Component, IS_CLIENT
+from basis.shared.component import Component, IS_CLIENT, scoped
 
 if IS_CLIENT:
     from pyscript import window, ffi
@@ -47,15 +47,16 @@ class Tab(Component):
     def on_dragend(self, event):
         self.__element__.classList.remove("dragging")
 
+    @scoped
     def style(self):
         """
-        ui-tab {
+        :scope {
             display: inline-block;
             position: relative;
             z-index: 1;
         }
 
-        ui-tab:has(.ui-tab-input:checked) {
+        :scope:has(.ui-tab-input:checked) {
             z-index: 10;
         }
 
@@ -68,7 +69,7 @@ class Tab(Component):
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            height: 32px;
+            height: var(--control-height, 2rem);
             padding: 0 14px;
             cursor: pointer;
             position: relative;
@@ -187,7 +188,7 @@ class Tab(Component):
             }
         }
 
-        ui-tab.dragging {
+        :scope.dragging {
             opacity: 0.5;
         }
         """
@@ -219,9 +220,10 @@ class Tab(Component):
 class TabContent(Component):
     __tag__ = "ui-tab-content"
     
+    @scoped
     def style(self):
         """
-        ui-tab-content {
+        :scope {
             display: block;
             width: 100%;
         }

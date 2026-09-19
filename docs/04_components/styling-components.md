@@ -117,13 +117,13 @@ ui-button {                     /* the host element */
 }
 ```
 
-Because a component's `<style>` is injected early and your stylesheet comes later in the document, **equal-specificity** rules in your CSS win by source order.
+because a component's `<style>` is injected early and your stylesheet comes later in the document, **equal-specificity** rules in your CSS win by source order — unless the component's stylesheet is [scoped](#4-encapsulation-with-scoped), which every shipped component's is. A scoped rule beats an unscoped one at equal specificity wherever you put yours, so override it with a **more specific** selector (see [why an override might not stick](#specificity-order-why-an-override-might-not-stick)).
 
 ### Where to put your CSS
 
 - A `<style>` block inside a component template (rendered with that component).
 - A `.css` companion file for a multi-file component (see [Defining Components](defining-components.md)).
-- **`Page.stylesheets`** — set a tuple of stylesheet URLs on your `Page` subclass and Basis links them at the **end of `<body>`**, after the SSR root where component `<style>` elements are injected, so they win the cascade at equal specificity. This is the framework-native override layer (generated apps link `static/app.css` this way; see [The Page Component](page-component.md)).
+- **`Page.stylesheets`** — set a tuple of stylesheet URLs on your `Page` subclass and Basis links them at the **end of `<body>`**, after the SSR root where component `<style>` elements are injected. This is the framework-native override layer (generated apps link `static/app.css` this way; see [The Page Component](page-component.md)). Later is not enough on its own for a scoped component: match or exceed its specificity, or set a [design token](#1-design-tokens-theming-with-css-variables).
 - The page shell — subclass `Page` and append a `<link rel="stylesheet">` or `<style>` to the document tree (see [The Page Component](page-component.md)).
 - Any plain `.css` file you serve alongside your app.
 
@@ -131,9 +131,14 @@ Because a component's `<style>` is injected early and your stylesheet comes late
 
 The usual cascade rules apply, so if a rule isn't winning:
 
-1. **Specificity** — a more specific component rule (e.g. `.ui-btn-primary:hover`) beats a plain `.ui-btn` override. Match or exceed the specificity, or target the same class.
-2. **Source order** — equal-specificity rules resolve by document order; make sure your stylesheet loads after the component's `<style>`.
-3. **`!important`** — the escape hatch when a component rule is locked behind many selectors. Use sparingly; prefer overriding a token instead.
+1. **Scope** — a scoped component rule beats every unscoped rule of the same origin and
+   importance, whatever the source order and whatever the other rule's specificity, because
+   cascade proximity is compared before specificity. Shipped components are scoped, so an
+   equal-specificity override in your stylesheet loses; use a more specific selector
+   (`.ui-btn.ui-btn`, `body .ui-btn`) or scope your own rule.
+2. **Specificity** — a more specific component rule (e.g. `.ui-btn-primary:hover`) beats a plain `.ui-btn` override. Match or exceed the specificity, or target the same class.
+3. **Source order** — equal-specificity rules inside the same scope resolve by document order.
+4. **`!important`** — the escape hatch when a component rule is locked behind many selectors. Importance is compared before proximity, so it beats a scoped rule. Use sparingly; prefer overriding a token instead.
 
 > [!TIP]
 > When in doubt, restyle via a [design token](#1-design-tokens-theming-with-css-variables) rather than fighting a specific selector — tokens are the components' intended customization surface.
@@ -152,7 +157,7 @@ This is the idiomatic way to size, position, or space a component from the outsi
 
 Two things worth knowing:
 
-1. **Host vs. inner content.** If the component's visible box *is* the host (e.g. `ui-card` styles `ui-card { background: var(--bg-secondary) }`), inline styles apply directly. If the visible box is an inner element (e.g. the `<button>` inside `ui-button`), an inline `background-color` colors the wrapper, **not** the inner button. For inner content, use [plain CSS overrides](#2-override-with-plain-css) or a [CSS variable](#1-design-tokens-theming-with-css-variables) — which is why the reliable inline idiom is `style="--token: value"` rather than `style="background-color: ..."`.
+1. **Host vs. inner content.** If the component's visible box *is* the host (e.g. `ui-card` styles `:scope { background: var(--bg-secondary) }`), inline styles apply directly. If the visible box is an inner element (e.g. the `<button>` inside `ui-button`), an inline `background-color` colors the wrapper, **not** the inner button. For inner content, use [plain CSS overrides](#2-override-with-plain-css) or a [CSS variable](#1-design-tokens-theming-with-css-variables) — which is why the reliable inline idiom is `style="--token: value"` rather than `style="background-color: ..."`.
 2. **Inline variables inherit.** Because `--custom-properties` cascade, `style="--accent-color: red"` reliably re-themes a component instance even when the visible box is nested.
 
 ---
@@ -184,6 +189,46 @@ Basis wraps the rules in a CSS `@scope` block, limiting them to the component's 
 > `@scope` is a newer CSS feature, so check browser support if you target older browsers. For maximum compatibility you can scope manually with a descendant selector instead. And even with `@scoped`, rules that reference design tokens (`var(--accent-color, …)`) still inherit from the page, so global theming keeps working.
 
 Use `@scoped` when you author a component that should be self-contained; leave it off (the default) when you *want* consumers to be able to override it with plain CSS.
+
+### The scope root is the tag the stylesheet is resolved *for*
+
+Not the class that wrote it — so a subclass inherits its base's stylesheet under **its own tag**:
+
+```python
+class Sidebar(Component):
+    __tag__ = "shell-sidebar"
+
+    @scoped
+    def style(self):
+        """
+        :scope { display: contents; }
+        .shell-sidebar { flex: 0 0 var(--sidebar-width); }
+        """
+
+class SidebarLeft(Sidebar):
+    __tag__ = "shell-sidebar-left"
+```
+
+`<shell-sidebar-left>` is styled by `@scope (shell-sidebar-left) { … }`, so one rule serves every tag a family ships — no tag list to keep in step with the next alias. `:scope` is the scope root itself (the host), which is how a base class declares a **host rule**: a host left as a real box becomes the flex item, and a width the part declares lands on an element that is not the one being sized.
+
+The wrapper also *limits* what the rules can reach — and this part is silent, so it is worth
+stating plainly:
+
+- **A scoped selector may not name an element outside the scope root.**
+
+  ```css
+  /* matches nothing: .shell-stack is the scope root's parent */
+  .shell-stack > shell-activity-bar > .shell-activity-bar { order: 2; }
+
+  /* :scope is the root, and anchors the ancestor context */
+  .shell-stack > :scope > .shell-activity-bar { order: 2; }
+  ```
+
+  So a rule that has to touch an ancestor, a sibling, or the page root (`html:has(...)`)
+  belongs in an **unscoped** companion block — `@extra_style` without `@scoped` — as
+  `ui-nav`'s page-root pin does.
+- **An `@extra_style` override of a scoped component must be scoped too**, or the main
+  stylesheet wins the proximity comparison and the extra is dead.
 
 ---
 
@@ -315,6 +360,52 @@ Extra blocks are inherited by subclasses and live-updated by HMR, and they flow 
 
 ---
 
+## 8. Responsive styles: the viewport and the box
+
+A component can be compact for two different reasons, and `basis.shared.breakpoints` has one helper for each. Both answer the **same boundary** (`COMPACT_MAX_WIDTH`, 767px), so a component has one idea of "narrow" rather than two.
+
+**The viewport class** — the common case. The device is a phone, whatever the component's own box is:
+
+```python
+from basis.shared.breakpoints import compact_block
+
+_COMPACT_CSS = """
+.ui-tabs {
+    padding: 0 var(--page-gutter, 1.5rem);
+}
+"""
+
+class Tabs(Component):
+    style = _BASE_CSS + compact_block(_COMPACT_CSS)
+```
+
+**The box** — for a component that is asked to fit a *container* instead: a list in a 240px sidebar and the same list in a 1040px pane are two layouts at one viewport.
+
+```python
+from basis.shared.breakpoints import container_block
+
+class TaskList(Component):
+    style = _BASE_CSS + container_block("pane", _NARROW_BOX_CSS)
+```
+
+Two rules decide whether a container query is the right tool:
+
+1. **A component cannot be its own container.** The query resolves against the nearest ancestor that declares one, so the querying component names someone else's box (or names one an app declares). The framework ships no containers of its own.
+2. **The container must have a definite inline size.** `container-type: inline-size` sizes the element as if it were empty, so declaring it on a content-sized box collapses that box to zero width. A set width, a flex basis and a grid track are safe; `width: auto` shrink-to-fit is not:
+
+```css
+.shell-sidebar {                 /* definite: width comes from a prop */
+    container-type: inline-size;
+    container-name: pane;
+}
+```
+
+The two nest when a component wants both — "compact, and only on a phone" is `compact_block(container_block(name, css))`.
+
+Prefer the viewport class. Reach for the box when the answer genuinely depends on the room the component was given, because a container query is invisible to `$device` (`$device.tier` describes the viewport, never a box) and, like every responsive rule here, is CSS-only — it applies on the first paint, with no client work and nothing for hydration to disagree about.
+
+---
+
 ## FAQ
 
 **Why doesn't `style="background-color: red"` change my button's look?**
@@ -323,7 +414,7 @@ Because `style` targets the host `<ui-button>`, while the visible button is the 
 
 **Can I add a global stylesheet to my app?**
 
-Yes — the cleanest way is `Page.stylesheets` (a tuple of URLs Basis links at the end of `<body>`, after the component styles, so they win the cascade). You can also subclass `Page` and append a `<link>` or `<style>` to the document tree, or put your CSS in a `.css` companion file / `<style>` block inside a component template. Generated apps link `static/app.css` via `Page.stylesheets` for exactly this.
+Yes — the cleanest way is `Page.stylesheets` (a tuple of URLs Basis links at the end of `<body>`, after the component styles). You can also subclass `Page` and append a `<link>` or `<style>` to the document tree, or put your CSS in a `.css` companion file / `<style>` block inside a component template. Generated apps link `static/app.css` via `Page.stylesheets` for exactly this. Note that component styles are scoped, so an override needs to be *more specific* than the rule it replaces, not merely later.
 
 **Do the `basis.plugins.ui` components have hard-coded colors?**
 
@@ -339,5 +430,6 @@ Use the `@scoped` decorator for selector-level isolation, or `__shadow__ = True`
 
 - **[Extending & Customizing Components](extending-components.md)** — when CSS isn't enough: new props, new templates, and Python subclassing.
 - **[Built-in UI Suite](ui-components.md)** — the component catalogue and the full `ThemeStore` token reference.
+- **[Responsive Layout](responsive-layout.md)** — the compact scale, `compact_block()` and `container_block()`, and what each family becomes on a phone.
 - **[Defining Components](defining-components.md)** — authoring your own components (single-file & multi-file, reactive state).
 - **[The Page Component](page-component.md)** — customizing the HTML shell and adding global stylesheets.

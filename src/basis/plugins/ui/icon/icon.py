@@ -9,7 +9,7 @@ bools. The click hook (``handle_click``) is a ``@py_event`` behavior seam —
 apps subclass ``Icon`` (or put their own ``onclick`` content inside) to act
 on a click.
 """
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 from basis.shared.js import py_event
 from basis.shared.reactive import computed
 
@@ -42,10 +42,16 @@ class Icon(Component):
         return " ".join(parts)
 
     @computed
-    def style_attr(self):
-        parts = [f"font-size: {self.size};"]
+    def style_vars(self):
+        """Glyph sizing as custom properties, and only as custom properties.
+
+        An inline ``font-size``/``color`` outranks every stylesheet rule, so the glyph
+        could not be restyled by the theme or by a viewport. Keeping the override in a
+        variable instead lets each state rule decide whether it wins.
+        """
+        parts = [f"--icon-size: {self.size};"]
         if self.color:
-            parts.append(f"color: {self.color};")
+            parts.append(f"--icon-color: {self.color};")
         return " ".join(parts)
 
     @py_event
@@ -53,9 +59,10 @@ class Icon(Component):
         """Default no-op; override (by subclassing) to act on a click."""
         pass
 
+    @scoped
     def style(self):
         """
-        ui-icon {
+        :scope {
             display: inline-flex;
         }
 
@@ -63,9 +70,10 @@ class Icon(Component):
             display: inline-flex;
             align-items: center;
             justify-content: center;
+            font-size: var(--icon-size, 1em);
             line-height: 1;
             box-sizing: border-box;
-            color: var(--text-secondary, #9a9ab0);
+            color: var(--icon-color, var(--text-secondary, #9a9ab0));
             user-select: none;
         }
 
@@ -75,12 +83,12 @@ class Icon(Component):
 
         @media (hover: hover) {
             .ui-icon.interactive:hover {
-                color: var(--text-primary, #e0e0e0);
+                color: var(--icon-color, var(--text-primary, #e0e0e0));
             }
         }
 
         .ui-icon.interactive:active {
-            color: var(--text-primary, #e0e0e0);
+            color: var(--icon-color, var(--text-primary, #e0e0e0));
         }
 
         /* A finger needs a real hit area around a glyph. */
@@ -92,11 +100,11 @@ class Icon(Component):
         }
 
         .ui-icon.active {
-            color: var(--accent-color, #007acc);
+            color: var(--icon-color, var(--accent-color, #007acc));
         }
         """
 
     def template(self):
         """
-        <div class="{classes}" title="{title}" data-view="{view}" onclick="{handle_click}" style="{style_attr}">{content}</div>
+        <div class="{classes}" title="{title}" data-view="{view}" onclick="{handle_click}" style="{style_vars}">{content}</div>
         """

@@ -1,4 +1,5 @@
-from basis.shared.component import Component, IS_CLIENT
+from basis.shared.breakpoints import compact_block
+from basis.shared.component import Component, IS_CLIENT, extra_style, scoped
 from basis.shared.reactive import computed
 
 if IS_CLIENT:
@@ -7,16 +8,47 @@ else:
     window = ffi = None
 
 
+def _sheet(selector: str) -> str:
+    """The action-sheet arrangement for *selector* — one body, two callers.
+
+    ``sheet`` asks for it at every viewport; ``auto`` asks for it only at the compact
+    breakpoint, where the bottom edge of the screen is the part a thumb reaches. The
+    pointer stops deciding where the menu is either way: the coordinates are custom
+    properties, so restating the four offsets is enough to outrank them.
+    """
+    return f"""\
+{selector} {{
+    left: 0;
+    right: 0;
+    top: auto;
+    bottom: 0;
+    min-width: 0;
+    max-height: 70dvh;
+    overflow-y: auto;
+    border-radius: var(--radius-lg, 0.5rem) var(--radius-lg, 0.5rem) 0 0;
+    /* The home indicator would otherwise sit over the last item. */
+    padding-bottom: var(--safe-area-bottom, env(safe-area-inset-bottom, 0px));
+}}
+"""
+
+
+_SHEET_CSS = _sheet('.ui-context-menu[data-arrangement="sheet"]')
+_COMPACT_SHEET_CSS = _sheet('.ui-context-menu[data-arrangement="auto"]')
+
+
 class ContextMenu(Component):
     """
     A positionable context menu overlay component.
     
     Attributes:
-        open:  "true" | "" (controls display state)
-        x:     X coordinate in pixels (default: 0)
-        y:     Y coordinate in pixels (default: 0)
-        items: List of dicts representing menu options:
-               [{"label": "Rename", "action": "rename"}, {"type": "separator"}, ...]
+        open:        "true" | "" (controls display state)
+        x:           X coordinate in pixels (default: 0)
+        y:           Y coordinate in pixels (default: 0)
+        items:       List of dicts representing menu options:
+                     [{"label": "Rename", "action": "rename"}, {"type": "separator"}, ...]
+        arrangement: "auto" | "menu" | "sheet" (default: "auto" — a pointer-anchored
+                     menu that becomes a bottom-anchored action sheet at the compact
+                     breakpoint)
     """
     __tag__ = "ui-context-menu"
 
@@ -24,6 +56,7 @@ class ContextMenu(Component):
     x = 0
     y = 0
     items = []
+    arrangement = "auto"
 
     def __init__(self):
         super().__init__()
@@ -37,8 +70,22 @@ class ContextMenu(Component):
             window.addEventListener("click", self._click_proxy)
 
     @computed(dependencies=["x", "y"])
-    def position_style(self):
-        return f"left: {self.x}px; top: {self.y}px;"
+    def position_vars(self):
+        """Anchor coordinates as custom properties, not as declarations.
+
+        An inline ``left``/``top`` outranks every stylesheet rule, so a menu opened
+        near a screen edge could not be pulled back into view.
+        """
+        return f"--ctx-x: {self.x}px; --ctx-y: {self.y}px;"
+
+    # Where the menu sits. An additive block, so an app can restate an arrangement
+    # without copying this stylesheet; ``menu`` needs no rule — the pointer position is
+    # the base component.
+    @classmethod
+    @scoped
+    @extra_style
+    def arrangements(cls):
+        return _SHEET_CSS + compact_block(_COMPACT_SHEET_CSS)
 
     def show(self, x, y):
         self.x = int(x)
@@ -69,14 +116,17 @@ class ContextMenu(Component):
             if not self.__element__.contains(event.target):
                 self.open = ""
 
+    @scoped
     def style(self):
         """
-        ui-context-menu {
+        :scope {
             display: contents;
         }
 
         .ui-context-menu {
             position: fixed;
+            left: var(--ctx-x, 0);
+            top: var(--ctx-y, 0);
             z-index: 3000;
             border: 1px solid var(--border-color, #dee2e6);
             border-radius: var(--radius-md, 0.375rem);
@@ -147,7 +197,7 @@ class ContextMenu(Component):
 
     def template(self):
         """
-        <div class="ui-context-menu {open and 'ui-context-menu-open' or ''}" style="{position_style()}">
+        <div class="ui-context-menu {open and 'ui-context-menu-open' or ''}" style="{position_vars()}" data-arrangement="{arrangement}">
             <div for="item" in="{items}" key="label">
                 <hr class="ui-context-menu-separator" if="{item.get('type') == 'separator'}" />
                 <button 

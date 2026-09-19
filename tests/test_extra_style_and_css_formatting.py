@@ -3,11 +3,16 @@
 ``@extra_style`` lets a subclass add style blocks without copying the parent's
 whole ``style()``; the CSS-aware formatter lets ``style()`` / ``@extra_style``
 use the same pythonic ``{expr}`` fields as ``template()`` while CSS structural
-braces pass through literally.
+braces pass through literally. The module also holds the ``@scoped`` contract that
+keeps a stylesheet valid for every tag a family ships.
 """
 
 from __future__ import annotations
 
+import re
+
+from _catalogue import AUDITED, COMMENT
+from basis.plugins.regions.region import Region
 from basis.shared.component import Component, extra_style, scoped
 from basis.shared.element import Element
 from basis.shared.expr import ALLOWED_BUILTINS, _CSS_FORMATTER, format_css_style
@@ -107,6 +112,86 @@ def test_extra_style_dynamic_fields():
 
     out = C._get_extra_style_strings()[0]
     assert ".x { background: #111; }" in out
+
+
+# ── the @scoped contract across the shipped catalogue ──────────────────────
+
+def _style_owning_families():
+    """Audited classes grouped by the class that owns the stylesheet they use."""
+    families: dict = {}
+    for _name, cls in AUDITED.items():
+        owner = cls
+        while "style" not in owner.__dict__ and len(owner.__mro__) > 1:
+            owner = owner.__mro__[1]
+        families.setdefault(owner, set()).add(cls)
+    return families
+
+
+def test_a_family_that_ships_alias_tags_scopes_its_stylesheet():
+    """``<shell-sidebar-left>`` is a ``Sidebar``; ``<ui-theme-picker>`` is a
+    ``RegistryManager``. Both inherit the base's stylesheet.
+
+    A host rule keyed on the *base* tag leaves an alias's host a real box — the flex item
+    becomes the host — and a rule listing the alias tags by hand has to be kept in step
+    with every new alias. ``@scoped`` wraps the stylesheet in the tag of the class the
+    stylesheet is resolved *for*, so one ``:scope`` rule is correct for the whole family.
+    """
+    aliases = {
+        owner: members
+        for owner, members in _style_owning_families().items()
+        if len({member.__tag__ for member in members}) > 1
+    }
+    assert aliases, "no audited family ships alias tags — this guard has gone stale"
+
+    for owner, members in aliases.items():
+        for cls in (owner, *members):
+            assert f"@scope ({cls.__tag__})" in cls._get_style_string(), (
+                f"{cls.__name__} ships <{cls.__tag__}> but its stylesheet is not scoped "
+                "to that tag"
+            )
+
+
+def _selector_terms(css):
+    """Every selector in *css*, one per comma-separated item (keyframe steps excluded)."""
+    for head in re.findall(r"([^{}]+)\{", css):
+        lines = head.strip().splitlines()
+        if not lines:
+            continue
+        text = lines[-1].strip()
+        if text.startswith("@"):
+            continue
+        for item in (part.strip() for part in text.split(",")):
+            if item and not re.fullmatch(r"(\d+%|from|to)", item):
+                yield item
+
+
+def test_no_stylesheet_names_its_own_tag():
+    """A component addresses its own root as ``:scope``, never by tag.
+
+    A bare tag term fits exactly one tag, and inside a scoped stylesheet it is worse than
+    redundant: a scoped selector may not name an element outside the scope root, so a
+    term that reaches an ancestor (``.shell-stack > shell-activity-bar > …``) makes the
+    whole rule match nothing — silently. ``:scope`` is the root, so one rule covers every
+    tag a family ships (``<shell-sidebar-left>``) and can still carry ancestor context.
+
+    The region primitive is included because it is a component like any other, even
+    though the touch/mobile audits do not walk its package.
+    """
+    candidates = {**AUDITED, "basis.plugins.regions.region.Region": Region}
+
+    offenders = sorted(
+        {
+            cls.__tag__
+            for cls in candidates.values()
+            if any(
+                re.search(
+                    rf"(?<![\w.-]){re.escape(cls.__tag__)}(?![\w-])", term
+                )
+                for term in _selector_terms(COMMENT.sub("", cls._get_style_string() or ""))
+            )
+        }
+    )
+    assert not offenders, f"stylesheets naming their own tag: {offenders}"
 
 
 def test_extra_style_scoped():

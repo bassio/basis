@@ -4,7 +4,7 @@ import math
 import os
 import uuid
 from pathlib import Path
-from basis.shared.component import Component, IS_CLIENT
+from basis.shared.component import Component, IS_CLIENT, scoped
 from basis.shared.reactive import computed
 from basis.shared.actions import server_action
 
@@ -328,10 +328,11 @@ class FileUpload(Component):
 
     # ── Styling & Markup ─────────────────────────────────────────────
 
+    @scoped
     def style(self):
         """
         /* ── Main Container ────────────────────────────────── */
-        ui-file-upload {
+        :scope {
             display: block;
             width: 100%;
         }
@@ -528,6 +529,10 @@ class FileUpload(Component):
             }
         }
 
+        .ui-upload-input {
+            display: none;
+        }
+
         /* ── Progress Indicators ────────────────────────────── */
         .ui-upload-progress-wrapper {
             grid-column: 1 / span 3;
@@ -547,6 +552,7 @@ class FileUpload(Component):
         }
 
         .ui-upload-progress-bar {
+            width: var(--upload-progress, 0%);
             height: 100%;
             background: linear-gradient(90deg, var(--accent-color, #3b82f6) 0%, #8b5cf6 100%);
             border-radius: 2px;
@@ -578,8 +584,7 @@ class FileUpload(Component):
                     {multiple_attr} 
                     accept="{accept}"
                     {disabled_attr}
-                    onchange="{on_change}" 
-                    style="display: none;" />
+                    onchange="{on_change}" />
                     
                 <svg class="ui-upload-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
@@ -613,7 +618,7 @@ class FileUpload(Component):
                     
                     <div class="ui-upload-progress-wrapper" if="{show_progress and f['status'] == 'uploading'}">
                         <div class="ui-upload-progress-bg">
-                            <div class="ui-upload-progress-bar" style="width: {f['progress']}%"></div>
+                            <div class="ui-upload-progress-bar" style="--upload-progress: {f['progress']}%"></div>
                         </div>
                         <span class="ui-upload-progress-pct">{f['progress']}%</span>
                     </div>

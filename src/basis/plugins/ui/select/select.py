@@ -1,5 +1,5 @@
 from basis.shared.reactive import computed
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 
 
 class Select(Component):
@@ -49,9 +49,10 @@ class Select(Component):
     def on_change(self, event):
         self.value = event.target.value
 
+    @scoped
     def style(self):
         """
-        ui-select {
+        :scope {
             display: flex;
             flex-direction: column;
         }

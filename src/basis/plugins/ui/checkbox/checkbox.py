@@ -1,4 +1,4 @@
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 
 
 class Checkbox(Component):
@@ -25,9 +25,10 @@ class Checkbox(Component):
     def on_change(self, event):
         self.checked = "true" if event.target.checked else ""
 
+    @scoped
     def style(self):
         """
-        ui-checkbox {
+        :scope {
             display: inline-flex;
         }
 
@@ -174,9 +175,10 @@ class RadioGroup(Component):
     def on_change(self, event):
         self.value = event.target.value
 
+    @scoped
     def style(self):
         """
-        ui-radio-group {
+        :scope {
             display: flex;
         }
 

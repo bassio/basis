@@ -15,13 +15,13 @@ bottom group on the right, padded clear of the home indicator. Labels, badges an
 active states belong to the mobile component library — this is the rail, rearranged.
 """
 from basis.shared.breakpoints import compact_block
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 
 # Register tags referenced by this template before analysis.
 from basis.plugins.shell.stack import Stack  # noqa: F401
 
 _BASE_CSS = """
-shell-activity-bar {
+:scope {
     display: contents;
 }
 
@@ -72,7 +72,7 @@ _COMPACT_CSS = """
 /* In a workbench frame the rail is the phone's bottom navigation, so it belongs
    after the primary surface. The box that moves is the inner one: the host is
    ``display: contents``, so its contents are the flex items. */
-.shell-stack[data-layout="workbench"] > shell-activity-bar > .shell-activity-bar {
+.shell-stack[data-layout="workbench"] > :scope > .shell-activity-bar {
     order: 2;
 }
 """
@@ -90,7 +90,10 @@ class ActivityBar(Component):
     align = "center"
     border = "right"   # "none" | "right" | "left" | "all"
 
-    style = _BASE_CSS + compact_block(_COMPACT_CSS)
+    @classmethod
+    @scoped
+    def style(cls):
+        return _BASE_CSS + compact_block(_COMPACT_CSS)
 
     def template(self):
         """

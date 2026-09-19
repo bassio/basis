@@ -381,10 +381,8 @@ def test_client_stamping_uses_canonical_paths():
         assert stamped == element_paths(root), name
         # Every SSR hydration marker (binding/component target) is a subset of
         # the client-stamped element paths — one address space.
-        markers = apply_hydration_markers(
-            root, binding_nodes=[root], component_nodes=[root]
-        )
-        assert set(markers) <= element_paths(root), name
+        markers = apply_hydration_markers(root, binding_nodes=[root])
+        assert markers <= element_paths(root), name
 
 
 def test_canonical_paths_are_whitespace_stable():
@@ -453,24 +451,18 @@ def test_stamp_text_ordinals_is_deterministic():
 # Set-based marker stamping
 # ---------------------------------------------------------------------------
 
-def test_apply_hydration_markers_stamps_bindings_and_components():
+def test_apply_hydration_markers_stamps_binding_nodes():
     root = html_to_element(TEMPLATES["indented"])
     spans = [c for c in root.children if isinstance(c, Element)]
 
-    # Every component root carries a SelfBinding, so it is in BOTH sets.
-    report = apply_hydration_markers(
-        root, binding_nodes=[root, *spans], component_nodes=[root]
-    )
+    # Every component root carries a SelfBinding, so a component root is just a
+    # binding node here — one marker, one address space.
+    stamped = apply_hydration_markers(root, binding_nodes=[root, *spans])
 
-    assert root.getAttribute("data-component-hydration-id") == "b:0"
     assert root.getAttribute("data-hydration-id") == "b:0"
     assert spans[0].getAttribute("data-hydration-id") == "b:0:0"
     assert spans[1].getAttribute("data-hydration-id") == "b:0:1"
-    assert report == {
-        "b:0": {"binding": True, "component": True},
-        "b:0:0": {"binding": True, "component": False},
-        "b:0:1": {"binding": True, "component": False},
-    }
+    assert stamped == {"b:0", "b:0:0", "b:0:1"}
 
 
 def test_build_hydration_map_keys_by_stamped_path():
@@ -479,9 +471,7 @@ def test_build_hydration_map_keys_by_stamped_path():
     scanning with querySelector per binding."""
     root = html_to_element(TEMPLATES["indented"])
     spans = [c for c in root.children if isinstance(c, Element)]
-    apply_hydration_markers(
-        root, binding_nodes=[root, *spans], component_nodes=[root]
-    )
+    apply_hydration_markers(root, binding_nodes=[root, *spans])
 
     ssr_map = build_hydration_map(root)
     assert set(ssr_map.keys()) == {"b:0", "b:0:0", "b:0:1"}
@@ -537,7 +527,7 @@ def test_ssr_emits_markers_and_text_ordinals():
     # host is the Page's ChildBinding node → b:0:0), and the root's own element
     # is a stamped component child of the host (b:0:0:0).
     assert 'data-hydration-id="b:0:0"' in resp.text
-    assert 'data-component-hydration-id="b:0:0:0"' in resp.text
+    assert 'data-hydration-id="b:0:0:0"' in resp.text
     # Deterministic text ordinal: {message} is normalized-child #1 of the div
     # (the <span> is #0), so the parent carries data-hydration-text="1".
     assert 'data-hydration-text="1"' in resp.text

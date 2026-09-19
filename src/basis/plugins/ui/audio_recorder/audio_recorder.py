@@ -3,7 +3,7 @@ import base64
 import os
 import uuid
 from pathlib import Path
-from basis.shared.component import Component, IS_CLIENT
+from basis.shared.component import Component, IS_CLIENT, scoped
 from basis.shared.reactive import computed
 from basis.shared.actions import server_action
 
@@ -523,10 +523,11 @@ class AudioRecorder(Component):
 
     # ── Styling & Markup ─────────────────────────────────────────────
 
+    @scoped
     def style(self):
         """
         /* ── Host Widget ────────────────────────────────────── */
-        ui-audio-recorder {
+        :scope {
             display: inline-flex;
             justify-content: center;
         }

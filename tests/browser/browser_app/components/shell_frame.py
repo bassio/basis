@@ -6,7 +6,7 @@ exercises the same markup ``basis init`` produces — the arrangement is expecte
 from the framework's stylesheet alone, with nothing hand-written here.
 """
 from basis.plugins.shell.activity_bar import ActivityBar  # noqa: F401
-from basis.plugins.shell.main_container import MainContainer  # noqa: F401
+from basis.plugins.shell.pane import Pane  # noqa: F401
 from basis.plugins.shell.sidebar import (  # noqa: F401
     SidebarLeft,
     SidebarTrigger,
@@ -56,9 +56,9 @@ class ShellFrame(Component):
                         <div class="panel">Sidebar</div>
                     </shell-sidebar-left>
                     <shell-splitter direction="horizontal"></shell-splitter>
-                    <shell-main-container>
+                    <shell-pane>
                         <span class="main-body">Main</span>
-                    </shell-main-container>
+                    </shell-pane>
                 </shell-stack>
                 <shell-status-bar class="statusbar"><span class="status-item">Ready</span></shell-status-bar>
             </shell-stack>

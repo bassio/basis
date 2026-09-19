@@ -1,13 +1,14 @@
-from basis.shared.component import Component
+from basis.shared.component import Component, scoped
 
 class ScrollArea(Component):
     __tag__ = "ui-scroll-area"
     orientation = "vertical" # vertical, horizontal, both
     visibility = "auto" # auto, always, hover
 
+    @scoped
     def style(self):
         """
-        ui-scroll-area, :host {
+        :scope, :host {
             display: flex;
             flex-direction: column;
             width: 100%;
@@ -37,21 +38,21 @@ class ScrollArea(Component):
         }
 
         /* Viewport Overflow handling */
-        ui-scroll-area[orientation="vertical"] .ui-scroll-area-viewport,
-        ui-scroll-area:not([orientation]) .ui-scroll-area-viewport,
+        :scope[orientation="vertical"] .ui-scroll-area-viewport,
+        :scope:not([orientation]) .ui-scroll-area-viewport,
         :host([orientation="vertical"]) .ui-scroll-area-viewport,
         :host:not([orientation]) .ui-scroll-area-viewport {
             overflow-y: auto;
             overflow-x: hidden;
         }
 
-        ui-scroll-area[orientation="horizontal"] .ui-scroll-area-viewport,
+        :scope[orientation="horizontal"] .ui-scroll-area-viewport,
         :host([orientation="horizontal"]) .ui-scroll-area-viewport {
             overflow-x: auto;
             overflow-y: hidden;
         }
 
-        ui-scroll-area[orientation="both"] .ui-scroll-area-viewport,
+        :scope[orientation="both"] .ui-scroll-area-viewport,
         :host([orientation="both"]) .ui-scroll-area-viewport {
             overflow: auto;
         }
@@ -80,20 +81,20 @@ class ScrollArea(Component):
         }
 
         /* Visibility: hover mode */
-        ui-scroll-area[visibility="hover"],
+        :scope[visibility="hover"],
         :host([visibility="hover"]) {
             --scrollbar-thumb: transparent;
         }
 
         @media (hover: hover) {
-            ui-scroll-area[visibility="hover"]:hover,
+            :scope[visibility="hover"]:hover,
             :host([visibility="hover"]:hover) {
                 --scrollbar-thumb: var(--border-color, #dee2e6);
             }
         }
 
         /* Visibility: always mode */
-        ui-scroll-area[visibility="always"],
+        :scope[visibility="always"],
         :host([visibility="always"]) {
             --scrollbar-thumb: var(--border-color, #dee2e6);
         }
@@ -101,7 +102,7 @@ class ScrollArea(Component):
         /* With no hover to answer with, "hover" would mean "never visible" —
            a finger has no way to summon the scrollbar. */
         @media (hover: none) {
-            ui-scroll-area[visibility="hover"],
+            :scope[visibility="hover"],
             :host([visibility="hover"]) {
                 --scrollbar-thumb: var(--border-color, #dee2e6);
             }

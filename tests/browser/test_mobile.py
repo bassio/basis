@@ -100,3 +100,60 @@ def test_offline_toggle_keeps_client_reactivity_working(
         f"() => document.querySelector('{COUNT_SELECTOR}')?.textContent === 'Count: 1'",
         timeout=15000,
     )
+
+
+# --- the page scale ----------------------------------
+
+#: The catalogue fixture (``/touch``) renders a Button and a Tab, which is enough
+#: to drive the M2.1 scale: one ``:root`` block decides control height, so no
+#: component owns a viewport query to be phone-sized.
+SCALE_URL = "/touch"
+BUTTON_SELECTOR = ".ui-btn"
+TAB_SELECTOR = ".ui-tab-container"
+
+#: Restated on purpose: this lane independently checks the framework's numbers (the
+#: dense desktop control height and the touch floor) rather than importing them.
+DENSE_CONTROL_HEIGHT = 32
+TOUCH_TARGET = 44
+
+
+def _height(page, selector):
+    return page.evaluate(
+        "(sel) => document.querySelector(sel).getBoundingClientRect().height",
+        selector,
+    )
+
+
+def _css_height(page, selector):
+    """The *used* ``height`` value, which excludes a border the box adds on top."""
+    return page.evaluate(
+        "(sel) => getComputedStyle(document.querySelector(sel)).height",
+        selector,
+    )
+
+
+def test_control_height_comes_from_the_page_scale(
+    app_server, page, mobile_context, request
+):
+    """Dense on a desktop, finger-sized on a phone — from one scope, not two rules."""
+    timeout = _timeout_ms(request)
+
+    page.goto(app_server + SCALE_URL, wait_until="domcontentloaded")
+    page.wait_for_selector(BUTTON_SELECTOR, timeout=timeout)
+    _assert_clean(_wait_hydrated(page, timeout))
+
+    phone = mobile_context("iphone").new_page()
+    phone.goto(app_server + SCALE_URL, wait_until="domcontentloaded")
+    phone.wait_for_selector(BUTTON_SELECTOR, timeout=timeout)
+    _assert_clean(_wait_hydrated(phone, timeout))
+
+    # A tab states its height outright, so both ends of the scale are exact — and
+    # the desktop value is the one it had before the scale existed.
+    assert _css_height(page, TAB_SELECTOR) == f"{DENSE_CONTROL_HEIGHT}px"
+    assert _css_height(phone, TAB_SELECTOR) == f"{TOUCH_TARGET}px"
+
+    # A button is padding-sized: the scale is a floor, so the desktop keeps its own
+    # dense height and the phone is lifted to the touch target.
+    desktop_button = _height(page, BUTTON_SELECTOR)
+    assert DENSE_CONTROL_HEIGHT <= desktop_button < TOUCH_TARGET, desktop_button
+    assert _height(phone, BUTTON_SELECTOR) >= TOUCH_TARGET

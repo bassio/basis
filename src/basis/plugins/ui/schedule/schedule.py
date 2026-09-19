@@ -1,5 +1,6 @@
 import json
-from basis.shared.component import Component, IS_CLIENT
+from basis.shared.breakpoints import compact_block
+from basis.shared.component import Component, IS_CLIENT, extra_style, scoped
 from basis.shared.js import py_event
 from basis.shared.reactive import computed
 
@@ -10,6 +11,14 @@ else:
 
 
 MAX_COLUMNS = 6
+
+#: The hour gutter is what a phone cannot afford: at 44px the labels still read and the
+#: time grid gains the ten pixels back from the same rule that owns the desktop value.
+_COMPACT_CSS = """
+.schedule-container {
+    --schedule-gutter: 44px;
+}
+"""
 
 
 class Schedule(Component):
@@ -275,17 +284,21 @@ class Schedule(Component):
 
     # ── Style ────────────────────────────────────────────────────────
 
+    @scoped
     def style(self):
         """
-        ui-schedule {
+        :scope {
             display: block;
             width: 100%;
             font-family: inherit;
             box-sizing: border-box;
         }
 
-        /* ── Container ──────────────────────────────────────── */
+        /* ── Container ─────────────────────────────────────── */
         .schedule-container {
+            /* One value for the hour gutter: the tick labels sit in it and the rows
+               above the grid start after it. */
+            --schedule-gutter: 54px;
             background: var(--bg-secondary, #f8f9fa);
             border: 1px solid var(--border-color, #dcdcdc);
             border-radius: 12px;
@@ -314,7 +327,7 @@ class Schedule(Component):
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 10px 20px 10px 74px;
+            padding: 10px 20px 10px calc(var(--schedule-gutter) + 20px);
             border-bottom: 1px solid var(--border-color, #dcdcdc);
             background: color-mix(in srgb, var(--accent-color, #007acc) 4%, var(--bg-secondary, #f8f9fa));
             min-height: 40px;
@@ -327,8 +340,8 @@ class Schedule(Component):
             text-transform: uppercase;
             letter-spacing: 0.06em;
             flex-shrink: 0;
-            width: 54px;
-            margin-left: -54px;
+            width: var(--schedule-gutter);
+            margin-left: calc(var(--schedule-gutter) * -1);
             text-align: right;
             padding-right: 12px;
         }
@@ -361,7 +374,7 @@ class Schedule(Component):
         .schedule-col-headers {
             display: flex;
             align-items: center;
-            padding: 8px 20px 8px 74px;
+            padding: 8px 20px 8px calc(var(--schedule-gutter) + 20px);
             border-bottom: 1px solid var(--border-color, #dcdcdc);
             background: var(--bg-secondary, #f8f9fa);
             gap: 0;
@@ -394,6 +407,7 @@ class Schedule(Component):
         /* ── Tick Lines ─────────────────────────────────────── */
         .schedule-tick {
             position: absolute;
+            top: var(--tick-top, 0%);
             left: 0;
             right: 0;
             display: flex;
@@ -402,7 +416,7 @@ class Schedule(Component):
             z-index: 1;
         }
         .schedule-tick-label {
-            width: 54px;
+            width: var(--schedule-gutter);
             flex-shrink: 0;
             padding: 0 12px 0 8px;
             text-align: right;
@@ -434,6 +448,8 @@ class Schedule(Component):
         /* ── Entry Cards ────────────────────────────────────── */
         .schedule-entry {
             position: absolute;
+            top: var(--entry-top, 0%);
+            height: var(--entry-height, auto);
             left: 66px;
             right: 14px;
             z-index: 2;
@@ -521,10 +537,10 @@ class Schedule(Component):
             font-weight: 500;
         }
 
-        /* ── Current Time Indicator ─────────────────────────── */
+        /* ── Current Time Indicator ──────────────────────── */
         .schedule-now-line {
             position: absolute;
-            left: 54px;
+            left: var(--schedule-gutter);
             right: 0;
             height: 2px;
             background: #ef4444;
@@ -542,6 +558,14 @@ class Schedule(Component):
             background: #ef4444;
         }
         """
+
+    # Additive, so the base stylesheet above stays the desktop statement and the
+    # phone's narrower gutter is one block a reader can find.
+    @classmethod
+    @scoped
+    @extra_style
+    def compact(cls):
+        return compact_block(_COMPACT_CSS)
 
     # ── Template ─────────────────────────────────────────────────────
     # Column values are pre-computed as c0..c5 to avoid nested for loops.
@@ -576,14 +600,14 @@ class Schedule(Component):
             <div class="schedule-body">
                 <div for="slot" in="{time_slots}" key="label"
                      class="schedule-tick"
-                     style="top: {slot['top_pct']}%">
+                     style="--tick-top: {slot['top_pct']}%">
                     <span class="schedule-tick-label {slot['is_hour'] and 'schedule-tick-label-hour' or ''}">{slot['label']}</span>
                     <div class="schedule-tick-line {slot['is_hour'] and 'schedule-tick-line-hour' or ''}"></div>
                 </div>
 
                 <div for="pe" in="{positioned_entries}" key="idx"
                      class="schedule-entry"
-                     style="top: {pe['top_pct']}%; height: {pe['height_pct']}%"
+                     style="--entry-top: {pe['top_pct']}%; --entry-height: {pe['height_pct']}%"
                      data-entry-idx="{pe['idx']}"
                      onclick="{on_entry_click}">
                     <div class="schedule-entry-card">

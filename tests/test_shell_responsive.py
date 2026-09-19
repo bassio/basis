@@ -26,7 +26,7 @@ from basis.plugins.shell import (  # noqa: F401  (registers every shell custom e
     Footer,
     Header,
     Main,
-    MainContainer,
+    Pane,
     Sidebar,
     SidebarLeft,
     SidebarRight,
@@ -37,7 +37,6 @@ from basis.plugins.shell import (  # noqa: F401  (registers every shell custom e
     StatusBar,
     TabsBar,
     TitleBar,
-    Workspace,
     plugin as shell_plugin,
 )
 from basis.server.app import Basis
@@ -48,6 +47,7 @@ from basis.shared.breakpoints import (
     compact_block,
     compact_media,
     compact_query,
+    container_block,
     medium_media,
     medium_query,
 )
@@ -62,7 +62,6 @@ RESPONSIVE_PARTS = (Stack, TitleBar, StatusBar, ActivityBar, Sidebar, Splitter)
 #: Every part whose template must stay viewport-agnostic.
 FRAME_PARTS = (
     AppShell,
-    Workspace,
     Stack,
     TitleBar,
     StatusBar,
@@ -70,7 +69,6 @@ FRAME_PARTS = (
     Sidebar,
     SidebarLeft,
     SidebarRight,
-    MainContainer,
     TabsBar,
     Splitter,
     Header,
@@ -119,7 +117,7 @@ FRAME = """
             <shell-activity-bar width="56px"></shell-activity-bar>
             <shell-sidebar-left id="sidebarLeft" width="240px"></shell-sidebar-left>
             <shell-splitter direction="horizontal"></shell-splitter>
-            <shell-main-container></shell-main-container>
+            <shell-pane></shell-pane>
         </shell-stack>
         <shell-status-bar height="28px"></shell-status-bar>
     </div>
@@ -154,6 +152,18 @@ def test_compact_block_wraps_css_in_the_contract_query():
     assert wrapped.startswith(f"@media {compact_query()} {{")
     assert ".x { color: red }" in wrapped
     assert wrapped.endswith("}")
+
+
+def test_container_block_asks_the_same_boundary_of_a_box():
+    """One idea of "narrow" per component, whichever scope answers it."""
+    wrapped = container_block("pane", ".x { color: red }")
+
+    assert wrapped.startswith(f"@container pane (max-width: {COMPACT_MAX_WIDTH}px) {{")
+    assert ".x { color: red }" in wrapped
+    assert wrapped.endswith("}")
+    assert f"(max-width: {COMPACT_MAX_WIDTH}px)" in compact_query(), (
+        "the box scope must answer the viewport boundary, not invent a second one"
+    )
 
 
 def test_every_responsive_part_emits_the_contract_query():
@@ -238,23 +248,28 @@ def test_workbench_mode_restacks_the_frame():
     assert "flex-direction: column" in css.split('.shell-stack[data-layout="workbench"]', 1)[1]
 
 
-def test_parts_rank_themselves_inside_a_workbench_frame():
-    """The surface comes first and the rail last; each part owns its rank."""
-    assert (
-        '.shell-stack[data-layout="workbench"] > shell-main-container > .shell-main-container'
-        in MainContainer._get_style_string()
-    )
-    assert "order: 1;" in MainContainer._get_style_string()
+def test_the_rail_ranks_itself_and_a_pane_stays_out_of_the_arrangement():
+    """In a workbench frame the rail is the phone's bottom navigation, so it goes last.
 
+    A pane does not rank itself: it cannot know how many siblings it has, so ranking
+    would make two panes tie. Source order therefore decides, and the rail ranks itself
+    *after* the panes instead.
+
+    The rail's stylesheet is scoped to its own tag, so the rule addresses the host as
+    ``:scope`` — the workbench frame is *outside* the scope, and a scoped selector may not
+    name an element there unless ``:scope`` anchors it.
+    """
     assert (
-        '.shell-stack[data-layout="workbench"] > shell-activity-bar > .shell-activity-bar'
+        '.shell-stack[data-layout="workbench"] > :scope > .shell-activity-bar'
         in ActivityBar._get_style_string()
     )
     assert "order: 2;" in ActivityBar._get_style_string()
 
+    assert "workbench" not in Pane._get_style_string()
 
-def test_the_composed_workspace_declares_the_workbench_arrangement():
-    html = _render(_app_with_shell(), Workspace)
+
+def test_the_composed_frame_declares_the_workbench_arrangement():
+    html = _render(_app_with_shell(), AppShell)
 
     assert 'data-layout="workbench"' in html
 
@@ -293,8 +308,12 @@ def test_no_shell_part_writes_layout_inline():
 def test_title_bar_keeps_a_compact_height_rule():
     css = TitleBar._get_style_string()
 
-    assert "flex: 0 0 var(--shell-titlebar-height, 48px)" in css
-    assert "flex: 0 0 var(--shell-titlebar-mobile-height, 44px)" in css
+    # A bar states height plus full width rather than a flex basis, so the same bar is
+    # correct in a row region (a site header) and a column region (the app frame).
+    assert "flex: 0 0 auto" in css
+    assert "width: 100%" in css
+    assert "height: var(--shell-titlebar-height, 48px)" in css
+    assert "height: var(--shell-titlebar-mobile-height, 44px)" in css
 
 
 def test_activity_bar_becomes_the_bottom_navigation():
@@ -448,3 +467,72 @@ def test_trigger_ignores_targets_that_are_not_components(monkeypatch):
     # A target that is not a Basis component — or no target at all — is a no-op.
     _trigger("#sidebarLeft").toggle_sidebar(None)
     _trigger("").toggle_sidebar(None)
+
+
+# ---------------------------------------------------------------------------
+# The site frame at compact width, and the docked-nav reservation (3.2).
+# ---------------------------------------------------------------------------
+
+def _compact_half(component) -> str:
+    """A component's CSS from its compact block onward."""
+    return component._get_style_string().split(compact_media(), 1)[1]
+
+
+def test_header_insets_its_content_and_takes_an_optional_compact_height():
+    """A phone's nav must not touch the glass; a bar-wrapping header opts out."""
+    compact = _compact_half(Header)
+
+    assert "padding: 0 var(--page-gutter, 1.5rem)" in compact
+    assert "height: var(--shell-header-mobile-height, auto)" in compact
+    assert '.shell-header[data-gutter="none"]' in compact
+
+
+def test_main_takes_the_page_gutter_at_compact():
+    assert "padding: 0 var(--page-gutter, 1.5rem)" in _compact_half(Main)
+
+
+def test_footer_insets_its_content_and_opts_out_the_same_way():
+    compact = _compact_half(Footer)
+
+    assert "padding: 0.75rem var(--page-gutter, 1.5rem)" in compact
+    assert '.shell-footer[data-gutter="none"]' in compact
+
+
+def test_footer_columns_restack_through_the_stack_primitive():
+    """Reuse over new CSS: the stack already carries the compact arrangement."""
+
+    class Root(Component):
+        """
+        <div class="root">
+            <shell-footer><span>©</span></shell-footer>
+        </div>
+        """
+
+    html = _render(_app_with_shell(), Root, "/responsive_footer.py")
+    footer = html.split('class="shell-footer"', 1)[1].split("</shell-footer>", 1)[0]
+    assert 'data-layout="column"' in footer
+
+
+def test_both_frames_reserve_the_space_a_docked_nav_covers():
+    """The nav publishes the height; the frame is the only thing that can reserve it."""
+    reserved = "padding-bottom: var(--shell-bottom-inset, 0px)"
+
+    assert reserved in _compact_half(SiteShell)
+    assert reserved in _compact_half(AppShell)
+
+
+def test_the_app_frame_wraps_its_bars_without_their_chrome():
+    """A region holding a bar takes the opt-outs, so borders and gutters do not double."""
+
+    class Root(Component):
+        """
+        <div class="root"><shell-app></shell-app></div>
+        """
+
+    html = _render(_app_with_shell(), Root, "/responsive_app_chrome.py")
+
+    header = html.split('class="shell-header"', 1)[1].split(">", 1)[0]
+    footer = html.split('class="shell-footer"', 1)[1].split(">", 1)[0]
+    for tag, name in ((header, "header"), (footer, "footer")):
+        assert 'data-gutter="none"' in tag, f"the {name} does not opt out of the gutter"
+        assert 'data-border="none"' in tag, f"the {name} does not drop its own edge"

@@ -53,18 +53,31 @@ A status badge component for labels, counts, and tags.
 
 ## 3. Toggle (`<ui-toggle>`)
 
-An accessible boolean switch toggle control.
+A controlled boolean switch. `value` is the component's state and the owner drives it —
+bind it to a store and handle the bubbling `change` to persist, or the switch and the
+store will disagree on the next render.
 
 ```html
-<ui-toggle label="Enable Notifications" checked="{is_enabled}" onclick="{toggle_setting}"></ui-toggle>
+<!-- an inline switch -->
+<ui-toggle value="{$theme.dark_mode}" first="off" second="on"
+           onchange="{toggle_theme}"></ui-toggle>
+
+<!-- a settings row: the label takes the line's start, the switch its end -->
+<ui-toggle arrangement="row" label="Dark mode" value="{$theme.dark_mode}"
+           first="off" second="on" onchange="{toggle_theme}"></ui-toggle>
 ```
 
 ### Attributes
 
 | Attribute | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `checked` | `"" \| "true"` | `""` | Toggle state. |
-| `label` | `str` | `""` | Text label next to the toggle. |
+| `value` | `str` | `""` | The control's state: `second` means checked, anything else is `first`. |
+| `first` / `second` | `str` | `""` | The values that mean off / on, so `value` can be a real domain value (`"b"`/`"a"`, `"public"`/`"private"`). |
+| `label` | `str` | `""` | The switch's name. The control is a `<label>`, so this text *is* its accessible name. |
+| `arrangement` | `'auto' \| 'row'` | `'auto'` | `auto` — the switch itself, labelled or not. `row` — a full-width settings row (`--row-height` tall, which is finger-sized at compact). |
+
+The control never writes anywhere but its own `value`; persistence is the owner's job
+through the `change` event, exactly as for [`ui-checkbox`](#10-checkbox-ui-checkbox).
 
 ---
 
@@ -82,6 +95,19 @@ Notification toast alerts for ephemeral status updates.
 | :--- | :--- | :--- |
 | `message` | `str` | `""` |
 | `type` | `'info' \| 'success' \| 'warning' \| 'error'` | `'info'` |
+
+### Container (`<ui-toast-container>`)
+
+```html
+<ui-toast-container></ui-toast-container>
+```
+
+| Attribute | Values | Default |
+| :--- | :--- | :--- |
+| `arrangement` | `'auto' \| 'corner' \| 'bottom'` | `'auto'` |
+
+`auto` is a corner stack that spans the bottom edge at the compact breakpoint, padded by
+`--page-gutter` and clear of the home indicator.
 
 ---
 
@@ -102,6 +128,13 @@ A popover command palette component (`Ctrl+K` style) for searching and executing
 ```html
 <ui-command-palette placeholder="Search commands..."></ui-command-palette>
 ```
+
+| Attribute | Values | Default |
+| :--- | :--- | :--- |
+| `arrangement` | `'auto' \| 'dialog' \| 'fullscreen'` | `'auto'` |
+
+`auto` is a drop-down dialog that fills the screen at the compact breakpoint, where it
+would otherwise compete with the on-screen keyboard for the same space.
 
 ---
 
@@ -188,6 +221,10 @@ A premium, responsive monthly calendar with reactive date selection.
 | `current_month` | `int` (1–12) | current month | Month being viewed. |
 | `update` | `str` | `""` | Optional store path (e.g. `"date_store.selected_date"`) written reactively when a date is selected. |
 
+On a phone a date is picked in a sheet, not in a popover: the composition is
+[`ui-input` → `ui-modal[arrangement="sheet"]` → `ui-calendar`](responsive-layout.md#a-touch-date-picker),
+and this calendar is the same calendar on a desktop.
+
 ---
 
 ## 12. Text Input (`<ui-text-input>`)
@@ -195,7 +232,7 @@ A premium, responsive monthly calendar with reactive date selection.
 A labeled text input with optional prefix/suffix icons, helper text, and validation-error styling.
 
 ```html
-<ui-text-input label="Email" type="email" value="{email}" error="{email_error}"
+<ui-text-input label="Email" input_type="email" value="{email}" error="{email_error}"
                placeholder="you@example.com" helper="We never share your email."></ui-text-input>
 ```
 
@@ -206,7 +243,7 @@ A labeled text input with optional prefix/suffix icons, helper text, and validat
 | `label` | `str` | `""` | Label shown above the input. |
 | `placeholder` | `str` | `""` | Placeholder text. |
 | `value` | `str` | `""` | Bound value (two-way). |
-| `type` | `'text' \| 'email' \| 'password' \| 'search' \| 'number'` | `'text'` | HTML input type. |
+| `input_type` | `'text' \| 'email' \| 'password' \| 'search' \| 'number'` | `'text'` | HTML input type. |
 | `prefix_icon` | `str` | `""` | Leading icon (HTML string / emoji). |
 | `suffix_icon` | `str` | `""` | Trailing icon (HTML string / emoji). |
 | `helper` | `str` | `""` | Hint text shown below the input. |
@@ -256,6 +293,7 @@ An accessible dialog/overlay component.
 | `open` | `"" \| "true"` | `""` | Reactive control of the open state. |
 | `title` | `str` | `""` | Optional header title. |
 | `size` | `'sm' \| 'md' \| 'lg' \| 'full'` | `'md'` | Modal size. |
+| `arrangement` | `'auto' \| 'dialog' \| 'sheet' \| 'fullscreen'` | `'auto'` | Where the panel sits. `auto` is a centred dialog that becomes a bottom sheet at the compact breakpoint. |
 | `close_on_backdrop` | `"true" \| ""` | `"true"` | Close when the backdrop is clicked. |
 
 ---
@@ -275,6 +313,7 @@ A positionable context-menu overlay.
 | `open` | `"" \| "true"` | `""` | Display state. |
 | `x` / `y` | `int` | `0` | Menu position in pixels. |
 | `items` | `list[dict]` | `[]` | Menu options — `{"label", "action"}` entries and `{"type": "separator"}` dividers. |
+| `arrangement` | `'auto' \| 'menu' \| 'sheet'` | `'auto'` | Where the menu sits. `auto` is anchored to the pointer on a desktop and to the bottom edge — as an action sheet — at the compact breakpoint, where the edge is the part a thumb reaches. |
 
 ---
 
@@ -344,26 +383,7 @@ A styled scroll container with configurable scrollbar behaviour.
 
 ---
 
-## 19. Sidebar (`<ui-sidebar>`)
-
-A collapsible sidebar container.
-
-```html
-<ui-sidebar side="left" collapsible="offcanvas">
-    <!-- navigation content -->
-</ui-sidebar>
-```
-
-### Attributes
-
-| Attribute | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `side` | `'left' \| 'right'` | `'left'` | Which side the sidebar docks to. |
-| `collapsible` | `'offcanvas' \| 'icon'` | `'offcanvas'` | Collapse behaviour. |
-
----
-
-## 20. Tabs (`<ui-tabs>` / `<ui-tab>`)
+## 19. Tabs (`<ui-tabs>` / `<ui-tab>`)
 
 A tabbed interface with closable tabs, optional add button, and drag reordering.
 
@@ -389,7 +409,7 @@ A tabbed interface with closable tabs, optional add button, and drag reordering.
 
 ---
 
-## 21. Tree View (`<ui-tree-view>`)
+## 20. Tree View (`<ui-tree-view>`)
 
 A recursive file/folder explorer.
 
@@ -435,11 +455,11 @@ theme.set_mode("dark")          # "light" | "dark"
 theme.set_accent("#e63946")     # accent override layered on the theme
 ```
 
-The **installed themes** live on the sibling **`$themes`** catalog store (a `kind`-filtered slice of the shared registry — see [Theme Manager](#23-theme-manager-ui-theme-picker)).
+The **installed themes** live on the sibling **`$themes`** catalog store (a `kind`-filtered slice of the shared registry — see [Theme Manager](#22-theme-manager-ui-theme-picker)).
 
 ---
 
-## 22. Plugin Manager (`<ui-plugin-manager>`)
+## 21. Plugin Manager (`<ui-plugin-manager>`)
 
 A live plugin manager bound to the app's `$plugins` registry store. It lists every registered
 plugin (state, prefix, action count, dependencies) and provides a per-plugin toggle that calls
@@ -458,7 +478,7 @@ hydrated into `#basis-initial-state`), so no wiring is needed.
 
 ---
 
-## 23. Theme Manager (`<ui-theme-picker>`)
+## 22. Theme Manager (`<ui-theme-picker>`)
 
 A live theme manager bound to the `$themes` catalog store. It lists every installed theme
 (name, modes, version, state) and provides an **Apply** button that calls `$theme.set_theme(id)`, plus a
@@ -477,6 +497,263 @@ rendering reactive rows over a `$registry.items` projection (one row chrome, one
 the faces differ only by a `kind` filter and their row action). Themes are `BasisPlugin` subclasses
 with `kind="theme"`, so they never appear in the plugin manager — they are managed separately
 under the `basis theme` CLI instead (see [CLI Tooling](../08_appendix/cli.md)).
+
+---
+
+## 23. Nav (`<ui-nav>`)
+
+One navigation declaration, rearranged by CSS instead of re-declared per viewport. The
+same element is an inline row in a desktop header and a strip pinned to the bottom edge
+on a phone — one DOM, no `if` on the viewport, no second component.
+
+```python
+from basis.plugins.ui.nav import Nav
+
+links = [
+    {"id": "home", "label": "Home", "href": "/"},
+    {"id": "notes", "label": "Notes", "href": "/notes", "icon": "🗒", "badge": "3"},
+]
+```
+
+```html
+<shell-header>
+    <span class="brand">My App</span>
+    <ui-nav items="{links}"></ui-nav>
+</shell-header>
+```
+
+### Attributes
+
+| Attribute | Description |
+| --- | --- |
+| `items` | `[{"id", "label", "icon", "href", "badge"}]`. `id` defaults to `href` and is only needed when the highlighted item must be pinned or the href is not unique. |
+| `arrangement` | `auto` (default) — inline row that docks to the bottom edge at the compact breakpoint. `inline` — never docks. `bottom` — docks at every viewport. `rail` — a column of glyphs, for `shell-activity-bar`. `drawer` — full-width rows, for inside a `shell-sidebar`. |
+| `active` | The `id` of the item to highlight. Leave it empty (the normal case) and the highlight is derived from `$router.current_path`. |
+
+The links are plain `<a href>`, so the nav is crawlable and works with no client at all.
+The active item is **derived, not declared**: the path is stamped during SSR and updated
+on `popstate`, so the right item is already highlighted in the first paint and stays
+right after a client-side navigation.
+
+Sizing comes from the page scale, so the nav owns no viewport query of its own:
+`min-height: var(--control-height, 2rem)` for a row, `var(--row-height, 2rem)` for a
+drawer row, and the docked strip pads itself clear of the home indicator with
+`var(--safe-area-bottom)`.
+
+> **A docked bar covers content — but the frame reserves the space.** The bottom
+> arrangement floats over the page, so the nav publishes the height it takes
+> (`--shell-bottom-inset`) at the document root and [`shell-site` / `shell-app`](shell-components.md)
+> reserve exactly that as padding. Nothing to declare: dock a nav and the page clears it.
+
+---
+
+## 24. List (`<ui-list>` / `<ui-list-item>`)
+
+Rows that read as one list, and the row that fills it. Two components, because that is
+also the seam a windowed renderer needs: rows are ordinary children, so a virtualised list
+can mount and unmount them without any call site changing.
+
+```html
+<ui-list>
+    <ui-list-item arrangement="header">Today</ui-list-item>
+    <ui-list-item label="Groceries" href="/notes/1">
+        <span slot="leading">🗒</span>
+        <span slot="trailing">2m</span>
+    </ui-list-item>
+</ui-list>
+```
+
+### `<ui-list>` attributes
+
+None. The list contributes what a row cannot know on its own: the column, and the
+hairline above every row but the first — decided by the list, because a `for` loop may
+nest the rows it renders.
+
+### `<ui-list-item>` attributes
+
+| Attribute | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `label` | `str` | `""` | The row's text. |
+| `href` | `str` | `""` | Turns the row into a link. The anchor **fills the row's box**, so the whole row is the target a finger hits, while the link's own text stays its accessible name. |
+| `arrangement` | `'row' \| 'header'` | `'row'` | `header` is a section header: sticky to the top of whatever scrolls it, `--control-height` tall. |
+| `selected` | `"" \| "true"` | `""` | Marks the current row. Any truthy spelling works, so a bound `{$store.active}` is fine. |
+
+Slots: `leading`, `trailing`, and the default slot for anything the label does not cover.
+
+**Rows are sized by the page scale, not by the viewport**: `--row-height` (2rem on a
+desktop, 3rem — 48px — on a phone) with the padding inside it, and at compact the row
+carries `--page-gutter` so a list inside a frame with `gutter="none"` is full-bleed with
+its text still on the page's margin.
+
+> **Two ways in, and why.** A loop whose element is a *component* hands it per-item data
+> as **attributes** (that is the framework's contract — see
+> [footgun #2](loop-scope.md)), so `label`/`href` are how a looped row
+> gets its content: `<ui-list-item for="note" in="{notes}" key="id"
+> label="{note['title']}" href="{note['url']}">`. Slots carry a *rich* row for content the
+> label cannot express, and then the loop goes around a plain element:
+> `<div for="note" in="{notes}"><ui-list-item>…slotted content…</ui-list-item></div>`.
+
+A header sticks at `top: 0` of its scroller. A frame with sticky chrome of its own (a
+`shell-header` above a page-level scroll) offsets it with `--list-sticky-top`.
+
+---
+
+## 25. Segmented (`<ui-segmented>`)
+
+One choice out of a handful, laid out as adjacent segments. The items are data, so one
+declaration renders every segment.
+
+```python
+views = [{"id": "list", "label": "List"}, {"id": "grid", "label": "Grid"}]
+```
+
+```html
+<ui-segmented items="{views}" value="{$view}" label="View"
+              onchange="{set_view}"></ui-segmented>
+```
+
+### Attributes
+
+| Attribute | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `items` | `list` | `[]` | `[{"id", "label", "icon", "disabled"}]`, or plain strings (the string is both id and label). |
+| `value` | `str` | `""` | The selected item's id. The control writes back the id the user picks and dispatches a bubbling `change` whose `detail.value` is that id. |
+| `label` | `str` | `""` | The caption above the control, which also names the group. |
+| `disabled` | `"" \| "true"` | `""` | Disables the whole control; a disabled segment reports `aria-disabled`. |
+
+Each segment is a toggle button reporting `aria-pressed`, which is the honest role for
+segments built from data. At compact the control takes the full width and the segments
+share it; a set that does not fit scrolls, snapped, rather than squeezing its labels.
+
+---
+
+## 26. Slider (`<ui-slider>`)
+
+A single value picked out of a continuous range. The control is the native
+`<input type="range">`, so a finger, a mouse and a keyboard already know how to drive it;
+the family adds the theme's look, the filled rail, and a thumb that grows to
+`--touch-target` on a coarse pointer.
+
+```html
+<ui-slider value="{$opacity}" min="0" max="100" step="5" label="Opacity"
+           oninput="{set_opacity}"></ui-slider>
+```
+
+### Attributes
+
+| Attribute | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `value` | `str \| number` | `""` | The current value; clamped into `min`…`max`. The control writes back what it is dragged to and lets the `input`/`change` events bubble. |
+| `min` / `max` / `step` | `str \| number` | `0` / `100` / `1` | The range and its granularity. |
+| `label` | `str` | `""` | The caption, shown with the current value; it also names the control. |
+| `disabled` | `"" \| "true"` | `""` | Disables the control. |
+
+The rail's fill follows the value through `--slider-fill`, so it is a stylesheet's
+business how much of the rail the value colours.
+
+---
+
+## 27. Stepper (`<ui-stepper>`)
+
+A number nudged one increment at a time — the control for a value that is roughly right
+already. Typing is deliberately out of scope: a number a user must enter exactly is a
+[`ui-text-input`](#12-text-input-ui-text-input).
+
+```html
+<ui-stepper value="{$rows}" min="1" max="8" label="Rows"
+            onchange="{set_rows}"></ui-stepper>
+```
+
+### Attributes
+
+| Attribute | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `value` | `str \| number` | `""` | The current value, held inside the bounds. |
+| `min` / `max` | `str \| number` | `""` (unbounded) | The bounds. |
+| `step` | `str \| number` | `1` | How far one press moves. |
+| `label` | `str` | `""` | The row's caption, which also names the button group. |
+| `disabled` | `"" \| "true"` | `""` | Disables both buttons. |
+
+At a bound the nudge is a no-op and the button that produced it reports
+`aria-disabled`, so the two targets never move under the user's finger. A change
+dispatches a bubbling `change` whose `detail.value` is the new number.
+
+---
+
+## 28. Progress (`<ui-progress>`)
+
+How far along a job of known length is — and, with no `value`, an indeterminate sweep
+that says "working" without pretending to know how much is left.
+
+```html
+<ui-progress value="{$done}" total="{$count}" label="Uploading"></ui-progress>
+<ui-progress label="Connecting"></ui-progress>
+```
+
+### Attributes
+
+| Attribute | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `value` | `str \| number` | `""` | How far along, on the `total` scale. Empty means indeterminate. |
+| `total` | `str \| number` | `100` | The scale's end. (Not `max`: a bare `{max}` in a template resolves to the builtin, never to the prop.) |
+| `label` | `str` | `""` | The caption, shown with the percentage; it also names the bar. |
+| `variant` | `'primary' \| 'success' \| 'warning' \| 'danger'` | `'primary'` | The fill's colour. |
+| `size` | `'sm' \| 'md' \| 'lg'` | `'md'` | The track's thickness. |
+
+The fraction travels as `--progress-value`, so a theme can restyle the bar without
+touching Python. An indeterminate bar announces no number at all (no `aria-valuenow`),
+and the sweep stops — without losing its meaning — for a user who asked for less motion.
+
+---
+
+## 29. Skeleton (`<ui-skeleton>`)
+
+The shape of content that is still on its way. A placeholder is only honest when it is
+the *size* of the thing it stands in for, so the geometry is the API.
+
+```html
+<ui-skeleton variant="text" lines="3"></ui-skeleton>
+<ui-skeleton variant="circle" height="2.5rem"></ui-skeleton>
+<ui-skeleton variant="rect" height="8rem"></ui-skeleton>
+```
+
+### Attributes
+
+| Attribute | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `variant` | `'text' \| 'rect' \| 'circle'` | `'text'` | A paragraph, a block, or an avatar. |
+| `lines` | `number` | `1` | How many bars a `text` skeleton has; a multi-line skeleton shortens its last line. |
+| `width` / `height` | `str` | variant default | CSS lengths for the box. |
+
+`ui-progress` and `ui-skeleton` are the two families that own **no viewport query at
+all**: they are the first paint on a slow link, so they have to be right before the
+viewport has been answered — and their geometry does not change with the width.
+
+---
+
+## 30. Fab (`<ui-fab>`)
+
+The one action a screen is offering. Legitimate on a desktop, and the control a phone
+needs most, because the thumb lives at the bottom edge.
+
+```html
+<ui-fab icon="＋" label="New note" onclick="{create_note}"></ui-fab>
+```
+
+### Attributes
+
+| Attribute | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `icon` | `str` | `""` | The glyph (HTML string or emoji). |
+| `label` | `str` | `""` | The accessible name — and the visible text of an extended FAB. |
+| `extended` | `"" \| "true"` | `""` | Shows the label beside the icon, turning the circle into a pill. |
+| `disabled` | `"" \| "true"` | `""` | Disables the button. |
+
+The FAB is fixed to the viewport's inline end, one `--page-gutter` in from the corner,
+and **clears whatever the page has pinned to the bottom edge**: a
+[docked `ui-nav`](#23-nav-ui-nav) publishes the strip's height as `--shell-bottom-inset`
+and the FAB reads it, so the two never collide without either component knowing about the
+other. A click is a plain DOM click, so the owner binds `onclick` as it would on a button.
 
 ---
 

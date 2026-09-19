@@ -1005,6 +1005,32 @@ class LoopBinding(NodeBinding):
             "{" + self.collection + "}", ALLOWED_BUILTINS)
         return fieldnames
 
+    def child_prop_fields(self):
+        """The fields this loop's per-item props read.
+
+        A loop written ON the component element passes its props as attributes, so
+        their dependencies live on the loop element — read from there the same way
+        ``_analyze_node`` reads a plain element's. Loop-variable and ``@derived`` names
+        are filtered out by the owner-effect wiring, which is what consumes this list
+        (``LoopBodyBuilder.wire_child_props``).
+        """
+        cached = getattr(self, "_child_prop_fields", None)
+        if cached is not None:
+            return cached
+        fields = []
+        for attr_name in self.clone.getAttributeNames():
+            if attr_name in ("for", "in", "key", "index") or attr_name == self.item:
+                continue
+            value = self.clone.getAttribute(attr_name)
+            if value is None:
+                continue
+            names, _ = extract_dependencies(value, ALLOWED_BUILTINS)
+            for name in names:
+                if name not in fields:
+                    fields.append(name)
+        self._child_prop_fields = fields
+        return fields
+
     def _collection_value(self):
         """Evaluate the `in=` collection expression (a real expression, not a
         single getattr) against the owner + enclosing loop scopes, so
@@ -1114,13 +1140,16 @@ class LoopBinding(NodeBinding):
             # Custom-element loop child: the registered class owns its template
             # and lifecycle; per-item data flows via props only.
             child_cls = self.component_instance.__class__._registry[tag]
-            child = child_cls.mount(cloned, replace=False, **builder.child_props(item_value))
-            setattr(cloned, "__basis_instance__", child)
-            entry = LoopItem(
-                node=cloned, bindings=[], key=key,
-                scope=LoopScope({self.item: item_value}, parent=self.enclosing_scope),
-                instance=child,
+            scope = LoopScope({self.item: item_value}, parent=self.enclosing_scope)
+            entry = LoopItem(node=cloned, bindings=[], key=key, scope=scope)
+            # The props are a loop-body binding, so their @derived nodes and owner
+            # effects are registered before they are first evaluated.
+            builder.wire_child_props(entry, self.child_prop_fields())
+            child = child_cls.mount(
+                cloned, replace=False, **builder.child_props(item_value, scope)
             )
+            entry.instance = child
+            setattr(cloned, "__basis_instance__", child)
             # Keep a ChildBinding so hydration and get_bindings(recursive=True)
             # still see the child as a component.
             cb = ChildBinding(component_instance=self.component_instance,
@@ -1142,16 +1171,14 @@ class LoopBinding(NodeBinding):
         re-render the plain body or push props to the custom-element child."""
         entry = self.instances[key]
         entry.scope.vars[self.item] = item_value
+        # Item reuse: the deriveds' deps haven't changed, but their input key
+        # has — drop their memos (no cascade) before re-evaluating anything, so
+        # {derived} is computed against the new item value (a plain body
+        # re-renders; a component's props are pushed).
+        entry.invalidate_derived()
         if entry.instance is not None:
-            props = builder.child_props(item_value)
-            with entry.instance.refrain() as refrained:
-                for k, v in props.items():
-                    setattr(refrained, k, v)
+            builder.push_child_props(entry.instance, entry.scope)
         else:
-            # Item reuse: the deriveds' deps haven't changed, but their input
-            # key has — drop their memos (no cascade) before re-rendering so
-            # {derived} re-evaluates against the new item value.
-            entry.invalidate_derived()
             entry.render()
         entry.node.setAttribute("data-item-key", str(key))
         return entry
@@ -1200,14 +1227,21 @@ class LoopBinding(NodeBinding):
         (flattened, recursing into nested loops)."""
         return list(self._plain_body_bindings())
 
-    def component_children(self):
-        """The mounted custom-element children (component roots) at every loop
-        level, so they keep participating in hydration as components."""
-        out = [it.instance for it in self.instances.values() if it.instance is not None]
-        for b in self._plain_body_bindings():
-            if isinstance(b, LoopBinding):
-                out.extend(b.component_children())
-        return out
+    def get_child_bindings(self):
+        """Every ChildBinding this loop's items own, recursing into nested loops.
+
+        A component inside a plain wrapper is a *body binding of its item*, not a
+        binding of the owner, so nothing else reaches it: the walk over an owner's
+        ``__bindings__`` stops at the loop. A loop written ON the component element is
+        deliberately not one of these — ``_create_item`` mounts that child itself and
+        registers its ChildBinding on the owner, where the owner's own walk finds it.
+        """
+        for entry in self.instances.values():
+            for b in entry.bindings:
+                if isinstance(b, LoopBinding):
+                    yield from b.get_child_bindings()
+                elif isinstance(b, ChildBinding) and b.childinstance is not None:
+                    yield b
 
     def repoint_to_ssr(self, ssr_parent, report=None):
         """Structural (canonical-path) re-pointing of a loop to the live SSR

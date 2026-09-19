@@ -4,20 +4,26 @@ Shell plugin tests — slot-based shell primitives + default chrome.
 Covers: plugin registration (name, requires=[], static mount) + VFS serving of
 the shell files; the ``Stack`` primitive (slotted children); the ``Splitter``
 gated by a ``resizeable`` flag (present/absent); each chrome part rendering with
-its props (height/width/border); the ``Workspace`` band (sidebars + splitters +
-main container); and the ``AppShell`` frame with snake_case prop pass-through.
+its props (height/width/border); the band ``AppShell`` composes (sidebars +
+splitters + a pane); and the frame's snake_case prop pass-through.
 
 NOTE: the shell plugin is auto-discovered in the test suite (its entry point is
 registered in the installed dist metadata), but every test includes it explicitly
 anyway — ``include_plugin`` is idempotent by name, so the explicit include makes
 the plugin under test unambiguous regardless of discovery.
 """
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
+from _catalogue import AUDITED, component_css
 from basis.server.app import Basis
 from basis.shared.page import _synthesize_page
 from basis.shared.component import Component
+
+#: The package whose parts this module audits.
+SHELL_MODULE_PREFIX = "basis.plugins.shell."
 
 # Registers every shell custom element + exposes the plugin instance.
 from basis.plugins.shell import (
@@ -28,12 +34,11 @@ from basis.plugins.shell import (
     AppShell,
     TitleBar,
     StatusBar,
-    Workspace,
+    Pane,
     Sidebar,
     SidebarLeft,
     SidebarRight,
     SidebarTrigger,
-    MainContainer,
     TabsBar,
     Header,
     Main,
@@ -92,10 +97,10 @@ def test_plugin_registers_and_serves_serving_mount():
         "basis.plugins.shell.title_bar",
         "basis.plugins.shell.status_bar",
         "basis.plugins.shell.sidebar",
-        "basis.plugins.shell.main_container",
+        "basis.plugins.shell.pane",
         "basis.plugins.shell.tabs_bar",
-        "basis.plugins.shell.workspace",
         "basis.plugins.shell.app_shell",
+        "basis.plugins.shell.regions",
         "basis.plugins.shell.site",
         "basis.plugins.shell.plugin",
     ):
@@ -137,7 +142,7 @@ def test_splitter_renders_between_components_when_resizeable():
             <shell-stack direction="row">
                 <shell-sidebar-left width="240px"></shell-sidebar-left>
                 <shell-splitter if="{flag}" direction="horizontal"></shell-splitter>
-                <shell-main-container></shell-main-container>
+                <shell-pane></shell-pane>
             </shell-stack>
         </div>
         """
@@ -147,7 +152,7 @@ def test_splitter_renders_between_components_when_resizeable():
     assert html.count("<shell-splitter") == 1
     assert "<shell-sidebar-left" in html
     assert 'class="shell-sidebar"' in html
-    assert 'class="shell-main-container"' in html
+    assert 'class="shell-pane"' in html
 
 
 def test_splitter_absent_when_not_resizeable():
@@ -159,7 +164,7 @@ def test_splitter_absent_when_not_resizeable():
             <shell-stack direction="row">
                 <shell-sidebar-left width="240px"></shell-sidebar-left>
                 <shell-splitter if="{flag}" direction="horizontal"></shell-splitter>
-                <shell-main-container></shell-main-container>
+                <shell-pane></shell-pane>
             </shell-stack>
         </div>
         """
@@ -169,7 +174,7 @@ def test_splitter_absent_when_not_resizeable():
     assert "<shell-splitter" not in html
     assert "<shell-sidebar-left" in html
     assert 'class="shell-sidebar"' in html
-    assert 'class="shell-main-container"' in html
+    assert 'class="shell-pane"' in html
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +410,7 @@ def test_parts_render_with_props():
             <shell-status-bar height="30px"></shell-status-bar>
             <shell-sidebar-right width="200px" border="left"></shell-sidebar-right>
             <shell-tabs-bar height="40px"></shell-tabs-bar>
-            <shell-main-container></shell-main-container>
+            <shell-pane></shell-pane>
         </div>
         """
 
@@ -418,41 +423,41 @@ def test_parts_render_with_props():
     assert 'data-border="left"' in html
     assert 'class="shell-tabs-bar"' in html
     assert "--shell-tabsbar-height: 40px" in html
-    assert 'class="shell-main-container"' in html
+    assert 'class="shell-pane"' in html
 
 
 # ---------------------------------------------------------------------------
-# Workspace band + AppShell frame.
+# The app frame and the band inside it.
 # ---------------------------------------------------------------------------
 
-def test_workspace_renders_sidebars_splitters_and_main():
+def test_app_shell_composes_sidebars_splitters_and_a_pane():
     app = _app_with_shell()
 
-    html = _render(app, Workspace, "/test_workspace.py")
-    assert 'class="shell-workspace"' in html
+    html = _render(app, AppShell, "/test_appshell_band.py")
+    assert 'class="shell-main"' in html
     assert 'class="shell-activity-bar"' in html
     assert "<shell-sidebar-left" in html
     assert "<shell-sidebar-right" in html
     assert html.count('class="shell-sidebar"') == 2
     assert 'data-side="left"' in html
     assert 'data-side="right"' in html
-    assert 'class="shell-main-container"' in html
+    assert 'class="shell-pane"' in html
     # Both sidebars resizeable by default → two splitters.
     assert html.count("<shell-splitter") == 2
 
 
-def test_workspace_skips_splitter_when_sidebar_not_resizeable():
+def test_app_shell_skips_a_splitter_when_its_sidebar_is_not_resizeable():
     app = _app_with_shell()
 
     class Root(Component):
         """
         <div class="root">
-            <shell-workspace sidebar_left_resizeable="{flag}"></shell-workspace>
+            <shell-app sidebar_left_resizeable="{flag}"></shell-app>
         </div>
         """
         flag = False
 
-    html = _render(app, Root, "/test_workspace_off.py")
+    html = _render(app, Root, "/test_appshell_off.py")
     assert html.count("<shell-splitter") == 1
     # The sidebar is still present (just not flanked by a splitter).
     assert "<shell-sidebar-left" in html
@@ -473,12 +478,64 @@ def test_app_shell_renders_full_frame_with_prop_pass_through():
     html = _render(app, Root, "/test_appshell.py")
     assert 'class="shell-app"' in html
     assert 'class="shell-title-bar"' in html
-    assert 'class="shell-workspace"' in html
+    assert 'class="shell-main"' in html
     assert 'class="shell-activity-bar"' in html
     assert 'class="shell-status-bar"' in html
-    # snake_case attrs pass through: AppShell → Workspace → Sidebar width.
+    # snake_case attrs pass through: AppShell → the band → Sidebar width.
     assert "--sidebar-expanded: 320px" in html
     assert "--shell-titlebar-height: 64px" in html
+
+    # Both frames read the same way: header → main → footer, with the chrome bars
+    # nested inside the regions rather than standing in for them.
+    assert html.index('class="shell-header"') < html.index('class="shell-title-bar"')
+    assert html.index('class="shell-title-bar"') < html.index('class="shell-main"')
+    assert html.index('class="shell-main"') < html.index('class="shell-pane"')
+    assert html.index('class="shell-pane"') < html.index('class="shell-footer"')
+    assert html.index('class="shell-footer"') < html.index('class="shell-status-bar"')
+
+
+def test_every_shell_part_ships_a_stylesheet():
+    """A ``style`` the framework does not recognise is dropped *silently*.
+
+    ``_style_from_value`` accepts a string, a ``@classmethod`` (called), or a plain
+    method's **docstring** — a method that ``return``s CSS is ignored with no error, so
+    a part would be injected with no CSS at all and only its geometry would notice.
+    """
+    parts = {
+        name: cls for name, cls in AUDITED.items() if name.startswith(SHELL_MODULE_PREFIX)
+    }
+    assert parts, "the catalogue walk found no shell parts"
+
+    for name, cls in sorted(parts.items()):
+        assert cls._get_style_string().strip(), f"{name} would be injected with no CSS"
+
+
+def test_every_shell_host_is_transparent():
+    """A shell part's host is inert — the inner box is the real box.
+
+    Either the stylesheet names its own tag, or it is ``@scoped`` and the host rule is
+    written ``:scope`` (which resolves to whatever tag the class ships under). A host left
+    as a real box becomes the flex item, and then the width the part declares is inert.
+    """
+    missing = []
+    for name, cls in AUDITED.items():
+        if not name.startswith(SHELL_MODULE_PREFIX):
+            continue
+        css = component_css(cls)
+        if f"@scope ({cls.__tag__})" in css:
+            # Scoped: the scope root is the host, so ``:scope`` covers it.
+            if not re.search(r":scope\s*\{[^}]*display:\s*contents", css):
+                missing.append(f"{cls.__tag__} (scoped, but no :scope rule)")
+            continue
+        haystack = css + (cls._get_template_string() or "")
+        # A tag is covered either as the sole selector or as one of a comma list.
+        pattern = (
+            rf"(?:^|,)\s*{re.escape(cls.__tag__)}\s*(?:,|\{{)[^}}]*display:\s*contents"
+        )
+        if not re.search(pattern, haystack, re.M):
+            missing.append(cls.__tag__)
+
+    assert not missing, f"shell hosts that are not transparent: {missing}"
 
 
 def test_app_shell_renders_all_parts_as_components():
@@ -486,13 +543,12 @@ def test_app_shell_renders_all_parts_as_components():
     assert AppShell.__tag__ == "shell-app"
     assert TitleBar.__tag__ == "shell-title-bar"
     assert StatusBar.__tag__ == "shell-status-bar"
-    assert Workspace.__tag__ == "shell-workspace"
     assert ActivityBar.__tag__ == "shell-activity-bar"
     assert Sidebar.__tag__ == "shell-sidebar"
     assert SidebarLeft.__tag__ == "shell-sidebar-left"
     assert SidebarRight.__tag__ == "shell-sidebar-right"
     assert SidebarTrigger.__tag__ == "shell-sidebar-trigger"
-    assert MainContainer.__tag__ == "shell-main-container"
+    assert Pane.__tag__ == "shell-pane"
     assert TabsBar.__tag__ == "shell-tabs-bar"
     assert Header.__tag__ == "shell-header"
     assert Main.__tag__ == "shell-main"
