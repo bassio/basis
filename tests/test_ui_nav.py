@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from basis.server.app import Basis
-from basis.shared.breakpoints import compact_media
+from basis.shared.styling import compact_media
 from basis.shared.component import Component
 from basis.shared.page import _synthesize_page
 from basis.shared.store import Store

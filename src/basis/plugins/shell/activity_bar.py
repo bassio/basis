@@ -14,7 +14,7 @@ icon groups, one row across the bottom edge with the top group on the left and t
 bottom group on the right, padded clear of the home indicator. Labels, badges and
 active states belong to the mobile component library — this is the rail, rearranged.
 """
-from basis.shared.breakpoints import compact_block
+from basis.shared.styling import compact_block
 from basis.shared.component import Component, scoped
 
 # Register tags referenced by this template before analysis.

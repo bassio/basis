@@ -3,7 +3,7 @@
 Two properties make the compact arrangement trustworthy, and each is asserted here:
 
 * **one source.** The ``$device`` tier fields and the shell's ``@media`` rules answer
-  the same query, both derived from ``basis.shared.breakpoints`` — layout reflow and the
+  the same query, both derived from ``basis.shared.styling`` — layout reflow and the
   Python tier cannot drift apart.
 * **no structural branching.** The arrangement is CSS, so the markup a server sends is
   the same at every viewport; only the stylesheet differs. (The browser lane,
@@ -40,7 +40,11 @@ from basis.plugins.shell import (  # noqa: F401  (registers every shell custom e
     plugin as shell_plugin,
 )
 from basis.server.app import Basis
-from basis.shared.breakpoints import (
+from basis.shared.component import Component
+from basis.shared.device import DeviceStore
+from basis.shared.page import _synthesize_page
+from basis.shared.store import Store
+from basis.shared.styling import (
     COMPACT_MAX_WIDTH,
     MEDIUM_MAX_WIDTH,
     TIERS,
@@ -51,10 +55,6 @@ from basis.shared.breakpoints import (
     medium_media,
     medium_query,
 )
-from basis.shared.component import Component
-from basis.shared.device import DeviceStore
-from basis.shared.page import _synthesize_page
-from basis.shared.store import Store
 
 #: Every part that owns optional compact CSS.
 RESPONSIVE_PARTS = (Stack, TitleBar, StatusBar, ActivityBar, Sidebar, Splitter)

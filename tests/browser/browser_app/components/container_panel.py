@@ -20,7 +20,7 @@ it from a colour.
 from basis.plugins.shell.pane import Pane  # noqa: F401
 from basis.plugins.shell.sidebar import SidebarLeft  # noqa: F401
 from basis.plugins.shell.stack import Stack  # noqa: F401
-from basis.shared.breakpoints import compact_block, container_block
+from basis.shared.styling import compact_block, container_block
 from basis.shared.component import Component
 
 _BASE_CSS = """

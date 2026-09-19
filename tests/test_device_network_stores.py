@@ -10,12 +10,11 @@ import json
 import pytest
 
 from basis.shared import store as store_module
-from basis.shared.breakpoints import compact_query, medium_query
 from basis.shared.device import DeviceStore, ensure_device_store
 from basis.shared.media import MediaQuery
 from basis.shared.network import NetworkStore, ensure_network_store
-from basis.shared.pointer import HOVER_QUERY
 from basis.shared.store import FRAMEWORK_STORE_NAMES, Store
+from basis.shared.styling import HOVER_QUERY, compact_query, medium_query
 
 DEVICE_NEUTRALS = {
     "width": 0,

@@ -10,7 +10,7 @@ Prop values travel as CSS custom properties and *this* class's stylesheet does t
 declaring, so the compact breakpoint can restate any of it: the prop stays the single
 source of truth and a media query still gets to override the result.
 """
-from basis.shared.breakpoints import compact_block
+from basis.shared.styling import compact_block
 from basis.shared.component import Component, scoped
 
 _BASE_CSS = """
@@ -33,7 +33,7 @@ _BASE_CSS = """
 }
 """
 
-# What a stack becomes at the compact breakpoint (see ``basis.shared.breakpoints``).
+# What a stack becomes at the compact breakpoint (see ``basis.shared.styling``).
 # ``column`` restacks an authored row on one axis. ``workbench`` restacks it *and*
 # names the arrangement the chrome parts key their own compact rules on (the primary
 # surface first, the rail last as the phone's bottom navigation) — which is what makes

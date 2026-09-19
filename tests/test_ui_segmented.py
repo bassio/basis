@@ -10,10 +10,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from basis.server.app import Basis
-from basis.shared.breakpoints import compact_media
 from basis.shared.component import Component
 from basis.shared.page import _synthesize_page
-from basis.shared.pointer import COARSE_QUERY
+from basis.shared.styling import COARSE_QUERY, compact_media
 
 import basis.plugins.ui.segmented.segmented  # noqa: F401
 from basis.plugins.ui.segmented import Segmented

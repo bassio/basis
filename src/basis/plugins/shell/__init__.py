@@ -22,7 +22,7 @@ Site (document-flow) layout:
 
 Responsive:
 - Every part sizes itself through CSS custom properties and moves its compact
-  behaviour into a ``@media`` block built from ``basis.shared.breakpoints``, so the
+  behaviour into a ``@media`` block built from ``basis.shared.styling``, so the
   frame rearranges for a phone in CSS alone — the markup is the same at any viewport
   (hydration-safe). ``<shell-stack layout="workbench">`` names the arrangement (the
   surface first, the rail as bottom navigation, sidebars as overlay drawers);

@@ -3,7 +3,7 @@
 Sizing (``height``) is a prop, and at the compact breakpoint the bar becomes the
 phone's shorter top app bar (``mobile_height``).
 """
-from basis.shared.breakpoints import compact_block
+from basis.shared.styling import compact_block
 from basis.shared.component import Component, scoped
 
 _BASE_CSS = """

@@ -362,12 +362,12 @@ Extra blocks are inherited by subclasses and live-updated by HMR, and they flow 
 
 ## 8. Responsive styles: the viewport and the box
 
-A component can be compact for two different reasons, and `basis.shared.breakpoints` has one helper for each. Both answer the **same boundary** (`COMPACT_MAX_WIDTH`, 767px), so a component has one idea of "narrow" rather than two.
+A component can be compact for two different reasons, and `basis.shared.styling` has one helper for each. Both answer the **same boundary** (`COMPACT_MAX_WIDTH`, 767px), so a component has one idea of "narrow" rather than two.
 
 **The viewport class** — the common case. The device is a phone, whatever the component's own box is:
 
 ```python
-from basis.shared.breakpoints import compact_block
+from basis.shared.styling import compact_block
 
 _COMPACT_CSS = """
 .ui-tabs {
@@ -382,7 +382,7 @@ class Tabs(Component):
 **The box** — for a component that is asked to fit a *container* instead: a list in a 240px sidebar and the same list in a 1040px pane are two layouts at one viewport.
 
 ```python
-from basis.shared.breakpoints import container_block
+from basis.shared.styling import container_block
 
 class TaskList(Component):
     style = _BASE_CSS + container_block("pane", _NARROW_BOX_CSS)

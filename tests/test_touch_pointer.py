@@ -7,7 +7,7 @@ catalogue, checked against each component's own CSS so they cannot rot:
 
 1. every hover rule sits inside an ``@media (hover: hover)`` guard;
 2. every component that suppresses the UA focus ring draws one of its own;
-3. capability queries are the shared constants (``basis.shared.pointer``), not
+3. capability queries are the shared constants (``basis.shared.styling``), not
    one-off literals;
 4. coarse-pointer sizing goes through the ``--touch-target`` theme token.
 """
@@ -22,7 +22,7 @@ from _catalogue import (
 )
 from basis.plugins.theme.default import DEFAULT_TOKENS
 from basis.plugins.theme.schema import TOKEN_SLOTS, css_var
-from basis.shared.pointer import (
+from basis.shared.styling import (
     COARSE_QUERY,
     HOVER_QUERY,
     NO_HOVER_QUERY,

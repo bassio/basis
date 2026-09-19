@@ -10,7 +10,7 @@ Like ``ui-progress`` this family owns no viewport query: it is what the user see
 its geometry does not change with the viewport.
 """
 from basis.shared.component import Component, scoped
-from basis.shared.pointer import reduced_motion_block
+from basis.shared.styling import reduced_motion_block
 from basis.shared.reactive import computed
 
 _BASE_CSS = """

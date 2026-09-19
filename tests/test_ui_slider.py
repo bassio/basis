@@ -15,7 +15,7 @@ from basis.shared.page import _synthesize_page
 
 import basis.plugins.ui.slider.slider  # noqa: F401
 from basis.plugins.ui.slider import Slider
-from basis.shared.pointer import COARSE_QUERY, HOVER_QUERY
+from basis.shared.styling import COARSE_QUERY, HOVER_QUERY
 
 _STYLE = re.compile(r"<style.*?</style>", re.DOTALL)
 

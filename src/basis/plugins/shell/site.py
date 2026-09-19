@@ -5,7 +5,7 @@ the page scrolls as usual and ``Main`` grows so the footer sits at the bottom. T
 fixed-viewport counterpart is ``AppShell``, which stacks a workspace between the same
 two regions.
 """
-from basis.shared.breakpoints import compact_block
+from basis.shared.styling import compact_block
 from basis.shared.component import Component, scoped
 
 # Register tags referenced by these templates before analysis.

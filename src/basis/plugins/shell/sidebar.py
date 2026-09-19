@@ -18,7 +18,7 @@ Both are ordinary props, so a store or a template binding can drive them. The
 ``SidebarTrigger`` (``<shell-sidebar-trigger target="#id">``) flips whichever one the
 current viewport tier uses.
 """
-from basis.shared.breakpoints import compact_block
+from basis.shared.styling import compact_block
 from basis.shared.component import Component, IS_CLIENT, scoped
 from basis.shared.js import py_event
 from basis.shared.reactive import computed

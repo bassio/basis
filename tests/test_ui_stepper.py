@@ -15,7 +15,7 @@ from basis.shared.page import _synthesize_page
 
 import basis.plugins.ui.stepper.stepper  # noqa: F401
 from basis.plugins.ui.stepper import Stepper
-from basis.shared.pointer import COARSE_QUERY
+from basis.shared.styling import COARSE_QUERY
 
 _STYLE = re.compile(r"<style.*?</style>", re.DOTALL)
 

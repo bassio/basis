@@ -130,7 +130,7 @@ it may not write geometry into markup.
 - **Use the framework's queries.** Import the helpers rather than typing a width:
 
     ```python
-    from basis.shared.breakpoints import compact_media, compact_block
+    from basis.shared.styling import compact_media, compact_block
 
     # a page/component stylesheet
     return _BASE_CSS + compact_block(_COMPACT_CSS)
@@ -158,7 +158,7 @@ it may not write geometry into markup.
     .shell-sidebar { container-type: inline-size; container-name: pane; }
     ```
     ```python
-    from basis.shared.breakpoints import container_block
+    from basis.shared.styling import container_block
     return container_block("pane", _NARROW_CSS)
     ```
 

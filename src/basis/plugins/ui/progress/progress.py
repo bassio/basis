@@ -15,7 +15,7 @@ not change with the viewport anyway.
 """
 from basis.plugins.ui.numbers import number
 from basis.shared.component import Component, scoped
-from basis.shared.pointer import reduced_motion_block
+from basis.shared.styling import reduced_motion_block
 from basis.shared.reactive import computed
 
 _BASE_CSS = """

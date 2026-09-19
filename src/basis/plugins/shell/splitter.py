@@ -32,7 +32,7 @@ At the compact breakpoint the divider is dropped: a 4px drag target is not a tou
 affordance, and a phone frame stacks its panes instead of dividing them (see the
 ``workbench`` arrangement in ``basis.plugins.shell.stack``).
 """
-from basis.shared.breakpoints import compact_block
+from basis.shared.styling import compact_block
 from basis.shared.component import Component, IS_CLIENT, scoped
 
 if IS_CLIENT:

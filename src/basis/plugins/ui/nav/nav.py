@@ -15,7 +15,7 @@ rather than declared, so it stays correct after a client-side navigation too.
 at the compact breakpoint. A docked bar floats over the content it covers, so it
 publishes the space it takes (``--shell-bottom-inset``) for the frame to reserve.
 """
-from basis.shared.breakpoints import compact_block
+from basis.shared.styling import compact_block
 from basis.shared.component import Component, extra_style, scoped
 from basis.shared.reactive import computed
 

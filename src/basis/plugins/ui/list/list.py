@@ -22,7 +22,7 @@ row with ``arrangement="header"`` — one declaration, sticky at every viewport,
 a header's job does not change with the width even though a phone is where it earns its
 keep.
 """
-from basis.shared.breakpoints import compact_block
+from basis.shared.styling import compact_block
 from basis.shared.component import Component, scoped
 from basis.shared.reactive import computed
 

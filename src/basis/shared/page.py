@@ -1,4 +1,4 @@
-from basis.shared.breakpoints import compact_block
+from basis.shared.styling import compact_block
 from basis.shared.component import Component, IS_CLIENT
 from basis.shared.element import Element, DocumentType
 from basis.shared.store import Store

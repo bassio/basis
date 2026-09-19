@@ -167,12 +167,12 @@ after mount, and the DAG re-renders whatever read them. Use the tier for **behav
 CSS, because a structural difference keyed on the tier would only appear after the
 browser answered.
 
-The boundaries live in one place, `basis.shared.breakpoints`, and the same constants also
+The boundaries live in one place, `basis.shared.styling`, and the same constants also
 produce the `@media` text the shell's stylesheets use — so a layout rule and the tier
 field can never disagree:
 
 ```python
-from basis.shared.breakpoints import compact_block, compact_query
+from basis.shared.styling import compact_block, compact_query
 
 COMPACT_MAX_WIDTH  # 767
 compact_query()    # "(max-width: 767px)"  — the query $device.compact declares

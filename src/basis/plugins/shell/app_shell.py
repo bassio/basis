@@ -8,7 +8,7 @@ The workspace knobs are passed through as snake_case props so the frame can be t
 from one place, and apps put their own chrome contributions directly into each part's
 ``<slot>`` (there is no region indirection layer).
 """
-from basis.shared.breakpoints import compact_block
+from basis.shared.styling import compact_block
 from basis.shared.component import Component, scoped
 
 # Register the tags referenced by this template before analysis.

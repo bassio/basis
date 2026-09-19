@@ -1,4 +1,4 @@
-from basis.shared.breakpoints import compact_block
+from basis.shared.styling import compact_block
 from basis.shared.component import Component, IS_CLIENT, extra_style, scoped
 
 if IS_CLIENT:

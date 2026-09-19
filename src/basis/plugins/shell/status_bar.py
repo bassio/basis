@@ -5,7 +5,7 @@ status strip beside the bottom navigation, and silently stacking two bottom bars
 as a bug. An app that wants it back asks for the slim variant with ``mobile="slim"``.
 Because a region sizes to its content, hiding the bar collapses the footer with it.
 """
-from basis.shared.breakpoints import compact_block
+from basis.shared.styling import compact_block
 from basis.shared.component import Component, scoped
 
 _BASE_CSS = """

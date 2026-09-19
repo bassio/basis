@@ -55,6 +55,7 @@ else:
 
 
 from basis.shared.base_component import include_store, include_model
+from basis.shared.styling import scoped, extra_style
 
 
 # While the client stages a Page for whole-document SSR hydration
@@ -83,40 +84,6 @@ def client(func):
         if IS_CLIENT:
             return func(*args, **kwargs)
     return wrapper
-
-
-def scoped(func):
-    """
-    Decorator to mark a component's style method to be encapsulated
-    within a CSS @scope (...) { ... } block.
-    """
-    func.__scoped__ = True
-    return func
-
-
-def extra_style(func):
-    """
-    Decorator marking a method as an *additional* (additive) style block.
-
-    Unlike ``style()`` — which a subclass overrides to REPLACE the inherited
-    stylesheet — an ``@extra_style`` block is injected as its own ``<style>``
-    element *after* the component's main stylesheet, so a subclass can restyle
-    a parent component without copying the parent's whole ``style()``::
-
-        class MyTitleBar(TitleBar):
-            @extra_style
-            def tweaks(self):
-                \"\"\"
-                shell-title-bar { background: var(--accent-color); }
-                \"\"\"
-
-    The same conventions as ``style()`` apply (docstring, classmethod, or a
-    plain string), it supports ``{expr}`` dynamic fields (see the styling
-    guide), and it may be combined with ``@scoped`` to keep the block
-    encapsulated.
-    """
-    func.__extra_style__ = True
-    return func
 
 
 __all__ = ['Component', 'IS_CLIENT', 'IS_SERVER', 'Basis', 'client', 'include_store', 'include_model', 'scoped', 'extra_style']

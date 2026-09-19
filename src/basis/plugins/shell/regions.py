@@ -15,7 +15,7 @@ The regions are token-only skeletons: an app fills their ``<slot>``s (a title ba
 links, hero sections, footer columns) and owns the look. A region that nests a *bar*
 passes ``border="none"``, because the bar draws the strip's own edge.
 """
-from basis.shared.breakpoints import compact_block
+from basis.shared.styling import compact_block
 from basis.shared.component import Component, scoped
 
 # Register tags referenced by these templates before analysis.

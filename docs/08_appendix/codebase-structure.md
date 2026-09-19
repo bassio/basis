@@ -48,8 +48,7 @@ src/basis/
     ├── store_provider.py # StoreProvider / ModelStoreProvider (SSR hydration guards)
     ├── router.py         # RouterStore, Route (<basis-route>), Link (<basis-link>)
     ├── media.py          # media() — named CSS media queries as reactive store fields
-    ├── breakpoints.py    # The viewport breakpoint contract (tier constants + query / @media forms)
-    ├── pointer.py        # The input-capability contract (hover / pointer queries + touch target)
+    ├── styling.py        # The stylesheet contract: viewport + capability queries, @media/@container blocks, style markers
     ├── device.py         # $device context store (viewport, tier, pointer, hover, reduced motion)
     ├── network.py        # $network context store (online, effective type, save-data)
     ├── page.py           # Page shell component
@@ -59,7 +58,7 @@ src/basis/
     ├── context.py        # ContextVarProxyDict + base_url / db_session context vars
     ├── hmr.py            # Client HMR (WebSocket + hot-swap)
     ├── basis_await.py    # <basis-await> loading / error / content wrapper
-    ├── component.py      # Public Component / Basis entry point + py_event / scoped decorators
+    ├── component.py      # Public Component / Basis entry point
     ├── actions.py        # @server_action decorator + _action_registry
     └── plugin.py         # Isomorphic BasisPlugin selection (client vs server)
 ```

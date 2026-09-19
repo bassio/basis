@@ -31,7 +31,7 @@ HOVER_QUERY = "(hover: hover)"
 COARSE_QUERY = "(pointer: coarse)"
 
 #: The touch floor, restated here on purpose: this lane independently checks the
-#: framework's number rather than reading it out of ``basis.shared.pointer``.
+#: framework's number rather than reading it out of ``basis.shared.styling``.
 TOUCH_TARGET = 44
 
 

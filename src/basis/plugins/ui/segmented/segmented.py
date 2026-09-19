@@ -10,7 +10,7 @@ the honest role here: the segments live in one shadow root built from data, so a
 cannot be expressed per item. The pressed state is derived from ``value``, so the
 control is driven from outside by the same prop it writes back.
 """
-from basis.shared.breakpoints import compact_block
+from basis.shared.styling import compact_block
 from basis.shared.component import IS_CLIENT, Component, scoped
 from basis.shared.reactive import computed
 

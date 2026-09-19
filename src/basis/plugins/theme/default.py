@@ -6,7 +6,7 @@ the default that a fresh ``basis init`` app renders.
 """
 
 from basis.plugins.theme.schema import ThemeDefinition, ThemeTokens
-from basis.shared.pointer import TOUCH_TARGET
+from basis.shared.styling import TOUCH_TARGET
 
 
 DEFAULT_TOKENS = ThemeTokens(

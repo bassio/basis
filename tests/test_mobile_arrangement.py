@@ -8,7 +8,7 @@ the component's own template and stylesheet rather than left to review:
 1. an inline ``style`` carries custom-property declarations only — a literal
    ``width``/``top`` in the markup cannot be reached by a media query, so it silently
    pins desktop geometry onto a phone;
-2. viewport queries come from ``basis.shared.breakpoints``, never a hand-written
+2. viewport queries come from ``basis.shared.styling``, never a hand-written
    width, because the same constant has to answer ``matchMedia`` for ``$device.tier``;
 3. templates never branch on ``$device`` — the server has no viewport, so any such
    branch renders the wrong tree and disagrees with the client on hydration;
@@ -32,9 +32,13 @@ from _catalogue import (
     media_queries,
     strip_guarded_blocks,
 )
-from basis.shared.breakpoints import compact_query, medium_query
 from basis.shared.page import _VIEWPORT_BASE_CSS
-from basis.shared.pointer import POINTER_QUERIES, PREFERENCE_QUERIES
+from basis.shared.styling import (
+    POINTER_QUERIES,
+    PREFERENCE_QUERIES,
+    compact_query,
+    medium_query,
+)
 
 #: Queries that answer a *capability* rather than a viewport: allowed anywhere, because
 #: they say nothing about the size the CSS believes it is rendering at.
@@ -87,7 +91,7 @@ def test_viewport_queries_come_from_the_shared_contract(name):
             continue
         assert query in viewport_queries, (
             f"{name} uses '@media {query}'. Viewport queries must come from "
-            "basis.shared.breakpoints so the stylesheet and $device.tier agree."
+            "basis.shared.styling so the stylesheet and $device.tier agree."
         )
 
 

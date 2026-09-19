@@ -32,8 +32,8 @@ and the query lives in one place.
 
 ## 2. The queries
 
-`basis.shared.pointer` holds the input-capability queries, the counterpart of
-`basis.shared.breakpoints` (which holds the viewport ones):
+`basis.shared.styling` holds the input-capability queries next to the viewport ones
+(`compact_query()` and friends), so a component imports one module to write either:
 
 | Constant | Query | Use it for |
 | :--- | :--- | :--- |

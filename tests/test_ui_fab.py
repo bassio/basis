@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from basis.server.app import Basis
 from basis.shared.component import Component
 from basis.shared.page import _synthesize_page
-from basis.shared.pointer import COARSE_QUERY
+from basis.shared.styling import COARSE_QUERY
 
 import basis.plugins.ui.fab.fab  # noqa: F401
 from basis.plugins.ui.fab import Fab

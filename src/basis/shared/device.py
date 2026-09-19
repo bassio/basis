@@ -40,17 +40,21 @@ Viewport tier
 -------------
 ``tier`` is the viewport class: ``"compact"`` (≤ 767px), ``"medium"`` (768–1023px) or
 ``"regular"`` (≥ 1024px), derived from the two declared width queries below (see
-``basis.shared.breakpoints`` for the boundaries and the matching CSS form). Use it for
+``basis.shared.styling`` for the boundaries and the matching CSS form). Use it for
 *behaviour* — chunk a list, swap a control, choose which state a control toggles — and
 leave *layout* to CSS: the server ships the neutral tier, so a structural difference
 would only appear after the browser answered.
 """
 
-from basis.shared.breakpoints import compact_query, medium_query
 from basis.shared.media import media
-from basis.shared.pointer import HOVER_QUERY, REDUCED_MOTION_QUERY
 from basis.shared.reactive import computed
 from basis.shared.store import Store, ensure_store
+from basis.shared.styling import (
+    HOVER_QUERY,
+    REDUCED_MOTION_QUERY,
+    compact_query,
+    medium_query,
+)
 
 
 def ensure_device_store() -> "DeviceStore":
@@ -80,7 +84,7 @@ class DeviceStore(Store):
     reduced_motion = media(REDUCED_MOTION_QUERY)
 
     # The viewport tier's boundaries, declared the same way (see
-    # ``basis.shared.breakpoints``). ``regular`` is the remainder, so it needs no third
+    # ``basis.shared.styling``). ``regular`` is the remainder, so it needs no third
     # query. Neutral ``False`` = the desktop-safe baseline the server ships.
     compact = media(compact_query())
     medium = media(medium_query())

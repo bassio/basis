@@ -16,7 +16,7 @@ from basis.shared.page import _synthesize_page
 
 import basis.plugins.ui.progress.progress  # noqa: F401
 from basis.plugins.ui.progress import Progress
-from basis.shared.pointer import reduced_motion_block
+from basis.shared.styling import reduced_motion_block
 
 _STYLE = re.compile(r"<style.*?</style>", re.DOTALL)
 
