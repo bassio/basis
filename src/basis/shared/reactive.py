@@ -493,10 +493,15 @@ def batch() -> ReactiveBatch:
 # ──────────────────────────────────────────────
 
 class ReactiveScope:
-    """Owns the effects/computeds/subscriptions created inside a dynamic region
-    of a component tree (a loop item, a region contribution, a mounted child, a
-    subscription, a component instance) so they are torn down together with one
-    ``destroy()`` call.
+    """Owns the DAG resources created inside a dynamic region of a component tree (a
+    loop item, a region contribution, a mounted child, a component instance) so they are
+    torn down together with one ``destroy()`` call.
+
+    "Subscriptions" here means the ``$store.field`` / ``#id.attr`` edge that
+    ``add_subscription`` records — a real effect on the *target's* graph. A browser event
+    subscription (``basis.shared.events.Subscription``) is not one of these: it has no
+    ``update()``, its release is an idempotent ``dispose()``, and it is released by the
+    owner that made it.
 
     Nodes still live on their owner's per-object ``DependencyGraph``; the scope
     merely records ``(graph, name)`` pairs (plus child scopes) so removal is a

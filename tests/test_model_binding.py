@@ -10,9 +10,22 @@ their own ``bind_handler``.  Now ModelBinding owns its two-way input listener
 when SSR hydration re-points its node to the live tree.
 """
 
+from basis.shared import events
 from basis.shared.component import Component
 from basis.shared.bindings import EventBinding, ModelBinding
 from basis.shared.element import Element
+from js_fakes import FakeFFI
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def fake_ffi(monkeypatch):
+    """A ``Listener`` is inert without a browser, so the registration these tests
+    inspect only exists with an ``ffi`` to proxy through."""
+    ffi = FakeFFI()
+    monkeypatch.setattr(events, "ffi", ffi)
+    return ffi
 
 
 def _model_binding(mounted):
@@ -80,7 +93,8 @@ def test_bind_select_attaches_change_listener():
 
 def test_model_binding_reattaches_on_ssr_node():
     """attach is the hydration re-attach hook: after the binding's node is
-    re-pointed to the live SSR node, the listener lands on the new node."""
+    re-pointed to the live SSR node, the listener lands on the new node and the
+    one left behind on the client's own node is released."""
     class Owner(Component):
         name = ""
 
@@ -91,9 +105,11 @@ def test_model_binding_reattaches_on_ssr_node():
 
     mounted = Owner.mount(Element("div", attrs={}, children=[]))
     mb = _model_binding(mounted)
+    old_node = mb.node
 
     ssr_node = Element("input", attrs={}, children=[])
     mb.node = ssr_node
     mb.attach(ssr_node)
     assert "input" in ssr_node._listeners
     assert len(ssr_node._listeners["input"]) == 1
+    assert not old_node._listeners.get("input")

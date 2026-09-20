@@ -1,4 +1,4 @@
-"""Unit tests for ``basis.shared.js.Listener``.
+"""Unit tests for ``basis.shared.events.Listener``.
 
 The listener is the one place a JS registration and its proxy are taken apart, so what it
 owes its callers is asserted directly: unbinding and freeing are separate steps, freeing
@@ -7,7 +7,7 @@ happens once, and without a browser nothing is bound at all.
 
 import pytest
 
-import basis.shared.js as js
+import basis.shared.events as events
 from js_fakes import FakeFFI
 
 
@@ -29,7 +29,7 @@ class FakeTarget:
 @pytest.fixture
 def fake_ffi(monkeypatch):
     ffi = FakeFFI()
-    monkeypatch.setattr(js, "ffi", ffi)
+    monkeypatch.setattr(events, "ffi", ffi)
     return ffi
 
 
@@ -37,7 +37,7 @@ def test_a_listener_binds_the_proxy_it_keeps(fake_ffi):
     target = FakeTarget()
     seen = []
 
-    listener = js.Listener(target, "resize", lambda event=None: seen.append(event))
+    listener = events.Listener(target, "resize", lambda event=None: seen.append(event))
 
     assert target.listeners == [("resize", listener.proxy)]
     assert len(fake_ffi.created) == 1
@@ -49,7 +49,7 @@ def test_detach_unbinds_and_keeps_the_proxy(fake_ffi):
     """What a one-shot handler calls on itself: the proxy outlives the call."""
     target = FakeTarget()
 
-    listener = js.Listener(target, "basis:connected", lambda event=None: None)
+    listener = events.Listener(target, "basis:connected", lambda event=None: None)
     proxy = listener.proxy
 
     listener.detach()
@@ -63,7 +63,7 @@ def test_detach_unbinds_and_keeps_the_proxy(fake_ffi):
 def test_dispose_unbinds_and_frees(fake_ffi):
     target = FakeTarget()
 
-    listener = js.Listener(target, "resize", lambda event=None: None)
+    listener = events.Listener(target, "resize", lambda event=None: None)
     proxy = listener.proxy
 
     listener.dispose()
@@ -78,7 +78,7 @@ def test_dispose_after_detach_still_frees(fake_ffi):
     """The one-shot flow: the handler unbinds, the caller disposes, nothing leaks."""
     target = FakeTarget()
 
-    listener = js.Listener(target, "basis:connected", lambda event=None: None)
+    listener = events.Listener(target, "basis:connected", lambda event=None: None)
     proxy = listener.proxy
 
     listener.detach()
@@ -92,7 +92,7 @@ def test_dispose_after_detach_still_frees(fake_ffi):
 def test_dispose_is_idempotent(fake_ffi):
     target = FakeTarget()
 
-    listener = js.Listener(target, "resize", lambda event=None: None)
+    listener = events.Listener(target, "resize", lambda event=None: None)
     listener.dispose()
     listener.dispose()
 
@@ -102,7 +102,7 @@ def test_dispose_is_idempotent(fake_ffi):
 
 def test_an_absent_target_binds_nothing(fake_ffi):
     """A JS API this browser does not have reads as a falsy value, not as None."""
-    listener = js.Listener(None, "change", lambda event=None: None)
+    listener = events.Listener(None, "change", lambda event=None: None)
 
     assert listener.proxy is None
     assert fake_ffi.created == []
@@ -111,11 +111,42 @@ def test_an_absent_target_binds_nothing(fake_ffi):
     assert fake_ffi.destroyed == []
 
 
+def test_options_reach_the_registration_and_the_capture_flag_comes_back(fake_ffi):
+    """Capture is part of a registration's identity: removal has to match it."""
+    added = []
+    removed = []
+
+    class RecordingTarget:
+        def addEventListener(self, event, proxy, options=None):
+            added.append((event, options))
+
+        def removeEventListener(self, event, proxy, capture=False):
+            removed.append((event, capture))
+
+    target = RecordingTarget()
+    captured = events.Listener(target, "wheel", lambda event=None: None,
+                               {"capture": True, "passive": False})
+    proxy = captured.proxy
+
+    assert added == [("wheel", {"capture": True, "passive": False})]
+
+    captured.dispose()
+    assert removed == [("wheel", True)]
+    assert fake_ffi.destroyed == [proxy]
+
+    # No options means no third argument, and nothing to match on the way out.
+    plain = events.Listener(target, "resize", lambda event=None: None)
+    assert added[-1] == ("resize", None)
+
+    plain.dispose()
+    assert removed[-1] == ("resize", False)
+
+
 def test_without_a_browser_a_listener_is_inert(monkeypatch):
     target = FakeTarget()
-    monkeypatch.setattr(js, "ffi", None)
+    monkeypatch.setattr(events, "ffi", None)
 
-    listener = js.Listener(target, "resize", lambda event=None: None)
+    listener = events.Listener(target, "resize", lambda event=None: None)
 
     assert listener.proxy is None
     assert target.listeners == []

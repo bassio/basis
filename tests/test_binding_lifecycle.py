@@ -1,13 +1,27 @@
 """
 The binding lifecycle: ``from_blueprint`` is PURE construction — no DOM
-work; ``activate()`` attaches listeners at mount; ``destroy()``/``detach()``
-tear them down.  Listener bindings (EventBinding, ModelBinding, FormModelBinding)
-own their own attach/detach via the base ``Binding.activate()``/``destroy()``.
+work; ``activate()`` attaches listeners at mount; ``destroy()`` tears them down.
+Listener bindings (EventBinding, ModelBinding, FormModelBinding) attach in
+``attach(to_node)`` and hold ``Listener`` objects, so releasing them is the one
+shared ``NodeBinding.detach()``.
 """
 
+import pytest
+
+from basis.shared import events
 from basis.shared.component import Component
 from basis.shared.bindings import ChildBinding, EventBinding, FormModelBinding
 from basis.shared.element import Element
+from js_fakes import FakeFFI
+
+
+@pytest.fixture(autouse=True)
+def fake_ffi(monkeypatch):
+    """A ``Listener`` is inert without a browser, so the registration these tests
+    inspect only exists with an ``ffi`` to proxy through."""
+    ffi = FakeFFI()
+    monkeypatch.setattr(events, "ffi", ffi)
+    return ffi
 
 
 class Owner(Component):
@@ -81,6 +95,62 @@ def test_form_model_binding_lifecycle_attach_detach():
     assert node._listeners["input"] and node._listeners["submit"]
     fb.destroy()
     assert not node._listeners["input"] and not node._listeners["submit"]
+
+
+def test_event_binding_reattach_releases_from_the_old_node():
+    """The SSR re-point pass calls ``attach()`` with a new node; the registration
+    left on the old one must not survive it."""
+    mounted = Owner.mount(Element("div", attrs={}, children=[]))
+    first, second = _Node("button"), _Node("button")
+    eb = EventBinding(
+        component_instance=mounted,
+        node=first,
+        event="onclick",
+        target_fn="on_click",
+        ast_trees={},
+    )
+    eb.attach(first)
+    eb.attach(second)
+    assert not first._listeners.get("click")
+    assert len(second._listeners["click"]) == 1
+
+
+def test_event_binding_destroy_frees_the_proxy_with_the_registration(fake_ffi):
+    """The two objects share one lifetime: freeing one without the other is the
+    failure ``Listener`` exists to prevent."""
+    mounted = Owner.mount(Element("div", attrs={}, children=[]))
+    node = Element("button", attrs={}, children=[])
+    eb = EventBinding(
+        component_instance=mounted,
+        node=node,
+        event="onclick",
+        target_fn="on_click",
+        ast_trees={},
+    )
+    eb.activate()
+    assert len(eb.listeners) == 1
+    proxy = eb.listeners[0].proxy
+    eb.destroy()
+    assert proxy in fake_ffi.destroyed
+    assert not node._listeners.get("click")
+
+
+def test_a_binding_registers_nothing_without_a_browser(monkeypatch):
+    """Inert is the contract: no ``ffi``, no registration, and no proxy to leak."""
+    monkeypatch.setattr(events, "ffi", None)
+    mounted = Owner.mount(Element("div", attrs={}, children=[]))
+    node = Element("button", attrs={}, children=[])
+    eb = EventBinding(
+        component_instance=mounted,
+        node=node,
+        event="onclick",
+        target_fn="on_click",
+        ast_trees={},
+    )
+    eb.activate()
+    assert eb.listeners[0].proxy is None
+    assert not getattr(node, "_listeners", {})
+    eb.destroy()
 
 
 def test_if_binding_lifecycle_anchor():

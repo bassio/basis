@@ -9,7 +9,7 @@ no binding behind.
 import pytest
 
 import basis.client.device_probes as probes
-from basis.shared import js as js_module
+from basis.shared import events as events_module
 from basis.shared import reactive
 from basis.shared import store as store_module
 from basis.shared.device import DeviceStore
@@ -90,7 +90,7 @@ def browser(monkeypatch):
     """Run the probes against a fake window, from clean module + store state."""
     win, fake_ffi = FakeWindow(), FakeFFI()
     monkeypatch.setattr(probes, "window", win)
-    monkeypatch.setattr(js_module, "ffi", fake_ffi)
+    monkeypatch.setattr(events_module, "ffi", fake_ffi)
     monkeypatch.setattr(probes, "PYSCRIPT", True)
     monkeypatch.setattr(probes, "_installed", False)
     monkeypatch.setattr(probes, "_lifecycle_installed", False)
@@ -284,7 +284,7 @@ def test_pagehide_releases_bindings_and_store_client_state(browser, monkeypatch)
     assert win.removed_events() == ["offline", "online", "orientationchange", "resize"]
     # Unbinding drops the browser's reference to the handler; the proxy is a JS object
     # that outlives it until it is destroyed explicitly.
-    assert js_module.ffi.destroyed == bound
+    assert events_module.ffi.destroyed == bound
 
 
 def test_pageshow_resumes_after_a_pagehide(browser, monkeypatch):

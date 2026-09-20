@@ -20,6 +20,10 @@ from basis.shared.errors import (
     SILENT_ERROR,
 )
 
+# The Python<->JS boundary: a Listener owns one registration and its ffi proxy
+# together, and py_event is the wrapping a handler asks for.
+from basis.shared.events import Listener, py_event
+
 # The safe expression language (desugar, _eval_ast, safe_eval, safe_format,
 # extract_dependencies, LoopScope, ALLOWED_BUILTINS, _FORMATTER,
 # IS_CLIENT/ffi/window, _report_binding_error).  Re-exported here: base_component,
@@ -97,9 +101,32 @@ class Binding(object):
 
 @dataclass(kw_only=True)
 class NodeBinding(Binding):
+    # Event registrations this binding owns, in attach order.  Declared before
+    # `node` so a re-pointing node setter can release what it holds.
+    listeners: list = field(default_factory=list, init=False, repr=False, compare=False)
     node:object
     ast_trees: dict
     scope: object = field(default=None, repr=False)
+
+    def listen(self, node, event, handler, options=None):
+        """Register ``handler`` for ``event`` on ``node``, remembering it for teardown.
+
+        ``handler`` arrives already wrapped by ``py_event``: ``Listener`` proxies
+        exactly what it is given.
+        """
+        listener = Listener(node, event, handler, options)
+        self.listeners.append(listener)
+        return listener
+
+    def detach(self):
+        """Free every registration this binding owns.
+
+        Idempotent, because a binding always releases before it re-binds: its node
+        moves from the client's own tree to the live SSR node at hydration.
+        """
+        for listener in self.listeners:
+            listener.dispose()
+        self.listeners.clear()
 
     def marked_for_hydration(self):
         return [self.node]
@@ -369,44 +396,18 @@ class ModelBinding(NodeBinding):
     def attach(self, to_node):
         """Wire the two-way input listener to ``to_node``.
 
-        Builds the update handler for this input's type, wraps it once via
-        ``_create_function_proxy``, and attaches it for the bound event.
-        Re-pointable: called by ``activate()`` at mount and again during SSR
-        hydration after the binding's node is re-pointed to the live SSR node.
-        Idempotent — a previously attached proxy for this event is removed
-        first, so re-attaching to the same node never leaks duplicates.
+        Builds the update handler for this input's type and attaches it for the
+        bound event.  Re-pointable: called by ``activate()`` at mount and again
+        during SSR hydration after the binding's node is re-pointed to the live
+        SSR node.  Idempotent — ``detach()`` releases the previous registration
+        first, so re-attaching never leaks a duplicate.
         """
-        event = self._bound_event
-        old_proxy = getattr(self, "_proxy", None)
-        if old_proxy is not None:
-            remover = getattr(to_node, "removeEventListener", None)
-            if remover is not None:
-                try:
-                    remover(event, old_proxy)
-                except Exception:
-                    pass
+        self.detach()
         handler = self.component_instance._create_update_handler(self.field, self._input_type)
-        proxy = self.component_instance._create_function_proxy(handler)
-        if hasattr(to_node, "hasAttribute") and to_node.hasAttribute(f"on{event}"):
-            to_node.removeAttribute(f"on{event}")
-        if hasattr(to_node, "addEventListener"):
-            to_node.addEventListener(event, proxy)
-        else:
-            setattr(to_node, f"on{event}", proxy)
-        self._proxy = proxy
-
-    def detach(self):
-        """Remove the previously attached input listener from the current node."""
-        proxy = getattr(self, "_proxy", None)
-        if proxy is None:
-            return
-        remover = getattr(self.node, "removeEventListener", None)
-        if remover is not None:
-            try:
-                remover(self._bound_event, proxy)
-            except Exception:
-                pass
-        self._proxy = None
+        # An inline ``on*`` attribute would fire alongside the listener.
+        if hasattr(to_node, "hasAttribute") and to_node.hasAttribute(f"on{self._bound_event}"):
+            to_node.removeAttribute(f"on{self._bound_event}")
+        self.listen(to_node, self._bound_event, py_event(handler))
 
     def update(self):
         val = getattr(self.component_instance, self.field)
@@ -528,11 +529,11 @@ class FormModelBinding(NodeBinding):
 
     @node.setter
     def node(self, val):
-        # Re-pointing the node: detach from the current one (listeners only
-        # exist after activate()).  Attaching to the new one happens via
+        # Re-pointing the node: release from the one we are bound to (listeners
+        # only exist after activate()).  Attaching to the new one happens via
         # activate() / hydration re-attach.
         if hasattr(self, "_node") and self._node:
-            self._remove_listeners(self._node)
+            self.detach()
         self._node = val
 
     @property
@@ -540,39 +541,17 @@ class FormModelBinding(NodeBinding):
         return [self.target_expression]
 
     def attach(self, to_node):
-        """Wire the input/blur/submit listeners to ``to_node`` — at mount (via
-        ``activate()``) and again on SSR hydration re-attach."""
+        """Wire the input/change/blur/submit listeners to ``to_node`` — at mount
+        (via ``activate()``) and again on SSR hydration re-attach."""
         if not to_node:
             return
-        self._input_proxy = self.component_instance._create_function_proxy(self.handle_input)
-        self._blur_proxy = self.component_instance._create_function_proxy(self.handle_blur)
-        self._submit_proxy = self.component_instance._create_function_proxy(self.handle_submit)
-        if hasattr(to_node, "addEventListener"):
-            to_node.addEventListener("input", self._input_proxy)
-            to_node.addEventListener("change", self._input_proxy)
-            to_node.addEventListener("blur", self._blur_proxy)
-            to_node.addEventListener("submit", self._submit_proxy)
-        else:
-            setattr(to_node, "oninput", self._input_proxy)
-            setattr(to_node, "onchange", self._input_proxy)
-            setattr(to_node, "onblur", self._blur_proxy)
-            setattr(to_node, "onsubmit", self._submit_proxy)
-
-    def detach(self):
-        """Remove the listeners from the current node (teardown)."""
-        self._remove_listeners(self._node)
-
-    def _remove_listeners(self, node):
-        if not node:
-            return
-        if hasattr(node, "removeEventListener"):
-            if hasattr(self, "_input_proxy"):
-                node.removeEventListener("input", self._input_proxy)
-                node.removeEventListener("change", self._input_proxy)
-            if hasattr(self, "_blur_proxy"):
-                node.removeEventListener("blur", self._blur_proxy)
-            if hasattr(self, "_submit_proxy"):
-                node.removeEventListener("submit", self._submit_proxy)
+        self.detach()
+        # One handler for both: ``change`` is the event a select, checkbox or radio
+        # actually fires when its value commits.
+        self.listen(to_node, "input", py_event(self.handle_input))
+        self.listen(to_node, "change", py_event(self.handle_input))
+        self.listen(to_node, "blur", py_event(self.handle_blur))
+        self.listen(to_node, "submit", py_event(self.handle_submit))
 
     def get_target_model(self) -> Any:
         context = self.component_instance
@@ -788,45 +767,17 @@ class EventBinding(NodeBinding):
 
         Re-pointable: called by ``activate()`` at mount and again during SSR
         hydration after the binding's node is re-pointed to the live SSR node.
-        Idempotent — a previously attached proxy for this event is removed
-        first, so re-attaching to the same node never leaks duplicates.
+        Idempotent — ``detach()`` releases the previous registration first, so
+        re-attaching never leaks a duplicate.
         """
-        event_name = self.event.removeprefix("on")
-        old_proxy = getattr(self, "_proxy", None)
-        if old_proxy is not None:
-            remover = getattr(to_node, "removeEventListener", None)
-            if remover is not None:
-                try:
-                    remover(event_name, old_proxy)
-                except Exception:
-                    pass
-
-        if isinstance(self.target_fn, str):
-            func_obj = getattr(self.component_instance, self.target_fn)
-            handler = self.component_instance._create_function_proxy(func_obj)
-        else:
-            handler = self.target_fn
-
+        self.detach()
+        target = self.target_fn
+        if isinstance(target, str):
+            target = getattr(self.component_instance, target)
+        # An inline ``on*`` attribute would fire alongside the listener.
         if hasattr(to_node, "hasAttribute") and to_node.hasAttribute(self.event):
             to_node.removeAttribute(self.event)
-        if hasattr(to_node, "addEventListener"):
-            to_node.addEventListener(event_name, handler)
-        else:
-            setattr(to_node, self.event, handler)
-        self._proxy = handler
-
-    def detach(self):
-        """Remove the previously attached handler from the current node."""
-        proxy = getattr(self, "_proxy", None)
-        if proxy is None:
-            return
-        remover = getattr(self.node, "removeEventListener", None)
-        if remover is not None:
-            try:
-                remover(self.event.removeprefix("on"), proxy)
-            except Exception:
-                pass
-        self._proxy = None
+        self.listen(to_node, self.event.removeprefix("on"), py_event(target))
 
     @classmethod
     def from_blueprint(cls, component_instance, node, blueprint):

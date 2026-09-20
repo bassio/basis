@@ -5,7 +5,7 @@ from pyscript import document
 
 from basis.client.errors import install_error_sink
 from basis.shared.hmr import start_hmr
-from basis.shared.media import install_media_resync
+from basis.shared.events import install_resync
 from basis.shared.reactive import batch
 from basis.shared.store import Store, mark_client_ready
 
@@ -147,9 +147,9 @@ except Exception as e:
     print(f"[Basis] Error running store client hooks: {e}")
 
 try:
-    install_media_resync(Store._registry)
+    install_resync(Store._registry)
 except Exception as e:
-    print(f"[Basis] Error installing the media resync: {e}")
+    print(f"[Basis] Error installing the level resync: {e}")
 
 # ── Context probes ──
 # The real viewport / connectivity values, read only now that the document has mounted:

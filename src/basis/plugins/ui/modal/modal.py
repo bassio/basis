@@ -1,5 +1,7 @@
 from basis.shared.styling import compact_block
 from basis.shared.component import Component, IS_CLIENT, extra_style, scoped
+from basis.shared.events import on_key
+from basis.shared.reactive import computed
 
 if IS_CLIENT:
     from pyscript import window, ffi
@@ -86,6 +88,20 @@ class Modal(Component):
                 "close",
                 ffi.to_js({"bubbles": True})
             ))
+
+    @computed
+    def is_open(self):
+        """``open`` is an attribute-shaped prop (``"true"`` or ``""``), so the gate reads it
+        rather than trusting its truthiness."""
+        return str(self.open).lower() == "true" or self.open is True
+
+    @on_key("Escape", when="is_open", in_editable=True, priority=10)
+    def dismiss(self, event):
+        """Escape closes the dialog. A modal is by definition the top thing on the page, so
+        it ranks above the drawer's and the palette's Escape and claims the key.
+        """
+        event.claim()
+        self.close()
 
     def on_backdrop_click(self, event):
         # Only close if target is the backdrop itself

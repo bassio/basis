@@ -1,4 +1,4 @@
-"""Unit tests for ``basis.shared.js.py_event`` / ``PythonEventWrapper``.
+"""Unit tests for ``basis.shared.events.py_event`` / ``PythonEventWrapper``.
 
 The decorator is the payload half of the JS event boundary: a handler receives the raw JS
 event unless it is wrapped, in which case a ``CustomEvent``'s ``detail`` becomes Python
@@ -8,7 +8,7 @@ whatever the browser hands over — any object with a ``detail``.
 
 import asyncio
 
-from basis.shared.js import PythonEventWrapper, py_event
+from basis.shared.events import PythonEventWrapper, py_event
 
 
 class FakeDetail:
@@ -125,13 +125,14 @@ def test_the_target_is_unwrapped_once_and_first():
 
 
 def test_wrapping_is_marked_so_it_is_not_reapplied():
-    """``_create_function_proxy`` reads this to avoid stacking wrappers."""
+    """``py_event`` reads this mark itself, so wrapping twice is one layer, not two."""
 
     @py_event
     def handler(event):
         return None
 
     assert handler.__is_py_event__ is True
+    assert py_event(handler) is handler
 
 
 def test_an_async_handler_is_scheduled_not_dropped():

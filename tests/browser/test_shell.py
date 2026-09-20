@@ -24,6 +24,9 @@ SPLITTER = ".shell-splitter"
 STATUS_BAR = ".shell-status-bar"
 TITLE_BAR = ".shell-title-bar"
 TOGGLE = ".drawer-toggle .shell-sidebar-trigger"
+# The panel surface: the box inside the sidebar's stack. Reaching it through the stack
+# host is what makes the panel opaque instead of a window onto the page.
+SURFACE = ".shell-sidebar > shell-stack > .shell-stack"
 
 _COMPACT_QUERY = "(max-width: 767px)"
 _REGULAR_QUERY = "(min-width: 768px) and (max-width: 1023px)"
@@ -60,6 +63,18 @@ def _box(page, selector):
 def _display(page, selector):
     return page.evaluate(
         "(sel) => getComputedStyle(document.querySelector(sel)).display", selector
+    )
+
+
+def _surface_paint(page):
+    """The panel surface's own paint — the background and edge that make it a surface."""
+    return page.evaluate(
+        """(sel) => {
+            const cs = getComputedStyle(document.querySelector(sel));
+            return { background: cs.backgroundColor, shadow: cs.boxShadow,
+                     border: cs.borderRightWidth };
+        }""",
+        SURFACE,
     )
 
 
@@ -136,9 +151,22 @@ def test_compact_drawer_opens_and_closes(app_server, mobile_context, request):
     assert opened["x"] == pytest.approx(0, abs=1.5), opened
     assert opened["width"] <= page.evaluate("() => window.innerWidth"), opened
 
+    # The panel is a surface over the page, not a window onto it: the content behind
+    # must not show through, and the drawer must cast its own edge.
+    paint = _surface_paint(page)
+    assert paint["background"] != "rgba(0, 0, 0, 0)", paint
+    assert paint["shadow"] != "none", paint
+
     # The backdrop covers the page behind the panel, so a tap outside the drawer
     # lands on it and closes the drawer.
     page.mouse.click(page.evaluate("() => window.innerWidth - 8"), opened["y"] + 8)
+    _wait_settled(page, SIDEBAR, "r.right <= 1", timeout)
+
+    # Escape closes it as well: the toggle that opened the drawer sits behind the open
+    # panel, so the key is the one path back a keyboard user has.
+    page.tap(TOGGLE, timeout=timeout)
+    _wait_settled(page, SIDEBAR, "r.x >= 0", timeout)
+    page.keyboard.press("Escape")
     _wait_settled(page, SIDEBAR, "r.right <= 1", timeout)
 
 
@@ -163,6 +191,11 @@ def test_regular_viewport_keeps_the_desktop_frame(app_server, page, request):
     # own content and these numbers would be the content's.
     assert sidebar["width"] == pytest.approx(240, abs=0.5), sidebar
     assert main["right"] == pytest.approx(page.viewport_size["width"], abs=1.5), main
+
+    # The docked panel paints its own background and edge.
+    paint = _surface_paint(page)
+    assert paint["background"] != "rgba(0, 0, 0, 0)", paint
+    assert paint["border"] != "0px", paint
 
     # The desktop chrome is intact: full-height title bar, live divider, status bar.
     assert title["height"] == pytest.approx(48, abs=1.5), title

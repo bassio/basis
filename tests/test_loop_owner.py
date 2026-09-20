@@ -11,9 +11,22 @@ Custom-element loop children (e.g. ``<x-loop-item for=...>``) remain their own
 components with their own handlers (own ``self``).
 """
 
+import pytest
+
+from basis.shared import events
 from basis.shared.component import Component
 from basis.shared.bindings import LoopItem
 from basis.shared.element import Element
+from js_fakes import FakeFFI
+
+
+@pytest.fixture(autouse=True)
+def fake_ffi(monkeypatch):
+    """A ``Listener`` is inert without a browser, so the registration these tests
+    reach for only exists with an ``ffi`` to proxy through."""
+    ffi = FakeFFI()
+    monkeypatch.setattr(events, "ffi", ffi)
+    return ffi
 
 
 def _loop(owner):

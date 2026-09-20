@@ -2,7 +2,7 @@ import re
 from basis.shared.store import Store
 from basis.shared.component import Component, IS_CLIENT, client
 from basis.shared.context import ContextVarProxyDict
-from basis.shared.js import Listener
+from basis.shared.events import on_window
 
 if IS_CLIENT:
     from pyscript import window
@@ -13,17 +13,20 @@ else:
 class RouterStore(Store):
     current_path: str = ""
     params: dict = {}
-    
+
     def __init__(self, name):
         super().__init__(name)
         self.params = {}
         if window:
             self.current_path = window.location.pathname
-            # Held for the store's lifetime: the browser keeps calling the proxy until
-            # it is freed, so a dropped one is a handler that can no longer run.
-            self._popstate = Listener(window, "popstate", self._on_popstate)
 
-    def _on_popstate(self, event=None):
+    @on_window("popstate")
+    def _on_popstate(self, event):
+        """Navigation is the browser's news to deliver.
+
+        A declaration rather than a listener held by hand: it attaches when the client is
+        ready and is released with the store, so there is no proxy to outlive either.
+        """
         self.current_path = window.location.pathname
         
     def navigate(self, path: str):

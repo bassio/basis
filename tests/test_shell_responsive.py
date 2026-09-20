@@ -42,6 +42,7 @@ from basis.plugins.shell import (  # noqa: F401  (registers every shell custom e
 from basis.server.app import Basis
 from basis.shared.component import Component
 from basis.shared.device import DeviceStore
+import basis.shared.events as events
 from basis.shared.page import _synthesize_page
 from basis.shared.store import Store
 from basis.shared.styling import (
@@ -55,6 +56,7 @@ from basis.shared.styling import (
     medium_media,
     medium_query,
 )
+from js_fakes import FakeFFI
 
 #: Every part that owns optional compact CSS.
 RESPONSIVE_PARTS = (Stack, TitleBar, StatusBar, ActivityBar, Sidebar, Splitter)
@@ -320,8 +322,9 @@ def test_activity_bar_becomes_the_bottom_navigation():
     css = ActivityBar._get_style_string()
 
     # The rail's inner column steps out of the box tree so the icon groups become
-    # items of the bar itself, which turns into a row.
-    assert ".shell-activity-bar > .shell-stack" in css
+    # items of the bar itself, which turns into a row. The stack's ``display: contents``
+    # host stays in the element tree between the two.
+    assert ".shell-activity-bar > shell-stack > .shell-stack" in css
     assert "flex: 0 0 var(--shell-activitybar-mobile-height, 52px)" in css
     assert "padding-bottom: var(--safe-area-bottom" in css
 
@@ -410,8 +413,9 @@ def test_compact_sidebar_leaves_the_flow_and_paints_its_backdrop():
     assert "position: fixed" in compact
     assert 'calc(-1 * var(--sidebar-mobile-width' in compact
     assert '.shell-sidebar[data-drawer="open"]::after' in compact
-    # The backdrop sits behind the panel: the surface is the inner stack.
-    assert ".shell-sidebar > .shell-stack" in css
+    # The backdrop sits behind the panel: the surface is the box inside the sidebar's
+    # stack, and that stack's ``display: contents`` host stands between them.
+    assert ".shell-sidebar > shell-stack > .shell-stack" in css
 
 
 def test_backdrop_click_closes_the_drawer_only_on_the_root():
@@ -430,6 +434,85 @@ def test_backdrop_click_closes_the_drawer_only_on_the_root():
 
     sidebar.on_backdrop_click(Event(root))
     assert sidebar.open is False
+
+
+def test_escape_closes_an_open_drawer(monkeypatch):
+    """Escape is the keyboard peer of the backdrop tap — the chrome's own trigger is
+    behind the open drawer, so the key is what a keyboard user reaches for."""
+    Store._registry["device"] = SimpleNamespace(compact=True)
+    sidebar = Sidebar()
+    sidebar.open = True
+
+    sidebar.dismiss(_ClaimingEvent())
+
+    assert sidebar.open is False
+
+
+def test_escape_leaves_anything_but_an_open_compact_drawer_alone(monkeypatch):
+    """The gate is what decides: an overlay closes on Escape only while it is an overlay."""
+    Store._registry["device"] = SimpleNamespace(compact=True)
+    sidebar = Sidebar()
+
+    assert sidebar.dismissable is False  # nothing is open
+
+    sidebar.open = True
+    assert sidebar.dismissable is True
+
+    Store._registry["device"] = SimpleNamespace(compact=False)
+    assert sidebar.dismissable is False  # docked: no drawer to dismiss
+
+
+class _ClaimingEvent:
+    """The part of the page event a dismissable handler uses."""
+
+    def __init__(self):
+        self.claimed = False
+
+    def claim(self):
+        self.claimed = True
+
+
+class FakeTarget:
+    """A JS event target: the registration list, as the browser would keep it."""
+
+    def __init__(self):
+        self.listeners = []
+
+    def addEventListener(self, event, proxy):
+        self.listeners.append((event, proxy))
+
+    def removeEventListener(self, event, proxy):
+        self.listeners = [pair for pair in self.listeners if pair != (event, proxy)]
+
+
+def test_a_sidebar_holds_one_key_registration_while_it_is_attached(monkeypatch):
+    """The declaration is the framework's now, so the sidebar owns no listener of its own:
+    one registration while it is attached, released with it."""
+    ffi = FakeFFI()
+    target = FakeTarget()
+    monkeypatch.setattr(events, "ffi", ffi)
+    monkeypatch.setattr(events, "document", target)
+
+    sidebar = Sidebar()
+    sidebar._attach_declarations()
+
+    assert [event for event, _proxy in target.listeners] == ["keydown"]
+    assert len(ffi.created) == 1
+
+    sidebar._detach_declarations()
+
+    assert target.listeners == []
+    assert len(ffi.destroyed) == 1
+
+
+def test_without_a_browser_no_key_is_bound(monkeypatch):
+    monkeypatch.setattr(events, "document", None)
+    monkeypatch.setattr(events, "window", None)
+
+    sidebar = Sidebar()
+    sidebar._attach_declarations()
+
+    sidebar._detach_declarations()  # releasing nothing is not an error
 
 
 def test_trigger_flips_the_drawer_state_at_the_compact_tier(monkeypatch):

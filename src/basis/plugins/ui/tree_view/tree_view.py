@@ -1,5 +1,5 @@
 from basis.shared.component import Component, IS_CLIENT, scoped
-from basis.shared.js import py_event
+from basis.shared.events import py_event
 
 if IS_CLIENT:
     from pyscript import window, ffi

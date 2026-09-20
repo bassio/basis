@@ -20,7 +20,6 @@ from basis.shared.bindings import (
 )
 
 from basis.shared.base_component import BaseComponent
-from basis.shared.js import py_event
 from basis.shared.hydration import (
     HYDRATION_ID_ATTR,
     HYDRATION_MISMATCH_EVENT,
@@ -702,17 +701,6 @@ class Component(BaseComponent):
     @classmethod
     def _create_element(cls, tag):
         return document.createElement(tag)
-
-    @client
-    def _create_function_proxy(self, f):
-        if not getattr(f, "__is_py_event__", False):
-            f = py_event(f)
-        return ffi.create_proxy(f)
-
-    @client   
-    def _create_update_handler(self, f, input_type):
-        handler = super()._create_update_handler(f, input_type)
-        return self._create_function_proxy(handler)
 
     def initialize_ssr(self, ssr_root, report=None, *, ssr_map=None, **kwargs):
         """Hydrate this component instance against the live SSR tree.

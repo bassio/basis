@@ -13,7 +13,7 @@ import asyncio
 
 from pyscript import window, document, ffi
 
-from basis.shared.js import Listener
+from basis.shared.events import Listener
 
 _LOADED: dict[str, object] = {}
 _REFS: dict[str, int] = {}

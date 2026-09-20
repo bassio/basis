@@ -25,7 +25,7 @@ except ImportError:  # unit tests / import under pytest
     PYSCRIPT = False
 
 from basis.shared.device import ensure_device_store
-from basis.shared.js import Listener
+from basis.shared.events import Listener
 from basis.shared.network import ensure_network_store
 from basis.shared.reactive import batch
 from basis.shared.store import Store

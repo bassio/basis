@@ -10,7 +10,7 @@ apps subclass ``Icon`` (or put their own ``onclick`` content inside) to act
 on a click.
 """
 from basis.shared.component import Component, scoped
-from basis.shared.js import py_event
+from basis.shared.events import py_event
 from basis.shared.reactive import computed
 
 

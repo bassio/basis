@@ -1,5 +1,6 @@
 from basis.shared.styling import compact_block
 from basis.shared.component import Component, IS_CLIENT, extra_style, scoped
+from basis.shared.events import on_document
 from basis.shared.reactive import computed
 
 if IS_CLIENT:
@@ -65,9 +66,10 @@ class ContextMenu(Component):
         self.x = 0
         self.y = 0
 
-        if IS_CLIENT and window:
-            self._click_proxy = ffi.create_proxy(self.global_click)
-            window.addEventListener("click", self._click_proxy)
+    @computed
+    def is_open(self):
+        """``open`` is an attribute-shaped prop (``"true"`` or ``""``)."""
+        return bool(self.open)
 
     @computed(dependencies=["x", "y"])
     def position_vars(self):
@@ -107,14 +109,17 @@ class ContextMenu(Component):
                 ffi.to_js({"detail": {"action": action}, "bubbles": True})
             ))
 
-    def global_click(self, event):
-        if not self.open:
-            return
-        
-        # Close the context menu if user clicked outside the component
-        if IS_CLIENT and self.__element__:
-            if not self.__element__.contains(event.target):
-                self.open = ""
+    @on_document("click", when="is_open")
+    def close_on_outside_click(self, event):
+        """A click outside the menu closes it.
+
+        Page-level, because the outside *is* the page, and gated so a closed menu never pays
+        for the check. A click inside the menu is left alone — the menu's own handlers
+        decide what happens then.
+        """
+        element = self.__element__
+        if element and not element.contains(event.target):
+            self.open = ""
 
     @scoped
     def style(self):

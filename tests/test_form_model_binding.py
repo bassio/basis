@@ -2,9 +2,20 @@ import pytest
 from unittest.mock import MagicMock
 from sqlmodel import SQLModel, Field
 from typing import Optional
+from basis.shared import events
 from basis.shared.bindings import FormModelBinding
 from basis.shared.component import Component
 from basis.shared.validation import ValidationError, validate_model
+from js_fakes import FakeFFI
+
+
+@pytest.fixture(autouse=True)
+def fake_ffi(monkeypatch):
+    """A ``Listener`` is inert without a browser, so the handler these tests drive
+    only exists with an ``ffi`` to proxy through."""
+    ffi = FakeFFI()
+    monkeypatch.setattr(events, "ffi", ffi)
+    return ffi
 
 class DummyVisit(SQLModel):
     id: Optional[int] = Field(default=None, primary_key=True)

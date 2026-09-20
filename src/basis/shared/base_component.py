@@ -8,6 +8,7 @@ from basis.shared.bindings import BindingBlueprint, Binding, SelfBinding, TextBi
     FormModelBinding, desugar_expression, safe_eval, safe_format, \
     ALLOWED_BUILTINS
 from basis.shared.bindings import extract_dependencies
+from basis.shared.events import BrowserMixin
 from basis.shared.store import Store
 from basis.shared.reactive import ReactiveObject, DependencyGraph, StateNode, ComputedNode, EffectNode, computed, Refrain, ReactiveScope
 from basis.shared.context import ContextVarProxyDict
@@ -179,7 +180,7 @@ def _mount_root_providers(cls, container):
     return mounted_providers
 
 
-class BaseComponent(ReactiveObject):
+class BaseComponent(BrowserMixin, ReactiveObject):
 
     _registry = {}
     _instance_registry = ContextVarProxyDict("component_instance_registry")
@@ -480,6 +481,11 @@ class BaseComponent(ReactiveObject):
         for k, v in kwargs.items():
             new_instance.__dict__[k] = v
 
+        # Declared levels (a media query, a held key) become real fields before
+        # ``__init_fields__`` reads the class attributes, so a template-bound level binds the
+        # field rather than the declaration.
+        new_instance._materialize_levels()
+
         new_instance.__init_selfbinding__()
 
         new_instance.__init_slot_bindings__()
@@ -491,6 +497,10 @@ class BaseComponent(ReactiveObject):
         new_instance.__init_fields__()
 
         new_instance.on_mounted()
+
+        # Declarations become subscribers once the instance is live. Client-only in effect —
+        # without a browser there is nothing to attach to.
+        new_instance._attach_declarations()
 
         return new_instance
 
@@ -548,6 +558,9 @@ class BaseComponent(ReactiveObject):
         """
         for b in list(self.__dict__.get('__bindings__', ())):
             self.remove_binding(b)
+        # Release page-level subscribers before the DAG goes: a handler must not run against
+        # an instance whose bindings are already gone.
+        self._detach_declarations()
         self._scope.destroy()
 
     def _teardown_js(self):
@@ -690,13 +703,6 @@ class BaseComponent(ReactiveObject):
     @classmethod
     def _get_nodes(cls, element, skip_loop_descendants=False):
         raise NotImplementedError()
-
-    def _create_function_proxy(self, f):
-        # No owner re-binding needed: every handler is already the
-        # template-owner's method natively (loop bodies are owner-bound), and
-        # custom-element loop children keep their own ``self``.  The client
-        # overrides this to wrap the callable in a JS proxy.
-        return f
 
     #@server
     def _create_update_handler(self, f, input_type):
@@ -1336,6 +1342,10 @@ class BaseComponent(ReactiveObject):
                     self.__dict__['_template'] = self.__class__.clone_blueprint().content
             except Exception:
                 pass
+
+        # The rebuild owns a fresh scope and an empty binding list, and _teardown_bindings
+        # released the previous subscribers, so the declarations attach again.
+        self._attach_declarations()
 
     def hot_swap(self, new_cls):
         """Hot-swap this instance to a fully new class definition (exact-class match)."""

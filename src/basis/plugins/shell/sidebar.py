@@ -12,7 +12,9 @@ Two independent states, because a docked panel and a drawer are not the same con
 - ``open`` — the **drawer** state (``data-drawer="open"``). Only the compact
   breakpoint reads it, where the sidebar leaves the flow and becomes an overlay that
   slides in from its edge over a backdrop. It defaults to closed, so a phone does not
-  open with a panel covering the page.
+  open with a panel covering the page. Because that overlay covers the viewport, a
+  trigger sitting in the app's chrome ends up behind it: the drawer closes on a backdrop
+  tap, on Escape, or from a trigger placed inside the panel.
 
 Both are ordinary props, so a store or a template binding can drive them. The
 ``SidebarTrigger`` (``<shell-sidebar-trigger target="#id">``) flips whichever one the
@@ -20,7 +22,7 @@ current viewport tier uses.
 """
 from basis.shared.styling import compact_block
 from basis.shared.component import Component, IS_CLIENT, scoped
-from basis.shared.js import py_event
+from basis.shared.events import on_key, py_event
 from basis.shared.reactive import computed
 
 if IS_CLIENT:
@@ -40,7 +42,11 @@ _BASE_CSS = """
 }
 
 /* The root is the positioning box; the panel surface is the inner stack. That
-   split is what lets the compact backdrop paint behind an opaque panel. */
+   split is what lets the compact backdrop paint behind an opaque panel.
+
+   The stack's host is ``display: contents``: it leaves the box tree but stays in the
+   element tree between this root and the box it wraps, so the surface is reached
+   *through* it. */
 .shell-sidebar {
     --sidebar-width: var(--sidebar-expanded, 240px);
     display: flex;
@@ -50,7 +56,7 @@ _BASE_CSS = """
     transition: flex-basis 0.25s ease;
 }
 
-.shell-sidebar > .shell-stack {
+.shell-sidebar > shell-stack > .shell-stack {
     background: var(--bg-primary, #1e1e2e);
 }
 
@@ -62,9 +68,9 @@ _BASE_CSS = """
     --sidebar-width: var(--sidebar-icon, 56px);
 }
 
-.shell-sidebar[data-border="right"] > .shell-stack { border-right: 1px solid var(--border-color, #3a3a52); }
-.shell-sidebar[data-border="left"] > .shell-stack { border-left: 1px solid var(--border-color, #3a3a52); }
-.shell-sidebar[data-border="all"] > .shell-stack { border: 1px solid var(--border-color, #3a3a52); }
+.shell-sidebar[data-border="right"] > shell-stack > .shell-stack { border-right: 1px solid var(--border-color, #3a3a52); }
+.shell-sidebar[data-border="left"] > shell-stack > .shell-stack { border-left: 1px solid var(--border-color, #3a3a52); }
+.shell-sidebar[data-border="all"] > shell-stack > .shell-stack { border: 1px solid var(--border-color, #3a3a52); }
 """
 
 _COMPACT_CSS = """
@@ -96,7 +102,7 @@ _COMPACT_CSS = """
 .shell-sidebar[data-drawer="open"][data-side="left"] { left: 0; }
 .shell-sidebar[data-drawer="open"][data-side="right"] { right: 0; }
 
-.shell-sidebar > .shell-stack {
+.shell-sidebar > shell-stack > .shell-stack {
     box-shadow: var(--shadow-lg, 0 12px 32px rgb(0 0 0 / 0.35));
 }
 
@@ -149,6 +155,24 @@ class Sidebar(Component):
         if event.target == self.__element__:
             self.open = False
 
+    @computed
+    def dismissable(self):
+        """Open *and* shown as an overlay: what the keyboard may close. A docked panel has
+        nothing to dismiss."""
+        device = self.S.get("device")
+        return bool(self.open) and device is not None and device.compact
+
+    @on_key("Escape", when="dismissable")
+    def dismiss(self, event):
+        """Escape closes the drawer — the keyboard peer of the backdrop tap.
+
+        Page-level because the key arrives from wherever focus happens to be; the drawer's
+        own subtree is not where a keyboard user is looking. It claims the key so nothing
+        lower-ranked acts on the same press.
+        """
+        event.claim()
+        self.open = False
+
     @classmethod
     @scoped
     def style(cls):
@@ -172,6 +196,10 @@ class SidebarTrigger(Component):
     opens and closes it (``open``); on a regular viewport it is docked, so the trigger
     collapses and expands it (``collapsed``). Reading the tier from ``$device`` keeps the
     button and the stylesheet answering the same question.
+
+    An open drawer covers the viewport, so a trigger that sits in the app's chrome is
+    behind it: the drawer's own close paths are the backdrop, Escape and any trigger
+    placed inside the panel.
 
     The state lives on the target's component instance, so the sidebar's own bindings
     re-render and every trigger pointing at it agrees — the DOM is never the source of

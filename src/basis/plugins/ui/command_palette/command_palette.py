@@ -1,5 +1,6 @@
 from basis.shared.styling import compact_block
 from basis.shared.component import Component, IS_CLIENT, extra_style, scoped
+from basis.shared.events import on_key
 from basis.shared.reactive import computed
 
 if IS_CLIENT:
@@ -65,10 +66,12 @@ class CommandPalette(Component):
         self.query = ""
         self.active_index = 0
         self.open = ""
-        
-        if IS_CLIENT and window:
-            self._keydown_proxy = ffi.create_proxy(self.global_keydown)
-            window.addEventListener("keydown", self._keydown_proxy)
+
+    @computed
+    def is_open(self):
+        """``open`` is an attribute-shaped prop (``"true"`` or ``""``), so the gate reads it
+        rather than trusting its truthiness."""
+        return str(self.open).lower() == "true" or self.open is True
 
     @computed(dependencies=["query", "commands"])
     def filtered_commands(self):
@@ -85,26 +88,44 @@ class CommandPalette(Component):
                 results.append(cmd)
         return results
 
-    def global_keydown(self, event):
-        key = event.key
-        meta = event.metaKey or event.ctrlKey
-        
-        if meta and (key.lower() == "k" or key.lower() == "p"):
-            event.preventDefault()
-            self.open = "true" if not self.open else ""
-            self.query = ""
-            self.active_index = 0
-            
-            if self.open and IS_CLIENT:
-                def focus_input(*a):
-                    inp = self.__element__.querySelector(".ui-palette-input")
-                    if inp:
-                        inp.focus()
-                window.setTimeout(ffi.create_proxy(focus_input), 50)
-                
-        elif key == "Escape" and self.open:
-            event.preventDefault()
-            self.open = ""
+    @on_key("K", mod=True, in_editable=True)
+    @on_key("P", mod=True, in_editable=True)
+    def toggle(self, event):
+        """The palette's own shortcuts — ``mod`` is meta on macOS, ctrl elsewhere.
+
+        ``in_editable`` because the shortcut is pressed *while* typing somewhere else: one
+        that stops working inside a text field is one that does not work. It claims the key
+        so a lower-ranked owner never sees the same press.
+        """
+        event.claim()
+        event.prevent_default()
+        self.query = ""
+        self.active_index = 0
+        self.open = "" if self.is_open else "true"
+        if self.is_open:
+            self._focus_input()
+
+    @on_key("Escape", when="is_open", in_editable=True, priority=5)
+    def dismiss(self, event):
+        """Escape closes the palette, including from its own search field."""
+        event.claim()
+        event.prevent_default()
+        self.open = ""
+
+    def _focus_input(self):
+        """Focus the search field once the open state has rendered."""
+        if not (IS_CLIENT and window):
+            return
+        element = self.__element__
+        if not element:
+            return
+
+        def focus_input(*_args):
+            field = element.querySelector(".ui-palette-input")
+            if field:
+                field.focus()
+
+        window.setTimeout(ffi.create_proxy(focus_input), 50)
 
     def on_input(self, event):
         self.query = event.target.value

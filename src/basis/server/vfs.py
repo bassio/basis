@@ -142,7 +142,7 @@ class VFSRegistry:
             "component.py",
             "page.py",
             "store.py",
-            "js.py",
+            "events.py",
             "media.py",
             "styling.py",
             "meta.py",

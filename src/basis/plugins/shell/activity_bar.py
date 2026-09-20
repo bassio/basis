@@ -57,8 +57,9 @@ _COMPACT_CSS = """
 
 /* On the desktop rail the inner stack is the column that holds the two groups.
    Dropping it from the box tree lets the groups become flex items of the bar
-   itself, which is a row here. */
-.shell-activity-bar > .shell-stack {
+   itself, which is a row here. The stack's host is ``display: contents``, so it
+   stands in the element tree between the bar and that box. */
+.shell-activity-bar > shell-stack > .shell-stack {
     display: contents;
 }
 

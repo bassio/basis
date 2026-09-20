@@ -11,6 +11,7 @@ import pytest
 
 from basis.shared import store as store_module
 from basis.shared.device import DeviceStore, ensure_device_store
+from basis.shared.events import declared_declarations
 from basis.shared.media import MediaQuery
 from basis.shared.network import NetworkStore, ensure_network_store
 from basis.shared.store import FRAMEWORK_STORE_NAMES, Store
@@ -87,16 +88,19 @@ def test_network_neutral_defaults_serialise():
 
 def test_capability_fields_are_declared_media_queries():
     """``hover`` / ``reduced_motion`` / the viewport tier are media features."""
-    declared = DeviceStore.declared_media()
-    assert set(declared) == {"hover", "reduced_motion", "compact", "medium"}
-    assert declared["hover"].query == HOVER_QUERY
-    assert declared["hover"].default is True  # desktop-first neutral
-    assert declared["reduced_motion"].query == "(prefers-reduced-motion: reduce)"
-    assert declared["reduced_motion"].default is False
+    declared = declared_declarations(DeviceStore)
+    assert {"hover", "reduced_motion", "compact", "medium"} <= set(declared)
+    assert DeviceStore.__dict__["hover"].query == HOVER_QUERY
+    assert DeviceStore.__dict__["hover"].default is True  # desktop-first neutral
+    assert DeviceStore.__dict__["reduced_motion"].query == "(prefers-reduced-motion: reduce)"
+    assert DeviceStore.__dict__["reduced_motion"].default is False
     # The tier boundaries come from the breakpoint contract, not from a literal here.
-    assert declared["compact"].query == compact_query()
-    assert declared["medium"].query == medium_query()
-    assert declared["compact"].default is False  # "regular" until the browser answers
+    assert DeviceStore.__dict__["compact"].query == compact_query()
+    assert DeviceStore.__dict__["medium"].query == medium_query()
+    assert DeviceStore.__dict__["compact"].default is False  # "regular" until the browser answers
+    # Each is a level: the browser's answer is written into the field.
+    assert declared["hover"][0].kind == "level"
+    assert declared["compact"][0].neutral is False
 
 
 def test_declared_fields_are_real_fields_without_a_browser():

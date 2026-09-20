@@ -29,7 +29,7 @@ else:
     pyfetch = None
 
 from basis.shared.context import ContextVarProxyDict
-from basis.shared.media import MediaMixin
+from basis.shared.events import BrowserMixin
 from basis.shared.reactive import ReactiveObject
 from basis.shared.serialization import jsonable
 
@@ -133,7 +133,7 @@ def mark_client_ready() -> None:
     _client_ready = True
 
 
-class Store(MediaMixin, ReactiveObject):
+class Store(BrowserMixin, ReactiveObject):
     _registry = ContextVarProxyDict("store_registry")
     _pending_subscriptions = ContextVarProxyDict("store_pending_subscriptions")
 
@@ -269,7 +269,7 @@ class Store(MediaMixin, ReactiveObject):
         if displaced is not None and displaced is not self:
             # One name, one registry slot: the displaced instance's client listeners
             # have no other owner.
-            displaced._detach_media()
+            displaced._detach_declarations()
         Store._registry[name] = self
 
         if name in Store._pending_subscriptions:
@@ -315,9 +315,9 @@ class Store(MediaMixin, ReactiveObject):
         # reading one settles on a state node instead of a promoted class attribute, and
         # a browser-less render still serialises the neutral.
         self._materialize_defaults()
-        self._materialize_media()
+        self._materialize_levels()
         if _client_ready:
-            self._attach_media()
+            self._attach_declarations()
 
         self._init_computed()
 
@@ -417,8 +417,9 @@ class Store(MediaMixin, ReactiveObject):
     def on_client_ready(self) -> None:
         """Client-only: the document has mounted; attach client-side listeners here.
 
-        Inherited from :class:`~basis.shared.media.MediaMixin`, which wires the store's
-        declared media queries. Overriders must call ``super().on_client_ready()``.
+        The declarations attach here rather than at construction because a subscriber's first
+        write is an ordinary DAG update only once the SSR document has been adopted.
+        Overriders must call ``super().on_client_ready()``.
         """
         super().on_client_ready()
 
