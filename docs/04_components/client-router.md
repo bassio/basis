@@ -88,6 +88,18 @@ class LoginForm(Component):
         Component.S['router'].navigate("/dashboard")
 ```
 
+`navigate` pushes a history entry and writes the field itself, because `pushState` fires no
+event. Going back is the browser's job, and `popstate` does the bookkeeping:
+
+```python
+Component.S['router'].back()    # history back
+```
+
+`$router.current_path` is stamped by the server for the first paint (from the request) and
+re-read from `window.location` on `popstate` and on `pageshow` — a page restored from the
+back/forward cache comes back on its entry's URL, which need not be the one it was frozen
+with.
+
 ---
 
 ## Complete Multi-Page SPA Example

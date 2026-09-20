@@ -15,6 +15,7 @@ except ImportError as exc:
 else:
     _DB_IMPORT_ERROR = None
 
+from basis.shared.context import db_session_var
 from basis.shared.serialization import register_serializer
 
 
@@ -78,6 +79,49 @@ async def get_db_session(request: Request):
                 yield session
         else:
             yield res
+
+
+class RequestDBSession:
+    """The request's database session, bound to ``db_session_var`` for the duration.
+
+    Bound by the two dispatch entry points — ``render_page`` and the action
+    handler — before anything else runs, so a store's ``apply_request`` hook and a
+    guard read the *same* session without either of them opening one of its own,
+    and nothing can hold a connection open past its request.
+
+    Binding is driven through :func:`get_db_session`, the framework's one
+    description of what ``app.get_session`` may be, so every shape it accepts
+    works here too rather than a hand-rolled subset silently binding the wrong
+    object.
+
+    An app with no session getter binds nothing and stays usable: rendering must
+    not require a database. :func:`get_db_session` raises in that case, and the
+    named error belongs to the code that actually needs a session, so it is only
+    driven when there is a getter to drive.
+    """
+
+    def __init__(self, request):
+        self._request = request
+        self._token = None
+        self._generator = None
+
+    async def __aenter__(self) -> "RequestDBSession":
+        get_session = getattr(getattr(self._request, "app", None), "get_session", None)
+        if get_session is None:
+            return self
+        self._generator = get_db_session(self._request)
+        session = await anext(self._generator)
+        if session is not None:
+            self._token = db_session_var.set(session)
+        return self
+
+    async def __aexit__(self, *exc_info) -> None:
+        if self._token is not None:
+            db_session_var.reset(self._token)
+            self._token = None
+        if self._generator is not None:
+            await self._generator.aclose()
+            self._generator = None
 
 
 def create_expose_wrapper(modelcls, method: str = "GET", one: bool = False, relations:list[str]|None=None):

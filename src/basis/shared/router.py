@@ -16,9 +16,16 @@ class RouterStore(Store):
 
     def __init__(self, name):
         super().__init__(name)
-        self.params = {}
-        if window:
+        # Hydration runs inside Store.__init__ and has already written both fields from
+        # #basis-initial-state: the page stamped current_path from the request, and
+        # Route.check_match filled params in the same render.  The browser's own answer is
+        # what a store built on the client from scratch needs, and only that.
+        if not getattr(self, "_hydrated_from_ssr", False) and window:
             self.current_path = window.location.pathname
+
+    def _read_path(self):
+        """The browser is the authority on where we are; ask it rather than track it."""
+        self.current_path = window.location.pathname
 
     @on_window("popstate")
     def _on_popstate(self, event):
@@ -27,12 +34,27 @@ class RouterStore(Store):
         A declaration rather than a listener held by hand: it attaches when the client is
         ready and is released with the store, so there is no proxy to outlive either.
         """
-        self.current_path = window.location.pathname
-        
+        self._read_path()
+
+    @on_window("pageshow")
+    def _on_pageshow(self, event):
+        """A page restored from the back/forward cache comes back on its history entry,
+        which need not be the URL this document was frozen with."""
+        self._read_path()
+
     def navigate(self, path: str):
         if window and path != self.current_path:
             window.history.pushState(None, "", path)
             self.current_path = path
+
+    def back(self):
+        """Browser history, so ``popstate`` does the bookkeeping.
+
+        Unlike ``navigate``, whose ``pushState`` fires nothing and therefore writes the
+        field itself.
+        """
+        if window:
+            window.history.back()
 
 
 class Route(Component):

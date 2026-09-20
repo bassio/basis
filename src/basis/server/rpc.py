@@ -172,15 +172,21 @@ def make_action_handler(app):
     (``_requires_app``) are always attached to the real Basis instance, even if
     the app is mounted under another ASGI application.
     """
+    from basis.server.db import RequestDBSession
     from basis.shared.context import request_var
 
     async def action_handler(request: Request):
         # Everything the dispatch runs — the action body, a store's
-        # ``apply_request`` hook — can reach the request via
+        # ``apply_request`` hook, a guard — can reach the request via
         # ``current_request()``; actions are never handed it themselves.
         token = request_var.set(request)
         try:
-            return await _handle_action(app, request)
+            # The action path is a dispatch entry point, so it binds the request's
+            # database session the way a page render does. Without this, `$auth`
+            # reports anonymous to an action and `ModelStore` silently answers
+            # from its cache instead of querying.
+            async with RequestDBSession(request):
+                return await _handle_action(app, request)
         finally:
             request_var.reset(token)
 

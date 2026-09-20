@@ -22,14 +22,14 @@ lower-level render function it wraps, and the route decorators (``@app.serve``,
 
 from __future__ import annotations
 import asyncio
-import inspect
 import json
 
 from typing import Any
 
 from fastapi import Request
 
-from basis.shared.context import db_session_var, request_var
+from basis.server.db import RequestDBSession
+from basis.shared.context import request_var
 from basis.shared.store import (
     FRAMEWORK_STORE_NAMES,
     Store,
@@ -123,41 +123,6 @@ def _collect_stores(request, page_cls, root_component_cls, global_stores) -> dic
     return all_stores
 
 
-class _RequestDB:
-    """The request's database session, bound to ``db_session_var`` on creation.
-
-    Bound BEFORE any store per-request hook runs, because a hook may query the
-    database (an auth store resolving its session cookie). ``release()`` closes
-    the generator, so no session outlives its request.
-    """
-
-    def __init__(self, request):
-        self.token = None
-        self.generator = None
-        get_session = getattr(getattr(request, "app", None), "get_session", None)
-        if get_session is None:
-            return
-        if inspect.isgeneratorfunction(get_session):
-            self.generator = get_session()
-            try:
-                session = next(self.generator)
-            except StopIteration:
-                session = None
-        else:
-            session = get_session()
-        if session is not None:
-            self.token = db_session_var.set(session)
-
-    def release(self) -> None:
-        if self.token is not None:
-            db_session_var.reset(self.token)
-        if self.generator is not None:
-            try:
-                next(self.generator)
-            except StopIteration:
-                pass
-
-
 async def _run_store_request_hooks(request, stores) -> None:
     """Attach the request app to app-bound stores and run their per-request hooks.
 
@@ -249,11 +214,15 @@ async def render_page(
     token = request_var.set(request) if request is not None else None
     try:
         mode = _resolve_render_mode(page_cls, render_mode)
-        if mode == "ssr":
-            return await _render_page_ssr(request, page_cls, global_stores=global_stores)
-        if mode == "csr":
+        if mode not in ("ssr", "csr"):
+            raise ValueError(f"render_mode must be 'ssr' or 'csr', got {mode!r}")
+        # The request's database session is bound here — the single dispatch
+        # entry, wrapping both engines — so it is established before any store
+        # hook runs, in one place rather than once per engine.
+        async with RequestDBSession(request):
+            if mode == "ssr":
+                return await _render_page_ssr(request, page_cls, global_stores=global_stores)
             return await _render_page_csr(request, page_cls, global_stores=global_stores)
-        raise ValueError(f"render_mode must be 'ssr' or 'csr', got {mode!r}")
     finally:
         if token is not None:
             request_var.reset(token)
@@ -312,12 +281,11 @@ async def _render_page_ssr(
     if router_store is not None and hasattr(request, "url"):
         router_store.current_path = request.url.path
 
-    # 2. Collect every store this request renders from, then bind the request's
-    #    database session BEFORE any per-request hook runs: a hook may query the
-    #    database (an auth store resolving its session cookie), so the session has
-    #    to exist by the time hooks run.
+    # 2. Collect every store this request renders from. The request's database
+    #    session is already bound by ``render_page``, above both engines, so a
+    #    per-request hook may query the database (an auth store resolving its
+    #    session cookie) from its first line.
     all_stores = _collect_stores(request, page_cls, root_component, global_stores)
-    db = _RequestDB(request)
 
     # 3. Request-pref hooks: a store may opt in by defining
     #    ``apply_request(request)`` to read a persisted pref (e.g. ``$theme``'s
@@ -382,7 +350,6 @@ async def _render_page_ssr(
         initial_state_json = _serialize_initial_state(all_stores, errors=error_collector)
     finally:
         set_error_sink(_prev_sink)
-        db.release()
 
     # Whole-page hydration (HYDRATION-WHOLEPAGE.md No.2 / Option A): stamp the
     # Page's OWN hydration surface (head h: + body b:) right here, passing the
@@ -425,11 +392,7 @@ async def _render_page_csr(
 
     root_component = getattr(page_cls, "root_component", None)
     all_stores = _collect_stores(request, page_cls, root_component, global_stores)
-    db = _RequestDB(request)
-    try:
-        await _run_store_request_hooks(request, all_stores.values())
-        initial_state_json = _serialize_initial_state(all_stores)
-    finally:
-        db.release()
+    await _run_store_request_hooks(request, all_stores.values())
+    initial_state_json = _serialize_initial_state(all_stores)
 
     return page_instance._render(request, initial_state_json=initial_state_json)
