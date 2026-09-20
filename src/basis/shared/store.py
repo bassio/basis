@@ -92,10 +92,10 @@ async def run_apply_request(store, request) -> None:
 # to the app's ``_global_stores``; on CSR they are unioned into the page's
 # serialized set regardless of the page's ``Page.stores`` subset.
 #
-# ``$meta`` (document-meta, MOBILE-M1.1) is a Page-level default exactly like
+# ``$head`` (document head, MOBILE-M1.1) is a Page-level default exactly like
 # ``$plugins``: the Page guarantees the store exists (empty by default) and the
-# base template's head ``<meta for>`` loop binds it. Plugins/contributors never
-# ``include_store`` it — they only push items into it.
+# base template's head loops bind its ``metas``/``links`` lists. Plugins and
+# components never ``include_store`` it — they only push items into it.
 #
 # ``$device`` / ``$network`` (MOBILE-M1.3) are Page-level defaults too: the
 # client-observed context data plane, serialized with neutral defaults on the
@@ -104,7 +104,7 @@ async def run_apply_request(store, request) -> None:
 # NOTE: ``$regions`` is NOT here — it is provided by the official regions plugin
 # (basis.plugins.regions), which registers its store at boot so it is picked up
 # by the default "all stores" serialization path.
-FRAMEWORK_STORE_NAMES = ("plugins", "meta", "device", "network")
+FRAMEWORK_STORE_NAMES = ("plugins", "head", "device", "network")
 
 
 def ensure_store(name: str, store_cls: type) -> Store:

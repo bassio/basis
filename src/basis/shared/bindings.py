@@ -251,7 +251,14 @@ class AttributeBinding(NodeBinding):
                 self.node.hidden = bool_val
 
         else:
-            self.node.setAttribute(self.attr, str(final_dom_val))
+            # ``None`` means the attribute does not apply: ``str(None)`` would write the
+            # literal "None" into the DOM, so drop the attribute instead. An optional
+            # attribute (e.g. a <link>'s ``sizes``) can then be bound without a
+            # second branch or an empty-string lie.
+            if final_dom_val is None:
+                self.node.removeAttribute(self.attr)
+            else:
+                self.node.setAttribute(self.attr, str(final_dom_val))
 
         # Sync the raw evaluated value onto the child component instance (setattr
         # triggers its reactivity); raw, so list/dict object references survive.
@@ -352,7 +359,7 @@ class TextContentAttributeBinding(AttributeBinding):
             scope=self.scope,
         )
 
-        self.node.textContent = str(final_dom_val)
+        self.node.textContent = "" if final_dom_val is None else str(final_dom_val)
 
     @classmethod
     def from_blueprint(cls, component_instance, node, blueprint):

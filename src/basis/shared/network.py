@@ -5,7 +5,7 @@ online / offline, the effective connection type, and save-data — so app code c
 show an offline banner, degrade deliberately on slow links, or batch actions
 (without touching ``navigator`` at declaration time).
 
-Core / Page-default store (like ``$plugins`` / ``$meta``) — see
+Core / Page-default store (like ``$plugins`` / ``$head``) — see
 ``shared/device.py`` for the full SSR-safe contract: the **server** serializes
 neutral defaults (``online`` True, ``effective_type`` "unknown", ``save_data``
 False — assume a healthy connection) and the **client** overwrites them with the
@@ -22,7 +22,7 @@ from basis.shared.store import Store, ensure_store
 def ensure_network_store() -> "NetworkStore":
     """Return the ``$network`` store, creating it if absent.
 
-    Mirrors ``ensure_meta_store``: called by ``Page._load`` (server, per request
+    Mirrors ``ensure_head_store``: called by ``Page._load`` (server, per request
     — the registry is cleared between requests) and the client entrypoint so
     ``$network`` resolves on every page before any component mounts.
     """

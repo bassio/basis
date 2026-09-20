@@ -46,18 +46,18 @@ try:
 except Exception as e:
     print(f"[Basis] Error initializing framework stores: {e}")
 
-# The framework Page-default stores ($meta / $device / $network). Guaranteed to
-# exist before any component mounts: $meta so the page head loop binds it (empty
-# by default → nothing renders); $device / $network so components can read the
-# context data plane from the first render. The real device/network PROBES are
-# installed AFTER mount (basis.client.device_probes) so SSR and CSR first paint
-# agree.
+# The framework Page-default stores ($head / $device / $network). Guaranteed to
+# exist before any component mounts: $head so the page's head loops bind it
+# (empty by default → nothing renders); $device / $network so components can read
+# the context data plane from the first render. The real device/network PROBES
+# are installed AFTER mount (basis.client.device_probes) so SSR and CSR first
+# paint agree.
 try:
-    from basis.shared.meta import ensure_meta_store
+    from basis.shared.head import ensure_head_store
     from basis.shared.device import ensure_device_store
     from basis.shared.network import ensure_network_store
 
-    ensure_meta_store()
+    ensure_head_store()
     ensure_device_store()
     ensure_network_store()
 except Exception as e:

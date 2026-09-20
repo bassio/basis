@@ -97,10 +97,16 @@ box (see `ROADMAP-MOBILE.md` M1.1 / `MOBILE-M1.1-PLAN.md`):
   App-level mobile guidance is in
   the generated `static/app.css`.
 - **Browser/OS chrome color** — `theme-color` follows the active `$theme` via
-  the core `$meta` store: the theme contributes the resolved color and the
+  the core `$head` store: the theme contributes the resolved color and the
   page head `<meta for>` loop (kept alive by whole-page hydration) renders it
   live. Themes declare it with `theme_color_light` / `theme_color_dark` on
   their `ThemeDefinition`.
+- **Head links** — `$head.links` is the sibling channel for `<link>` tags a
+  plugin owns (an installable app's `manifest` / icons); contribute with
+  `$head.add_link(...)` and the head `<link for>` loop renders it. `$head.metas`
+  and `$head.links` are the two document-level head channels; per-route tags
+  (including `property`/`http-equiv` metas) belong in a `Page` subclass's
+  template.
 - **Dynamic viewport units** — the fixed-viewport workbench frame
   (`AppShell` / a generated `.app-container`) uses `height: 100dvh` with a
   `100vh` fallback; scroll surfaces use `overscroll-behavior: contain` while

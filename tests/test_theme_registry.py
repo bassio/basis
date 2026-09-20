@@ -221,7 +221,7 @@ def test_csr_initial_state_applies_persisted_cookie():
     assert state["theme"]["dark_mode"] is True
 
 
-# --- theme-color → $meta -------
+# --- theme-color → $head -------
 
 def test_resolve_theme_color_prefers_explicit_fields():
     """Decision C: a definition's theme_color_light/dark are authoritative."""
@@ -261,7 +261,7 @@ def _initial_state_of(html: str) -> dict:
 
 
 def test_ssr_theme_color_follows_theme_and_mode_into_head():
-    """theme-color is contributed into $meta and rendered into the SSR head as a
+    """theme-color is contributed into $head and rendered into the SSR head as a
     keyed loop item, following the cookie-applied theme + mode (no cookie → the
     basis default, light)."""
     app, _ = _themed_page()
@@ -272,7 +272,7 @@ def test_ssr_theme_color_follows_theme_and_mode_into_head():
     assert 'name="theme-color" content="#f6f6f7"' in html
     assert 'data-item-key="name:theme-color"' in html
     state = _initial_state_of(html)
-    assert state["meta"]["items"] == [
+    assert state["head"]["metas"] == [
         {"key": "name:theme-color", "name": "theme-color", "content": "#f6f6f7"}
     ]
 
@@ -300,7 +300,7 @@ def test_ssr_theme_color_follows_theme_and_mode_into_head():
 
 def test_csr_theme_color_in_serialized_state_and_head():
     """CSR first paint: the cookie-applied theme contributes theme-color into the
-    serialized $meta state (the client hydrates it; the served head carries it)."""
+    serialized $head state (the client hydrates it; the served head carries it)."""
     import asyncio
     from basis.server.render import render_page
 
@@ -315,25 +315,25 @@ def test_csr_theme_color_in_serialized_state_and_head():
     ))
     assert 'name="theme-color" content="#1b2029"' in html
     state = _initial_state_of(html)
-    assert state["meta"]["items"][0]["content"] == "#1b2029"
+    assert state["head"]["metas"][0]["content"] == "#1b2029"
 
 
-def test_theme_mode_and_theme_flips_sync_theme_color_into_meta():
+def test_theme_mode_and_theme_flips_sync_theme_color_into_head():
     """A client-side flip (set_mode / toggle_dark_mode / set_theme) re-upserts
-    theme-color into $meta so the head <meta for> loop reconciles the live
+    theme-color into $head so the head <meta for> loop reconciles the live
     <meta> node (the dogfood path — no imperative head_sync)."""
-    from basis.shared.meta import ensure_meta_store
+    from basis.shared.head import ensure_head_store
     from basis.shared.store import Store
 
     app = Basis()
     app.bootstrap()
-    # Page._load / the client entrypoint guarantee $meta on real pages.
-    ensure_meta_store()
+    # Page._load / the client entrypoint guarantee $head on real pages.
+    ensure_head_store()
     theme = Store._registry["theme"]
-    meta = Store._registry["meta"]
+    head = Store._registry["head"]
 
     def color() -> str:
-        return meta.items_for()[0]["content"]
+        return head.metas_for()[0]["content"]
 
     # Normalize (a prior direct test may have left state in the registry).
     theme.set_theme("basis")
@@ -350,9 +350,9 @@ def test_theme_mode_and_theme_flips_sync_theme_color_into_meta():
     assert color() == "#f6f5f0"
 
 
-def _meta_theme_color(meta) -> str:
+def _head_theme_color(head) -> str:
     return next(
-        it["content"] for it in meta.items_for() if it["name"] == "theme-color"
+        it["content"] for it in head.metas_for() if it["name"] == "theme-color"
     )
 
 
@@ -383,7 +383,7 @@ def test_sync_meta_color_uses_derived_color_without_definition():
     derived ``theme_color_light/dark`` attrs — not ``DEFAULT_DEFINITION`` — or a
     custom/overlay theme flips the OS chrome to the wrong color. Also proves the
     direct ``dark_mode = …`` write path re-syncs correctly."""
-    from basis.shared.meta import ensure_meta_store
+    from basis.shared.head import ensure_head_store
     from basis.shared.store import Store
     from basis.plugins.theme.schema import ThemeDefinition
     from basis.plugins.theme.store import ThemeStore
@@ -399,41 +399,41 @@ def test_sync_meta_color_uses_derived_color_without_definition():
     # only the derived chrome-color attrs + prefs survive.
     store.__dict__.pop("_definition", None)
 
-    ensure_meta_store()
-    meta = Store._registry["meta"]
+    ensure_head_store()
+    head = Store._registry["head"]
 
     store._sync_meta_color()
-    assert _meta_theme_color(meta) == "#fefefe"
+    assert _head_theme_color(head) == "#fefefe"
 
     store.dark_mode = True  # the direct-write path (no dual-path method)
     store._sync_meta_color()
-    assert _meta_theme_color(meta) == "#010101"
+    assert _head_theme_color(head) == "#010101"
 
 
 def test_client_watch_resyncs_meta_on_direct_dark_mode_write(monkeypatch):
     """Client parity of the F1 fix: with the client DAG watch installed, a
     DIRECT ``dark_mode = …`` assignment (no dual-path method — the exact basis-
-    website pattern) re-upserts the ``theme-color`` $meta item, which is the
+    website pattern) re-upserts the ``theme-color`` $head item, which is the
     trigger the head ``<meta for>`` loop reconciles live."""
     import basis.plugins.theme.store as theme_store_mod
-    from basis.shared.meta import ensure_meta_store
+    from basis.shared.head import ensure_head_store
     from basis.shared.store import Store
     from basis.plugins.theme.store import ThemeStore
 
     # Client-only watch (the theme store checks its module IS_CLIENT at init).
     monkeypatch.setattr(theme_store_mod, "IS_CLIENT", True)
-    ensure_meta_store()
-    meta = Store._registry["meta"]
+    ensure_head_store()
+    head = Store._registry["head"]
 
     store = ThemeStore("theme_watch_test")  # basis default, light
     assert store.theme_color_light == "#f6f6f7"
 
     # The direct write (no method) must drive _sync_meta_color via the watch.
     store.dark_mode = True
-    assert _meta_theme_color(meta) == "#1b2029"
+    assert _head_theme_color(head) == "#1b2029"
 
     store.dark_mode = False
-    assert _meta_theme_color(meta) == "#f6f6f7"
+    assert _head_theme_color(head) == "#f6f6f7"
 
 
 # --- shared RegistryManager: the theme picker -------------------------------

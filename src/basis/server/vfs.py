@@ -145,7 +145,7 @@ class VFSRegistry:
             "events.py",
             "media.py",
             "styling.py",
-            "meta.py",
+            "head.py",
             "device.py",
             "network.py",
             "store_provider.py",

@@ -6,14 +6,14 @@ user's reduced-motion preference — so app code and components can make DAG-lev
 decisions from Python (chunk a list, skip a JS animation, drop a hover-only
 affordance) without touching ``document`` at declaration time.
 
-Core / Page-default store (like ``$plugins`` / ``$meta``)
+Core / Page-default store (like ``$plugins`` / ``$head``)
 --------------------------------------------------------
 ``$device`` is a framework control-plane store, not plugin-owned:
 
 - ``Page`` guarantees it exists on every page (``shared/page.py`` ``_load``; the
   client entrypoint; ``FRAMEWORK_STORE_NAMES`` includes ``"device"`` so it is
   serialized into ``#basis-initial-state`` even on a strict ``Page.stores``
-  page) — exactly like ``$plugins`` and ``$meta``.
+    page) — exactly like ``$plugins`` and ``$head``.
 - The **server** sets *neutral* defaults (the desktop-friendly assumption:
   ``width``/``height`` 0, ``dpr`` 1, ``pointer`` "fine", ``hover`` True,
   ``touch``/``reduced_motion`` False). Neutral values are what SSR serializes and
@@ -60,7 +60,7 @@ from basis.shared.styling import (
 def ensure_device_store() -> "DeviceStore":
     """Return the ``$device`` store, creating it if absent.
 
-    Mirrors ``ensure_meta_store``: called by ``Page._load`` (server, per request
+    Mirrors ``ensure_head_store``: called by ``Page._load`` (server, per request
     — the registry is cleared between requests) and the client entrypoint so
     ``$device`` resolves on every page before any component mounts.
     """

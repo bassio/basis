@@ -90,14 +90,14 @@ class ThemeStore(CookieStore):
             self._derive_chrome_colors()
 
         # Client-only live re-sync (B.9 / F1): a DAG effect re-upserts the
-        # ``theme-color`` ``$meta`` item whenever the chrome color — or the mode
+        # ``theme-color`` ``$head`` item whenever the chrome color — or the mode
         # picking its side — changes, so the head ``<meta for>`` loop reconciles
         # the live node on ANY write path (a direct ``dark_mode = …``
         # assignment included), not just the dual-path methods.
         if IS_CLIENT:
             self._install_meta_color_watch()
 
-    # ── browser-chrome color: derived public attrs + live $meta re-sync ──────
+    # ── browser-chrome color: derived public attrs + live $head re-sync ──────
 
     def _derive_chrome_colors(self) -> None:
         """Resolve the ACTIVE definition's browser-chrome colors into public
@@ -114,7 +114,7 @@ class ThemeStore(CookieStore):
         self.theme_color_dark = resolve_theme_color(definition, dark=True)
 
     def _install_meta_color_watch(self) -> None:
-        """Client-only DAG effect: re-sync the ``$meta`` theme-color item when
+        """Client-only DAG effect: re-sync the ``$head`` theme-color item when
         the chrome color or the mode picking its side changes.
 
         The chrome color is fully determined by ``theme_color_light``/
@@ -287,21 +287,21 @@ class ThemeStore(CookieStore):
         self._flush_cookie()
         self._sync_meta_color()
 
-    # ── $meta theme-color contribution ──────────────────────────────────────
+    # ── $head theme-color contribution ──────────────────────────────────────
 
     def _sync_meta_color(self) -> None:
-        """Upsert the active theme's browser-chrome color into the ``$meta``
+        """Upsert the active theme's browser-chrome color into the ``$head``
         document store.
 
-        ``$meta`` is a Page-guaranteed core store (never theme-registered) — the
+        ``$head`` is a Page-guaranteed core store (never theme-registered) — the
         theme merely CONTRIBUTES the resolved ``theme-color`` item, and the page
         head ``<meta for>`` loop (kept alive by whole-page hydration) renders /
-        reconciles it live. No-op when ``$meta`` isn't registered yet (guarded:
+        reconciles it live. No-op when ``$head`` isn't registered yet (guarded:
         ``Page._load`` / the client entrypoint ensure it before any page
         renders, but a bare ``ThemeStore`` construction may precede it).
         """
-        meta = Store._registry.get("meta")
-        if meta is None:
+        head = Store._registry.get("head")
+        if head is None:
             return
         dark = bool(getattr(self, "dark_mode", False))
         # Prefer the derived public chrome colors (serialized from the server, so
@@ -315,12 +315,12 @@ class ThemeStore(CookieStore):
         if not color:
             definition = self.__dict__.get("_definition") or DEFAULT_DEFINITION
             color = resolve_theme_color(definition, dark=dark)
-        meta.upsert("theme-color", color)
+        head.upsert_meta("theme-color", color)
 
     def apply_request(self, request) -> None:
         """Server-only per-request hook: apply the ``basis_theme`` cookie (the
         no-FOUC SSR/CSR first paint) then sync the theme-color contribution into
-        ``$meta`` so the head loop and the serialized state carry it. Runs even
+        ``$head`` so the head loop and the serialized state carry it. Runs even
         with no cookie (default theme → its default chrome color)."""
         super().apply_request(request)
         self._sync_meta_color()

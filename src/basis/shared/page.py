@@ -344,17 +344,17 @@ class Page(Component):
                 store_instance = Store.resolve(name)
                 if name == "router" and request is not None and hasattr(request, "url"):
                     store_instance.current_path = request.url.path
-        # Framework control-plane stores ($meta / $device / $network) are
-        # guaranteed to exist at mount, like the plugin registry. $meta's head
-        # `<meta for>` loop always binds it (empty items render nothing);
-        # $device / $network carry neutral defaults that client probes overwrite
-        # after mount. FRAMEWORK_STORE_NAMES also serializes them on strict
-        # ``Page.stores`` pages.
-        from basis.shared.meta import ensure_meta_store
+        # Framework control-plane stores ($head / $device / $network) are
+        # guaranteed to exist at mount, like the plugin registry. $head's loops
+        # always bind it (empty lists render nothing); $device / $network carry
+        # neutral defaults that client probes overwrite after mount.
+        # FRAMEWORK_STORE_NAMES also serializes them on strict ``Page.stores``
+        # pages.
+        from basis.shared.head import ensure_head_store
         from basis.shared.device import ensure_device_store
         from basis.shared.network import ensure_network_store
 
-        ensure_meta_store()
+        ensure_head_store()
         ensure_device_store()
         ensure_network_store()
         container = Element("html", {}, list())
@@ -516,8 +516,11 @@ class Page(Component):
         <!-- component styles -->
         <style text-content="{item['css']}" for="item" in="{component_style_items()}" key="uid" data-component-class="{item['name']}" data-extra-style="{item['extra']}"></style>
 
-        <!-- document meta ($meta) -->
-        <meta for="m" in="{$meta.items}" key="key" name="{m['name']}" content="{m['content']}" />
+        <!-- document metas ($head.metas) -->
+        <meta for="m" in="{$head.metas}" key="key" name="{m['name']}" content="{m['content']}" />
+
+        <!-- document links ($head.links) -->
+        <link for="l" in="{$head.links}" key="key" rel="{l['rel']}" href="{l['href']}" type="{l['type']}" sizes="{l['sizes']}" as="{l['as']}" media="{l['media']}" crossorigin="{l['crossorigin']}" />
 
         <!-- iOS standalone meta -->
         <meta for="m" in="{apple_meta_items()}" key="key" name="{m['name']}" content="{m['content']}" />
