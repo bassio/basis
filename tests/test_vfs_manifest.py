@@ -29,6 +29,28 @@ def _module_stems(package: str) -> set[str]:
     return {path.stem for path in (FRAMEWORK_ROOT / package).glob("*.py")}
 
 
+def test_served_urls_resolve_every_label(tmp_path):
+    """A consumer that needs URLs it can fetch (a service-worker precache) cannot use
+    the manifest's ``{COMPONENTS_DIR_n}`` labels, so ``served_urls`` resolves both
+    label families and drops the definition entries.
+    """
+    mount_dir = tmp_path / "components"
+    mount_dir.mkdir()
+    (mount_dir / "widget.py").write_text("class Widget:\n    pass\n")
+
+    registry = VFSRegistry()
+    registry.add_framework_files()
+    registry.add_component_route("/components", mount_dir)
+
+    urls = registry.served_urls("https://example.test")
+
+    assert "https://example.test/components/widget.py" in urls
+    assert "https://example.test/basis/shared/head.py" in urls
+    # The ``{DOMAIN}`` value and the label→mount entries are definitions, not files.
+    assert not [url for url in urls if "{" in url]
+    assert "https://example.test" not in urls
+
+
 @pytest.mark.parametrize("package", ["shared", "client"])
 def test_manifest_matches_the_package(package):
     """Served files and on-disk modules are the same set, in both directions.

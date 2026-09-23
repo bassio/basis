@@ -4,6 +4,8 @@
 
 You don't normally interact with `Page` directly — Basis uses it automatically when rendering SSR routes. You only need to subclass it when you want to customize the document shell (fonts, meta tags, additional stylesheets).
 
+`Page` inherits from [`StaticPage`](../03_server/static-pages.md), which renders the same chrome and the same server-rendered tree and stops there: no PyScript, no state script, no hydration. `Page` is what adds the client — every attribute in the table below that boot the client (`entry_module`, `pyscript_src`, `pyscript_json_url`, `initial_state_json`, `render_mode`, `basis_dev_mode`) belongs to it, not to the base.
+
 ---
 
 ## The default template
@@ -16,6 +18,8 @@ Here is the template `Page` renders, showing the actual structure from `page.py`
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>{title}</title>
+
+        <!-- $head.metas / $head.links / $head.styles / $head.scripts loops -->
 
         <!-- PyScript offline bundle -->
         <link rel="stylesheet" href="{pyscript_src}/core.css" />
@@ -76,6 +80,39 @@ region. See `docs/05_reactivity/ssr-hydration.md`.
 
 `initial_state_json` is populated automatically during server-side rendering — you should not set it manually.
 
+---
+
+## Head meta, links, styles and scripts
+
+`$head` is the core store for document-level `<head>` content. It holds four ordered, keyed lists — one per head tag family — and the page template renders each through a keyed loop, which whole-page hydration keeps alive. A contributor adds an item and gets a disposer back; an empty list renders nothing, so a head with no contributors is byte-stable.
+
+| Channel | Renders | Dedup identity |
+| :--- | :--- | :--- |
+| `$head.metas` | `<meta name="…" content="…">` | `name` |
+| `$head.links` | `<link rel="…" href="…">` plus optional `type` / `sizes` / `as` / `media` / `crossorigin` | `(rel, href)` |
+| `$head.styles` | an inline `<style>` body, optionally narrowed by `media` | the CSS (and its `media`) |
+| `$head.scripts` | a `<script>` — external (`src`) or inline (`code`) | its `src` / its code |
+
+`styles` holds CSS **bodies**; a stylesheet that has to be *fetched* is a `link` (`rel="stylesheet"`) on the `links` channel. The page's own override layer is
+`Page.stylesheets`, which is assembled at the end of `<body>` rather than in the head.
+
+```python
+head = self.S["head"]          # inside a component; Store._registry["head"] in a plugin hook
+
+head.add_meta("theme-color", "#1e1e2e")
+head.add_link("preconnect", "https://fonts.example", crossorigin="")
+head.add_style("@font-face { font-family: 'Inter'; src: url(/inter.woff2); }", media="print")
+head.add_script("/analytics.js", defer=True)
+head.add_script(code="console.log('inline')", type="module")
+```
+
+- Every method returns a disposer that takes the item back (`remove_meta` / `remove_link` / `remove_style` / `remove_script` remove by identity instead).
+- Items are plain dicts, so they serialize and hydrate like any other store state — a style or script contributed on the server is in the client's `$head` too.
+- An attribute the loop cannot render is refused at the call site (`add_link` rejects an unknown attribute), because a link that reaches the state but not the page is worse than an error.
+- `$head` is contributed **per request**: the store registry is cleared between requests, so anything derived from request state must be re-derived in `apply_request` — which is how `$theme` keeps `theme-color` in step with the user's cookie.
+
+Per-route tags that never change (`description`, `og:*`, `http-equiv`) are simpler authored in a `Page` subclass's template, where they cost no state.
+
 > [!NOTE]
 > **Online vs. offline PyScript.** `Page` and `include_page()` default `pyscript_src` to `/pyscript`, which `app.bootstrap()` mounts with the offline PyScript bundle shipped inside `basis/static/pyscript`. However, the `@app.page` decorator overrides this default and points `pyscript_src` at the **online** PyScript CDN release (`https://pyscript.net/releases/2026.3.1`) unless you pass `pyscript_src` explicitly. If you want offline serving with `@app.page`, pass `pyscript_src="/pyscript"`.
 
@@ -101,12 +138,7 @@ box (see `ROADMAP-MOBILE.md` M1.1 / `MOBILE-M1.1-PLAN.md`):
   page head `<meta for>` loop (kept alive by whole-page hydration) renders it
   live. Themes declare it with `theme_color_light` / `theme_color_dark` on
   their `ThemeDefinition`.
-- **Head links** — `$head.links` is the sibling channel for `<link>` tags a
-  plugin owns (an installable app's `manifest` / icons); contribute with
-  `$head.add_link(...)` and the head `<link for>` loop renders it. `$head.metas`
-  and `$head.links` are the two document-level head channels; per-route tags
-  (including `property`/`http-equiv` metas) belong in a `Page` subclass's
-  template.
+- **Head channels** — `$head` is the document-level channel for head content a plugin owns: `<meta>` (`add_meta`), `<link>` (`add_link`), inline `<style>` (`add_style`) and `<script>` (`add_script`), each rendered by its own keyed head loop. An installable app's `manifest` / icons ride through it, and so does `theme-color`. See [Head meta, links, styles and scripts](#head-meta-links-styles-and-scripts).
 - **Dynamic viewport units** — the fixed-viewport workbench frame
   (`AppShell` / a generated `.app-container`) uses `height: 100dvh` with a
   `100vh` fallback; scroll surfaces use `overscroll-behavior: contain` while
@@ -181,13 +213,17 @@ class HomePage(Page):
     stylesheets = ("/static/app.css",)   # linked after the component styles
 ```
 
-If you need to inject other `<head>` elements, subclass `Page` and add them by appending to the document tree inside an overridden method. The `head()` method exists on `Page` as a placeholder but is not currently consumed by the renderer — direct DOM manipulation on the page instance is the reliable approach for now.
+If you need to inject other `<head>` elements, contribute them to the `$head` store (see [Head meta, links, styles and scripts](#head-meta-links-styles-and-scripts)) — that is what it exists for, and it covers metas, links, inline styles and scripts. A tag that is fixed for the route can also be authored in a `Page` subclass's own template, whose `<head>` is a live, hydrating region.
 
 ### The canonical render path
 
-Every page served by Basis funnels through a **single server-side code path**: `Page.render(request, ...)`, which assembles the full HTML document (shell, `#basis-initial-state`, the per-page PyScript config URL, stylesheets).
+Every page served by Basis funnels through one server-side code path. `render_page(page_cls, request, ...)` dispatches on the page **class** to one of three private engines, all of which end in the page's own `_render` (the single document-assembly funnel):
 
-The **blessed serving entry** is `PageResponse.from_page(page_cls, request, ...)` → `render_page(page_cls, request, ...)` — `render_page` resolves `render_mode` and dispatches to the private `_render_page_ssr` / `_render_page_csr` engines, both ending in `Page.render`. `@app.serve`, `@app.page` and `app.include_page` are the blessed route decorators over it. **For a hand-rolled FastAPI endpoint, prefer `return await PageResponse.from_page(HomePage, request)` over rendering the shell manually.**
+- `_render_page_static` — a `StaticPage`: the same stores, request hooks and server-side mount as SSR, with nothing serialized and nothing stamped;
+- `_render_page_ssr` — server-renders the page *and* its root component (`server_load`, hydration ids, serialized initial state);
+- `_render_page_csr` — the client-rendered shell plus the serialized initial state.
+
+The **blessed serving entry** is `PageResponse.from_page(page_cls, request, ...)` → `render_page(...)`; `@app.serve`, `@app.page` and `app.include_page` are route decorators over it. **For a hand-rolled FastAPI endpoint, prefer `return await PageResponse.from_page(HomePage, request)` over rendering the shell manually.**
 
 > [!WARNING] Legacy / advanced render entry points (candidates for deprecation)
 >

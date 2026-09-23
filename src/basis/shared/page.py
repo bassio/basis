@@ -207,14 +207,125 @@ def _replace_comment_anchors(html_root, anchor_data, elements):
     return bool(targets)
 
 
-class Page(Component):
+_PAGE_DOCUMENT = """
+<html>
+    <head>
+
+        <meta charset="UTF-8" />
+        
+        <meta name="viewport" content="{viewport}" />
+        <!-- iOS standalone meta -->
+        <meta for="m" in="{apple_meta_items()}" key="key" name="{m['name']}" content="{m['content']}" />
+        
+        <meta name="basis-render-mode" content="{render_mode}" />
+        <meta name="basis-dev-mode" content="{basis_dev_mode}" />
+        
+        <!-- document metas ($head.metas) -->
+        <meta for="m" in="{$head.metas}" key="key" name="{m['name']}" content="{m['content']}" />
+
+        <title>{title}</title>
+
+        <!-- document links ($head.links) -->
+        <link for="l" in="{$head.links}" key="key" rel="{l['rel']}" href="{l['href']}" type="{l['type']}" sizes="{l['sizes']}" as="{l['as']}" media="{l['media']}" crossorigin="{l['crossorigin']}" />
+
+        <!-- document styles ($head.styles) -->
+        <style for="s" in="{$head.styles}" key="key" media="{s['media']}" text-content="{s['css']}"></style>
+
+        <!-- document scripts ($head.scripts) -->
+        <script for="s" in="{$head.scripts}" key="key" src="{s['src']}" type="{s['type']}" defer="{s['defer']}" async="{s['async']}" text-content="{s['code']}"></script>
+
+        <!-- PyScript bundle -->
+        <link rel="stylesheet" href="{pyscript_src}/core.css" />
+        <script type="module" src="{pyscript_src}/core.js" onload="window.pyscript = this.module;"></script>
+        
+        <script src="/basis/client/component.js"></script>
+
+        <!-- PyScript entry point: mounts/hydrates the application -->
+        <script type="py" src="{entry_module}" config="{pyscript_json_url}"></script>
+
+        <!-- Initial store state -->
+        <script id="basis-initial-state" type="application/json">
+            {initial_state_json}
+        </script>
+
+        <style id="basis-viewport" text-content="{viewport_base_css}"></style>
+
+        <!-- component styles -->
+        <style text-content="{item['css']}" for="item" in="{component_style_items()}" key="uid" data-component-class="{item['name']}" data-extra-style="{item['extra']}"></style>
+
+    </head>
+    <body>
+        <!-- basis:app-root -->
+        <!-- basis:user-stylesheets -->
+    </body>
+</html>
+"""
+
+#: The client's share of the document: the metas that tell it which pipeline to use, and
+#: the runtime it boots from. Named so "what the client owns" is one place — a
+#: :class:`StaticPage` is ``_PAGE_DOCUMENT`` minus these two blocks (see
+#: :data:`_STATIC_DOCUMENT`), and ``tests/test_static_page.py`` asserts each occurs
+#: exactly once in the page document.
+_CLIENT_HEAD = """        <meta name="basis-render-mode" content="{render_mode}" />
+        <meta name="basis-dev-mode" content="{basis_dev_mode}" />
+"""
+
+_CLIENT_RUNTIME = """        <!-- PyScript bundle -->
+        <link rel="stylesheet" href="{pyscript_src}/core.css" />
+        <script type="module" src="{pyscript_src}/core.js" onload="window.pyscript = this.module;"></script>
+        
+        <script src="/basis/client/component.js"></script>
+
+        <!-- PyScript entry point: mounts/hydrates the application -->
+        <script type="py" src="{entry_module}" config="{pyscript_json_url}"></script>
+
+        <!-- Initial store state -->
+        <script id="basis-initial-state" type="application/json">
+            {initial_state_json}
+        </script>
+"""
+
+_STATIC_DOCUMENT = _PAGE_DOCUMENT.replace(_CLIENT_HEAD, "", 1).replace(
+    _CLIENT_RUNTIME, "", 1
+)
+
+
+def refuse_static_render_mode(page_cls, render_mode) -> None:
+    """Raise when an explicit ``render_mode`` is asked of a page that has no client.
+
+    ``"ssr"``/``"csr"`` choose how a *client* is booted, so the argument is meaningless
+    for a :class:`StaticPage`. Refused where it is declared (``app.include_page``) and
+    again where it would be honoured (``render_page``), rather than quietly ignored.
+    """
+    if render_mode is None or getattr(page_cls, "hydrates", True):
+        return
+    raise ValueError(
+        f"{getattr(page_cls, '__name__', page_cls)} is a StaticPage: it renders "
+        f"server-side only, so render_mode={render_mode!r} has nothing to select. Drop "
+        f"the render_mode argument, or subclass Page to boot a client."
+    )
+
+
+class StaticPage(Component):
+    """A document the client never boots — the base of :class:`Page`.
+
+    It renders the whole page chrome (doctype, title, viewport policy, the ``$head``
+    loops, the iOS metas, component styles, user stylesheets) around a server-rendered
+    component tree, and it is served exactly as assembled: no PyScript, no
+    ``#basis-initial-state``, no hydration stamps, no binding that updates after load.
+    *Static* means **no client**, not "no data": the page still collects its stores, runs
+    their ``apply_request`` hooks, and runs ``server_load`` on the server.
+
+    Reach for it when the document has to hold up without a runtime — an offline
+    fallback, a terms page, an error page — and for :class:`Page` otherwise. Its
+    ``hydrates = False`` is what the render engine dispatches on: nothing is serialized
+    and no hydration surface is stamped.
+    """
+
+    hydrates = False
+
     doctype: DocumentType = DocumentType("html")
     title: str = "Basis App"
-    entry_module: str = "/basis/client/entrypoint.py"
-    pyscript_src: str = "/pyscript"
-    pyscript_json_url: str = "/pyscript.json"
-    initial_state_json: str = "{}"
-    render_mode: str = "ssr"
     # Mobile viewport policy. The default is the
     # mobile-correct layout viewport: ``viewport-fit=cover`` opts into
     # ``env(safe-area-inset-*)`` on notched devices, and
@@ -225,39 +336,25 @@ class Page(Component):
         "width=device-width, initial-scale=1.0, viewport-fit=cover, "
         "interactive-widget=resizes-content"
     )
-    #: The framework mobile viewport base CSS rendered into
-    #: ``<style id="basis-viewport">`` in the base template's ``<head>``. A data
-    #: field so it can be overridden per-page; defaults to ``_VIEWPORT_BASE_CSS``.
     viewport_base_css: str = _VIEWPORT_BASE_CSS
-    #: Dev-mode marker — ``True`` only when the HMR dev watcher runs. Bound into
-    #: the always-present in-tree ``<meta name="basis-dev-mode"
-    #: content="{basis_dev_mode}">`` head meta as an ATTRIBUTE binding (the
-    #: ``content`` value carries the mode, ``True``/``False``), so no
-    #: ``if``-binding anchor is needed in ``<head>``.
-    basis_dev_mode: bool = False
-    #: iOS standalone meta: the three ``apple-mobile-web-app-*`` tags are
-    #: emitted into the ``<head>`` when on.
-    #: Default-on is harmless (they are inert until the page is added to the
-    #: home screen, and they are what make an installed app fullscreen with a
-    #: sane status bar); set ``False`` to omit all three.
     apple_web_app: bool = True
-    #: ``apple-mobile-web-app-status-bar-style``. ``black-translucent`` (status
-    #: bar overlays the app edge-to-edge) rides on the D6 safe-area guard the
-    #: framework shell ships (title/status-bar ``env()`` padding); a
-    #: document-flow site that does not pad its top edge should set this to
-    #: ``"default"`` (opaque status bar) instead.
-    apple_status_bar_style: str = "black-translucent"
+    apple_status_bar_style: str = "black-translucent" #: site that does not pad its top edge should set this to ``"default"``
+
     root_component = None
     stores = []
     #: User stylesheet URLs, assembled last in ``<body>`` — after the app and the
     #: ``<head>`` component styles — so they load later and win the cascade at
     #: equal specificity (the "your CSS comes later" rule). The base template
     #: carries a ``<!-- basis:user-stylesheets -->`` anchor there and
-    #: :meth:`Page._render` replaces it with these ``<link rel="stylesheet">``.
-    #: This is the framework-native home for a user override stylesheet (e.g. a
-    #: generated ``static/app.css``); a ``<link>`` loop would be cleaner but
-    #: races the app at the same trailing body slot.
+    #: :meth:`StaticPage._assemble_chrome` replaces it with these
+    #: ``<link rel="stylesheet">``. This is the framework-native home for a user
+    #: override stylesheet (e.g. a generated ``static/app.css``); a ``<link>`` loop
+    #: would be cleaner but races the app at the same trailing body slot.
     stylesheets: tuple[str, ...] = ()
+
+    @classmethod
+    def template(cls):
+        return _STATIC_DOCUMENT
 
     def component_style_items(self):
         """Ordered component style items for the in-tree ``<head>``
@@ -330,26 +427,23 @@ class Page(Component):
         ]
 
     @classmethod
-    def _load(cls, request=None):
-        """Mount this Page class into a fresh ``<html>`` shell and return the
-        instance. Internal — the SSR/CSR engines call it; the blessed serving
-        API is ``PageResponse.from_page`` / ``render_page``."""
-        # Instantiate the page's stores — its explicit ``stores`` subset, or all
-        # auto-discovered stores when empty — so they exist before the server
-        # renders and serialize cleanly into the initial state. Registry-guarded
-        # and idempotent.
-        store_refs = getattr(cls, "stores", None) or Store.all_names()
-        for name in _page_store_names(store_refs):
-            if name not in Store._registry:
-                store_instance = Store.resolve(name)
-                if name == "router" and request is not None and hasattr(request, "url"):
-                    store_instance.current_path = request.url.path
+    def _ensure_stores(cls, request=None):
+        """Instantiate this page's stores — its explicit ``stores`` subset, or all
+        auto-discovered stores when empty — so they exist before the server renders.
+        Registry-guarded and idempotent."""
         # Framework control-plane stores ($head / $device / $network) are
         # guaranteed to exist at mount, like the plugin registry. $head's loops
         # always bind it (empty lists render nothing); $device / $network carry
         # neutral defaults that client probes overwrite after mount.
         # FRAMEWORK_STORE_NAMES also serializes them on strict ``Page.stores``
         # pages.
+        #
+        # They are created BEFORE the page's own names, and that order matters:
+        # they come from their ``ensure_*`` factory rather than a blueprint, so a
+        # page whose ``stores`` names one would otherwise materialize a plain
+        # ``Store`` placeholder under that name, which ``ensure_*`` then returns
+        # as-is — silently dropping the real class's contributing API
+        # (``$head.add_link`` and friends).
         from basis.shared.head import ensure_head_store
         from basis.shared.device import ensure_device_store
         from basis.shared.network import ensure_network_store
@@ -357,27 +451,40 @@ class Page(Component):
         ensure_head_store()
         ensure_device_store()
         ensure_network_store()
-        container = Element("html", {}, list())
-        
-        attributes = {"title": cls.title,
-                      "entry_module": cls.entry_module,
-                      "pyscript_src": cls.pyscript_src,
-                      "pyscript_json_url": cls.pyscript_json_url,
-                      "initial_state_json": cls.initial_state_json,
-                      "render_mode": cls.render_mode,
-                      "viewport": cls.viewport,
-                      # Dev-mode marker: bound at MOUNT time (True only when the
-                      # HMR dev watcher runs); the head meta's
-                      # content="{basis_dev_mode}" attribute binding reads it.
-                      "basis_dev_mode": bool(
-                          request is not None
-                          and getattr(getattr(request, "app", None),
-                                      "_start_hmr_watcher", False)
-                      )}
 
-        page_instance = cls.mount(container, replace=False, **attributes)
+        store_refs = getattr(cls, "stores", None) or Store.all_names()
+        for name in _page_store_names(store_refs):
+            if name not in Store._registry:
+                store_instance = Store.resolve(name)
+                if name == "router" and request is not None and hasattr(request, "url"):
+                    store_instance.current_path = request.url.path
+
+    @classmethod
+    def _mount_attributes(cls, request) -> dict:
+        """The template data bound into the page instance at mount (``_load``).
+
+        Values the template reads from the class instead (``viewport_base_css``,
+        ``stylesheets``) stay class attributes: mount kwargs are scanned as
+        creation-time expressions, so a CSS blob is a template to that scanner.
+        :class:`Page` extends this with the fields only its template reads.
+        """
+        return {
+            "title": cls.title,
+            "viewport": cls.viewport,
+        }
+
+    @classmethod
+    def _load(cls, request=None):
+        """Mount this Page class into a fresh ``<html>`` shell and return the
+        instance. Internal — the render engines call it; the blessed serving API is
+        ``PageResponse.from_page`` / ``render_page``."""
+        cls._ensure_stores(request=request)
+        container = Element("html", {}, list())
+        page_instance = cls.mount(
+            container, replace=False, **cls._mount_attributes(request)
+        )
         page_instance.__element__ = container.children[0]
-        
+
         return page_instance
 
     @classmethod
@@ -486,51 +593,76 @@ class Page(Component):
                 pass
         return app
 
-    def template(self):
+    def _assemble_chrome(self):
+        """Replace the template's assembly-time anchors with their chrome — today the
+        user stylesheet ``<link>``s at the very end of ``<body>``, so they load after the
+        app and the ``<head>`` component styles."""
+        _replace_comment_anchors(
+            self.__element__,
+            "basis:user-stylesheets",
+            [
+                Element("link", {"rel": "stylesheet", "href": href}, [])
+                for href in (getattr(self.__class__, "stylesheets", ()) or ())
+            ],
+        )
+
+    def _serialize_document(self) -> str:
+        """Serialize the assembled tree as the served document."""
+        return self.doctype.__html__() + "\n" + self.__element__.outerHTML
+
+    def _render(self, request):
+        """Assemble the full HTML document and return it.
+
+        Internal — the single server-side page-render funnel both engines end in;
+        serve pages via ``PageResponse.from_page()`` / ``render_page()`` instead. A
+        static page has no state to serialize and no hydration surface to stamp, so
+        :meth:`Page._render` adds both around this one.
         """
-<html>
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="{viewport}" />
-        <meta name="basis-render-mode" content="{render_mode}" />
-        <meta name="basis-dev-mode" content="{basis_dev_mode}" />
+        self._assemble_chrome()
+        return self._serialize_document()
 
-        <title>{title}</title>
 
-        <!-- PyScript bundle -->
-        <link rel="stylesheet" href="{pyscript_src}/core.css" />
-        <script type="module" src="{pyscript_src}/core.js" onload="window.pyscript = this.module;"></script>
-        
-        <script src="/basis/client/component.js"></script>
+class Page(StaticPage):
+    """A document that boots a Basis client — :class:`StaticPage` plus the runtime.
 
-        <!-- PyScript entry point: mounts/hydrates the application -->
-        <script type="py" src="{entry_module}" config="{pyscript_json_url}"></script>
+    The client half is exactly what :data:`_CLIENT_HEAD` and :data:`_CLIENT_RUNTIME`
+    add to the shared document, plus the state and hydration stamping the engine does
+    around :meth:`_render`.
+    """
 
-        <!-- Initial store state -->
-        <script id="basis-initial-state" type="application/json">
-            {initial_state_json}
-        </script>
+    hydrates = True
 
-        <style id="basis-viewport" text-content="{viewport_base_css}"></style>
+    entry_module: str = "/basis/client/entrypoint.py"
+    pyscript_src: str = "/pyscript"
+    pyscript_json_url: str = "/pyscript.json"
+    initial_state_json: str = "{}"
+    render_mode: str = "ssr"
+    basis_dev_mode: bool = False
 
-        <!-- component styles -->
-        <style text-content="{item['css']}" for="item" in="{component_style_items()}" key="uid" data-component-class="{item['name']}" data-extra-style="{item['extra']}"></style>
+    @classmethod
+    def template(cls):
+        return _PAGE_DOCUMENT
 
-        <!-- document metas ($head.metas) -->
-        <meta for="m" in="{$head.metas}" key="key" name="{m['name']}" content="{m['content']}" />
-
-        <!-- document links ($head.links) -->
-        <link for="l" in="{$head.links}" key="key" rel="{l['rel']}" href="{l['href']}" type="{l['type']}" sizes="{l['sizes']}" as="{l['as']}" media="{l['media']}" crossorigin="{l['crossorigin']}" />
-
-        <!-- iOS standalone meta -->
-        <meta for="m" in="{apple_meta_items()}" key="key" name="{m['name']}" content="{m['content']}" />
-    </head>
-    <body>
-        <!-- basis:app-root -->
-        <!-- basis:user-stylesheets -->
-    </body>
-</html>
-"""
+    @classmethod
+    def _mount_attributes(cls, request) -> dict:
+        """Chrome plus the fields this class's template binds for the client."""
+        return {
+            **super()._mount_attributes(request),
+            "entry_module": cls.entry_module,
+            "pyscript_src": cls.pyscript_src,
+            "pyscript_json_url": cls.pyscript_json_url,
+            "initial_state_json": cls.initial_state_json,
+            "render_mode": cls.render_mode,
+            # Dev-mode marker: bound at MOUNT time (True only when the HMR dev
+            # watcher runs); the head meta's content="{basis_dev_mode}" attribute
+            # binding reads it.
+            "basis_dev_mode": bool(
+                request is not None
+                and getattr(
+                    getattr(request, "app", None), "_start_hmr_watcher", False
+                )
+            ),
+        }
 
     @classmethod
     def _initialize_blueprint(cls):
@@ -689,21 +821,10 @@ class Page(Component):
         if initial_state_json is not None:
             self.initial_state_json = initial_state_json
 
-        # Assembly-time chrome: the viewport <style>, the component-style loop
-        # and the dev-mode meta are owned reactive nodes of the Page template.
-        # Only the user stylesheet <link>s are assembled here, by replacing a
-        # trailing body comment anchor. The client pre-mount plan does not live
-        # in the DOM — it is served per-page via /pyscript.json?url=<route>
-        # (``basis.bootstrap``, see basis/server/bootstrap.py::page_bootstrap
-        # and client/entrypoint.py).
-        _replace_comment_anchors(
-            self.__element__,
-            "basis:user-stylesheets",
-            [
-                Element("link", {"rel": "stylesheet", "href": href}, [])
-                for href in (getattr(self.__class__, "stylesheets", ()) or ())
-            ],
-        )
+        # The client pre-mount plan does not live in the DOM — it is served per-page
+        # via /pyscript.json?url=<route> (``basis.bootstrap``, see
+        # basis/server/bootstrap.py::page_bootstrap and client/entrypoint.py).
+        self._assemble_chrome()
 
         # When the SSR engine asks, stamp the Page's own hydration surface over
         # the fully assembled tree — the <head> region (h:) and the <body> region
@@ -714,7 +835,7 @@ class Page(Component):
 
             apply_hydration_to_page(self, body_app=body_app)
 
-        return self.doctype.__html__() + "\n" + self.__element__.outerHTML
+        return self._serialize_document()
 
 
 def _synthesize_page(
@@ -750,6 +871,13 @@ def _synthesize_page(
             f"{base.__name__} already declares root_component/stores — it's a complete "
             f"page. Register it with app.include_page(path, page_cls={base.__name__}) "
             f"instead of decorating a component with it."
+        )
+
+    if not getattr(base, "hydrates", True):
+        raise ValueError(
+            f"{base.__name__} has no client, so a component decorated with @app.page has "
+            f"nothing to boot from. Register the page with "
+            f"app.include_page(path, page_cls=...) instead."
         )
 
     derived = type(

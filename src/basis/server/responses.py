@@ -45,7 +45,9 @@ class PageResponse(HTMLResponse):
         ``render_mode`` selects the serving mode (see ``render_page``): ``"ssr"``
         (default) renders the page and its root component server-side; ``"csr"``
         sends the client-rendered shell plus the serialized initial state and
-        lets the unified client entrypoint mount the page.
+        lets the unified client entrypoint mount the page. A ``StaticPage``
+        subclass is served as a document that boots no client, and refuses
+        ``render_mode`` rather than ignoring it.
         """
         from basis.server.render import render_page
 

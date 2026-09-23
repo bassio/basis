@@ -22,7 +22,7 @@ class ThemeProvider(Component):
 
     @scoped
     def style(self):
-        return """
+        """
         :scope {
             display: contents;
         }

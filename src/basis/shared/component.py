@@ -12,12 +12,12 @@ if IS_CLIENT:
 
     class Basis(object):
         def page(self, component, **kwargs):
-            # A real Page subclass never reaches this shim on the client (it
-            # boots through the manifest's basis.bootstrap.entrypoint); if one
-            # does, leave it alone rather than annotate it.
-            from basis.shared.page import Page as _PageBase
+            # A real page subclass never reaches this shim on the client (it boots
+            # through the manifest's basis.bootstrap.entrypoint); if one does, leave it
+            # alone rather than annotate it.
+            from basis.shared.page import StaticPage as _StaticPageBase
 
-            if isinstance(component, type) and issubclass(component, _PageBase):
+            if isinstance(component, type) and issubclass(component, _StaticPageBase):
                 return component
             # Annotate the decorated root component with its synthesized-shell
             # recipe (the same decoration inputs the server used). This follows

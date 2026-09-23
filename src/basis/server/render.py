@@ -3,16 +3,19 @@ basis/server/render.py
 ----------------------
 Server-side page rendering pipeline (SSR + CSR) for Basis + FastAPI.
 
-The single canonical entry is :func:`render_page`, which resolves
-``render_mode`` and dispatches to one of the two private engines:
+The single canonical entry is :func:`render_page`, which dispatches on the page
+class to one of three private engines:
 
+* ``_render_page_static`` — renders a page that never boots a client (a
+  ``StaticPage``): the same stores, request hooks and server-side mount as SSR,
+  with nothing serialized and nothing stamped.
 * ``_render_page_ssr`` — server-renders the page *and* its root component
   (server_load, hydration IDs, serialized initial state), then calls
   ``Page._render``.
 * ``_render_page_csr`` — sends the client-rendered shell plus the serialized
   initial state; the unified client entrypoint mounts the root component.
 
-Both engines end in ``Page._render`` (→ shell assembly), the single
+Every engine ends in ``Page._render`` (→ shell assembly), the single
 server-side funnel every rendered page passes through. The blessed public
 serving API is
 ``PageResponse.from_page`` (``basis.server.responses``); ``render_page`` is the
@@ -197,13 +200,13 @@ async def render_page(
 ) -> str:
     """Render *page_cls* to a full HTML document.
 
-    This is the single canonical server-side render entry. ``render_mode``
-    selects the pipeline: ``"ssr"`` (default) server-renders the page and its
-    root component; ``"csr"`` sends the client-rendered shell + serialized
-    initial state. Resolution order: the ``render_mode`` argument → an explicit
-    ``Page.render_mode`` class override → ``"ssr"``.
+    The page class selects the pipeline: a ``StaticPage`` subclass (``hydrates =
+    False``) renders server-side only and refuses an explicit ``render_mode``; a
+    ``Page`` subclass resolves ``render_mode`` — the argument → an explicit
+    ``Page.render_mode`` class override → ``"ssr"`` — and renders through the SSR
+    or CSR engine.
 
-    ``root_component`` is read from ``page_cls`` (``None`` = static page); it may
+    ``root_component`` is read from ``page_cls`` (``None`` = no reactive root); it may
     also be passed explicitly to ``_render_page_ssr`` as an escape hatch.
 
     Prefer ``PageResponse.from_page`` for FastAPI endpoints — it wraps this in a
@@ -213,6 +216,16 @@ async def render_page(
     # store hooks, components, their helpers — via ``current_request()``.
     token = request_var.set(request) if request is not None else None
     try:
+        if not getattr(page_cls, "hydrates", True):
+            from basis.shared.page import refuse_static_render_mode
+
+            refuse_static_render_mode(page_cls, render_mode)
+            # The request's database session is bound here for the static engine too:
+            # ``apply_request`` hooks and ``server_load`` query it.
+            async with RequestDBSession(request):
+                return await _render_page_static(
+                    request, page_cls, global_stores=global_stores
+                )
         mode = _resolve_render_mode(page_cls, render_mode)
         if mode not in ("ssr", "csr"):
             raise ValueError(f"render_mode must be 'ssr' or 'csr', got {mode!r}")
@@ -226,6 +239,64 @@ async def render_page(
     finally:
         if token is not None:
             request_var.reset(token)
+
+
+async def _render_page_static(
+    request: Request,
+    page_cls=None,
+    *,
+    global_stores: list | None = None,
+) -> str:
+    """Render a page that never boots a client (a ``StaticPage``).
+
+    The same request pipeline as the SSR engine — the per-request store registry, the
+    ``apply_request`` hooks, the declarative root mount and its ``server_load`` — with
+    the two client-only steps dropped: nothing is serialized into an initial state and
+    no hydration surface is stamped. The document therefore carries exactly what the
+    server resolved while rendering it.
+
+    Internal — use ``render_page`` / ``PageResponse.from_page``.
+    """
+    from basis.shared.router import Route
+
+    root_component = getattr(page_cls, "root_component", None)
+
+    # Reset global registries to isolate per-request SSR state (see _render_page_ssr).
+    Store._registry.clear()
+    Store._pending_subscriptions.clear()
+    BaseComponent._instance_registry.clear()
+    BaseComponent._pending_subscriptions.clear()
+    Route._route_registry.clear()
+
+    page_instance = page_cls._load(request=request)
+
+    # Keep the router's current path in sync with the request URL.
+    router_store = Store._registry.get("router")
+    if router_store is not None and hasattr(request, "url"):
+        router_store.current_path = request.url.path
+
+    all_stores = _collect_stores(request, page_cls, root_component, global_stores)
+    await _run_store_request_hooks(request, all_stores.values())
+
+    all_components = []
+    app = page_instance.mount_root_app() if root_component is not None else None
+    if app is not None:
+        all_components.append(app)
+        for child_binding in app.get_child_bindings(recursive=True):
+            all_components.append(child_binding.childinstance)
+        for provider in getattr(app, "_mounted_providers", ()):
+            if provider not in all_components:
+                all_components.append(provider)
+
+    preload_tasks = [
+        comp.server_load()
+        for comp in all_components
+        if asyncio.iscoroutinefunction(getattr(comp, "server_load", None))
+    ]
+    if preload_tasks:
+        await asyncio.gather(*preload_tasks)
+
+    return page_instance._render(request)
 
 
 async def _render_page_ssr(

@@ -212,16 +212,18 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
         name: str | None = None,
     ):
         """
-        Register a GET route that serves a Page at ``path``.
+        Register a GET route that serves a page at ``path``.
 
-        The Page is a complete recipe — ``root_component``, ``stores``, ``title``,
-        ``render_mode`` and PyScript config all live on the class.
-        ``root_component`` may be ``None`` for a static page (no reactive root).
+        The page is a complete recipe — ``root_component``, ``stores``, ``title`` and
+        (for a ``Page``) ``render_mode`` / PyScript config all live on the class. A
+        ``StaticPage`` subclass is served as a document that never boots a client;
+        ``root_component`` may be ``None`` when there is no reactive root.
 
         ``render_mode`` selects how this route serves the page: ``"ssr"``
         (default) server-renders it; ``"csr"`` sends the client-rendered shell
         plus the serialized initial state. When unset, an explicit
-        ``Page.render_mode`` class override is honored, else ``"ssr"``.
+        ``Page.render_mode`` class override is honored, else ``"ssr"``. A static
+        page has no client, so it refuses the argument.
 
         Usable as a method (``app.include_page(path, page_cls=MyPage)``) or as a
         decorator on a Page subclass (``@app.include_page(path)``). Returns the
@@ -232,10 +234,10 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
         path:
             The URL path, e.g. "/" or "/admin".
         page_cls:
-            The Page subclass to serve (required; carries root, stores, title).
+            The page subclass to serve (required; carries root, stores, title).
         render_mode:
             How to serve the page ("ssr" or "csr"); overrides the page's own
-            ``render_mode`` class attribute.
+            ``render_mode`` class attribute. Client-booting pages only.
         name:
             Optional route name.
         """
@@ -247,18 +249,24 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
                 )
             return _register_page
 
-        from basis.shared.page import Page
+        from basis.shared.page import StaticPage, refuse_static_render_mode
 
-        if not (isinstance(page_cls, type) and issubclass(page_cls, Page)):
+        if not (isinstance(page_cls, type) and issubclass(page_cls, StaticPage)):
             raise TypeError(
                 f"include_page(path={path!r}) requires a Page subclass, got "
                 f"{page_cls!r}. To expose a root Component as a page, use "
                 f"@app.page(path=...) or @app.serve(path=...) instead."
             )
 
+        # A static page has no client, so there is no pipeline for render_mode to
+        # select — refused here, where the mistake is written.
+        refuse_static_render_mode(page_cls, render_mode)
+
         # Route → page registry: the per-page /pyscript.json manifest resolves
-        # ?url=<path> against this (see basis/server/bootstrap.py::page_bootstrap).
-        self._pages[path] = page_cls
+        # ?url=<path> against this (see basis/server/bootstrap.py::page_bootstrap), so
+        # only a page that boots a client belongs in it.
+        if getattr(page_cls, "hydrates", True):
+            self._pages[path] = page_cls
 
         from basis.server.responses import PageResponse
 
@@ -298,9 +306,9 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
         page-level ``stores`` are not supported there).
         """
         def _decorate(page_cls):
-            from basis.shared.page import Page as PageBase
+            from basis.shared.page import StaticPage
 
-            if isinstance(page_cls, type) and issubclass(page_cls, PageBase):
+            if isinstance(page_cls, type) and issubclass(page_cls, StaticPage):
                 self.bootstrap()
                 return self.include_page(
                     path, page_cls=page_cls, render_mode=render_mode, name=name
@@ -352,10 +360,10 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
                 name=name,
             )
 
-        from basis.shared.page import _synthesize_page, Page as PageBase
+        from basis.shared.page import _synthesize_page, StaticPage
 
         # Contract: @app.page decorates a root Component, not a Page shell.
-        if isinstance(component_cls, type) and issubclass(component_cls, PageBase):
+        if isinstance(component_cls, type) and issubclass(component_cls, StaticPage):
             raise TypeError(
                 f"{component_cls.__name__} is a Page, not a root component. "
                 "A Page is the document shell.\n"

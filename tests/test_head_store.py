@@ -215,3 +215,23 @@ def test_subclass_seeds_in_init_survive_reinstantiate():
         "name": "theme-color",
         "content": "#1e1e2e",
     }
+
+
+def test_a_page_naming_head_in_its_stores_keeps_the_real_store():
+    """``$head`` is created by its own ``ensure_*`` factory, not from a blueprint, and
+    ``ensure_store`` returns whatever is registered under the name. So a page whose
+    ``stores`` names it has to find the real class: a plain ``Store`` placeholder would
+    silently lose the whole contributing API (``add_link`` and friends) the head loops
+    render."""
+    from basis.shared.page import Page
+
+    class HeadNamedPage(Page):
+        stores = ["head"]
+
+    page = HeadNamedPage._load()
+
+    head = Store._registry["head"]
+    assert isinstance(head, HeadStore)
+    # The page's own head loop reads that very instance, contribution included.
+    head.add_link("manifest", "/manifest.webmanifest")
+    assert 'rel="manifest" href="/manifest.webmanifest"' in page.__element__.outerHTML

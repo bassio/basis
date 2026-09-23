@@ -471,6 +471,34 @@ class VFSRegistry:
                     f"and IDEs resolve the same import names."
                 )
 
+    def served_urls(self, base_url: str) -> list[str]:
+        """Every URL this app serves the client's code at, in manifest order.
+
+        ``files`` keys are templated twice over: ``{DOMAIN}`` is the base URL, and each
+        component/plugin mount contributes its own ``{COMPONENTS_DIR_i}`` label (with a
+        label entry mapping the label to the mount path). :meth:`render_manifest` passes
+        the labels through — the runtime resolves them — but a consumer that needs URLs it
+        can *fetch* (a service worker precache, a CSP, a benchmark) cannot use a label, so
+        this resolves both. The label/domain entries themselves are definitions, not files,
+        and are skipped.
+        """
+        labels = {
+            f"{{COMPONENTS_DIR_{index}}}": mount
+            for mount, (index, _directory) in self._dirs.items()
+        }
+        definitions = {"{DOMAIN}", *labels}
+
+        urls: list[str] = []
+        for key in self.files:
+            if key in definitions:
+                continue
+            url = key.replace("{DOMAIN}", base_url)
+            for label, mount in labels.items():
+                url = url.replace(label, base_url + mount)
+            if url.startswith(base_url + "/") and url not in urls:
+                urls.append(url)
+        return urls
+
     def render_manifest(self, base_url: str, bootstrap: dict | None = None, js_modules: dict | None = None) -> dict:
         """Render the ``/pyscript.json`` payload for *base_url* (``{DOMAIN}`` → URL).
 

@@ -24,6 +24,7 @@ basis = "basis.cli.main:main"
 [project.entry-points."basis.plugins"]
 ambient = "basis.plugins.ambient.theme:plugin"
 auth = "basis.plugins.auth.plugin:plugin"
+mobile = "basis.plugins.mobile.plugin:plugin"
 regions = "basis.plugins.regions.plugin:plugin"
 shell = "basis.plugins.shell.plugin:plugin"
 theme = "basis.plugins.theme.plugin:plugin"

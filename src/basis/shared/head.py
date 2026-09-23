@@ -1,11 +1,16 @@
 """The ``$head`` document-head store.
 
-Two keyed item lists, one head loop each in the base ``Page.template()``:
+Four keyed item lists, one head loop each in the base ``Page`` template — the four
+head tag families, so a contributor never has to reach for a template to put
+something in ``<head>``:
 
 - ``metas`` — ``<meta name=... content=...>`` tags that must react to state or be
   contributed by a plugin/component — today ``theme-color`` (follows ``$theme``);
 - ``links`` — ``<link>`` tags: ``manifest``/icons today, ``preconnect``/``preload``
-  whenever a component needs them.
+  whenever a component needs them;
+- ``styles`` — inline ``<style>`` bodies: CSS a plugin owns that has no URL of its
+  own (a ``@font-face`` block, a print ``@media`` block);
+- ``scripts`` — ``<script>`` tags, external (``src``) or inline (``code``).
 
 The static per-page half needs no framework API: whole-page mount made a
 Page's own ``<head>`` a live template region, so per-route tags
@@ -53,7 +58,11 @@ back).
   render would silently vanish, so :meth:`HeadStore.add_link` rejects anything
   outside the set instead.
 
-``key`` is the dedup identity and doubles as the loop's reconciliation key.
+``key`` is the dedup identity and doubles as the loop's reconciliation key. Metas and
+links key on their ``(name)`` / ``(rel, href)`` identity; styles and scripts have no such
+handle, so they key on a digest of their content — the same string on the server, in
+``#basis-initial-state`` and in the browser, and short enough that a stylesheet does not
+repeat itself in a ``data-item-key`` attribute.
 
 Per-request SSR note (for contributors)
 --------------------------------------
@@ -66,6 +75,8 @@ on every store in the registry (see ``server/render.py`` / ``shared/page.py``),
 which recomputes the lists before the head loops' final paint and the
 initial-state serialization.
 """
+
+import hashlib
 
 from basis.shared.store import Store, ensure_store
 
@@ -80,6 +91,28 @@ def _meta_key(name: str) -> str:
     return f"name:{name}"
 
 
+def _content_key(prefix: str, *parts: str | None) -> str:
+    """The dedup / reconciliation key for a head item that has no identity of its own
+    (a style body, a script) — a digest of its content.
+
+    ``sha256`` rather than ``hash()``, which is randomized per process: the key must be
+    the same string on the server, in ``#basis-initial-state`` and in the browser. The
+    digest rather than the content keeps a large stylesheet out of the ``data-item-key``
+    attribute the loop stamps on every item.
+    """
+    payload = "\x00".join(part or "" for part in parts).encode("utf-8")
+    return f"{prefix}:{hashlib.sha256(payload).hexdigest()[:12]}"
+
+
+def _style_key(css: str, media: str | None) -> str:
+    """Two identical bodies under different ``media`` are different items."""
+    return _content_key("style", css, media)
+
+
+def _script_key(src: str | None, code: str | None) -> str:
+    return _content_key("script", src, code)
+
+
 def _link_key(rel: str, href: str) -> str:
     """The dedup / reconciliation key for a head link (``icon`` + ``/a.png`` →
     ``"icon:/a.png"``)."""
@@ -92,7 +125,7 @@ def ensure_head_store() -> "HeadStore":
     Mirrors ``ensure_plugin_registry``: called by the Page ``_load`` (server,
     per request — the registry is cleared between requests) and the client
     entrypoints so ``$head`` resolves on every page before the head loops
-    mount. Empty by default (``metas == []``/``links == []`` → nothing renders).
+    mount. Empty by default (every list empty → nothing renders).
     """
     return ensure_store("head", HeadStore)
 
@@ -100,14 +133,18 @@ def ensure_head_store() -> "HeadStore":
 class HeadStore(Store):
     """Document-level, reactive head store (registered under ``"head"``).
 
-    ``metas`` (``{"key", "name", "content"}``) and ``links``
-    (``{"key", "rel", "href", …}``) are ordered item lists. Mutations reassign the
-    list so the matching head loop's DAG edge fires — the trigger that re-renders it.
+    ``metas`` (``{"key", "name", "content"}``), ``links``
+    (``{"key", "rel", "href", …}``), ``styles`` (``{"key", "css", "media"}``) and
+    ``scripts`` (``{"key", "src", "code", "type", "defer", "async"}``) are ordered
+    item lists. Mutations reassign the list so the matching head loop's DAG edge fires —
+    the trigger that re-renders it.
 
     A contributor is any plugin/component that owns head content the *page* cannot
     author: ``$theme`` owns ``theme-color``, and ``links`` is the channel for a
     ``<link>`` whose ``rel``/``href`` only a plugin knows (a manifest, an icon set, a
-    preload).
+    preload). ``styles``/``scripts`` are for a body or a script URL the contributor
+    learns at request time; markup that is static per route belongs in the page template,
+    where it costs no state.
     """
 
     def __init__(self, name: str = "head"):
@@ -117,6 +154,8 @@ class HeadStore(Store):
         if not getattr(self, "_hydrated_from_ssr", False):
             self.__dict__["metas"] = []
             self.__dict__["links"] = []
+            self.__dict__["styles"] = []
+            self.__dict__["scripts"] = []
 
     # ── metas (name/content) ───────────────────────────────────────────────
 
@@ -199,6 +238,79 @@ class HeadStore(Store):
         if len(kept) != len(links):
             self.links = kept
 
+    # ── styles (inline CSS) ────────────────────────────────────────────────
+
+    def add_style(self, css: str, *, media: str | None = None) -> callable:
+        """Append an inline ``<style>`` body unless the same one is present.
+
+        ``media`` narrows it to a media query (``"print"``, ``"(prefers-color-scheme:
+        dark)"``); it is part of the item's identity, so the same CSS under two queries is
+        two items. Returns a disposer that removes it again.
+        """
+        key = _style_key(css, media)
+        styles = list(self.__dict__.get("styles") or [])
+        if any(it.get("key") == key for it in styles):
+            return lambda: None  # already present — nothing to do
+        styles.append({"key": key, "css": css, "media": media})
+        self.styles = styles
+        return lambda: self.remove_style(css, media=media)
+
+    def remove_style(self, css: str, *, media: str | None = None) -> None:
+        """Remove a style body by its content identity (no-op when absent)."""
+        key = _style_key(css, media)
+        styles = list(self.__dict__.get("styles") or [])
+        kept = [it for it in styles if it.get("key") != key]
+        if len(kept) != len(styles):
+            self.styles = kept
+
+    # ── scripts ────────────────────────────────────────────────────────────
+
+    def add_script(
+        self,
+        src: str | None = None,
+        *,
+        code: str | None = None,
+        type: str | None = None,
+        defer: bool = False,
+        async_: bool = False,
+    ) -> callable:
+        """Append a head ``<script>`` — external (``src``) or inline (``code``).
+
+        Exactly one of ``src``/``code`` is required; the loop renders the other as absent.
+        ``defer``/``async`` are HTML presence attributes — ``True`` renders the bare
+        attribute, ``False`` omits it — and ``type`` covers ``module`` and data blocks
+        (``application/ld+json``). Returns a disposer that removes it again.
+        """
+        if (src is None) == (code is None):
+            raise ValueError(
+                "add_script takes exactly one of src= (an external script) or "
+                "code= (an inline script)."
+            )
+        key = _script_key(src, code)
+        scripts = list(self.__dict__.get("scripts") or [])
+        if any(it.get("key") == key for it in scripts):
+            return lambda: None  # already present — nothing to do
+        scripts.append(
+            {
+                "key": key,
+                "src": src,
+                "code": code,
+                "type": type,
+                "defer": "" if defer else None,
+                "async": "" if async_ else None,
+            }
+        )
+        self.scripts = scripts
+        return lambda: self.remove_script(src=src, code=code)
+
+    def remove_script(self, *, src: str | None = None, code: str | None = None) -> None:
+        """Remove a script by its source identity (no-op when absent)."""
+        key = _script_key(src, code)
+        scripts = list(self.__dict__.get("scripts") or [])
+        kept = [it for it in scripts if it.get("key") != key]
+        if len(kept) != len(scripts):
+            self.scripts = kept
+
     def dispose(self, disposer) -> None:
         """Run a disposer returned by any of the contribution methods."""
         if disposer is not None:
@@ -216,3 +328,11 @@ class HeadStore(Store):
     def links_for(self) -> list[dict]:
         """The current ordered link list (``[]`` when empty / not seeded)."""
         return list(self.__dict__.get("links") or [])
+
+    def styles_for(self) -> list[dict]:
+        """The current ordered style list (``[]`` when empty / not seeded)."""
+        return list(self.__dict__.get("styles") or [])
+
+    def scripts_for(self) -> list[dict]:
+        """The current ordered script list (``[]`` when empty / not seeded)."""
+        return list(self.__dict__.get("scripts") or [])

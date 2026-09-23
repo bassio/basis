@@ -33,12 +33,14 @@ import subprocess
 import sys
 import time
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
 HERE = Path(__file__).parent
 APP_MODULE = "browser_app:app"
+PWA_APP_MODULE = "pwa_app:app"
 
 
 def pytest_addoption(parser):
@@ -96,15 +98,47 @@ def _free_port() -> int:
 @pytest.fixture(scope="session")
 def app_server():
     """Boot the fixture Basis app under uvicorn; yield its base URL."""
+    with _served_app(APP_MODULE) as base:
+        yield base
+
+
+@pytest.fixture(scope="session")
+def pwa_scratch(tmp_path_factory):
+    """A mounted dir the PWA lane can write into, to deploy "a new build".
+
+    Touching a served file moves the shell version, which changes the worker script's
+    bytes, which makes the browser install a new worker — the only honest way to provoke
+    an update without editing a file in this repository.
+    """
+    return tmp_path_factory.mktemp("pwa_scratch")
+
+
+@pytest.fixture(scope="session")
+def pwa_server(pwa_scratch):
+    """Boot the *installable* fixture app; yield its base URL.
+
+    A second app rather than a PWA route in the first one: the declaration is app-wide, so
+    a worker would register and precache a shell on every page of the hydration lane.
+    Browsers are also isolated per Playwright context, which is why the PWA tests do not
+    disturb the ones that never want a worker.
+    """
+    with _served_app(PWA_APP_MODULE, {"BASIS_PWA_SCRATCH": str(pwa_scratch)}) as base:
+        yield base
+
+
+@contextmanager
+def _served_app(module: str, extra_env: dict | None = None):
+    """Serve *module* under uvicorn as a context manager yielding its base URL."""
     port = _free_port()
     env = dict(os.environ)
     env["PYTHONPATH"] = str(HERE) + os.pathsep + env.get("PYTHONPATH", "")
+    env.update(extra_env or {})
     proc = subprocess.Popen(
         [
             sys.executable,
             "-m",
             "uvicorn",
-            APP_MODULE,
+            module,
             "--host",
             "127.0.0.1",
             "--port",

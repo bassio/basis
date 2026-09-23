@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 
 from basis.server.app import Basis
 from basis.shared.component import Component, extra_style
-from basis.shared.page import Page
+from basis.shared.page import Page, StaticPage
 
 
 class ChromeRoot(Component):
@@ -156,4 +156,36 @@ def test_synthesized_page_renders_styles_in_tree_like_real_page():
         re.S,
     )
     # No binding-evaluation error leaked into the head styles.
+    assert "[Error" not in head
+
+
+def test_static_page_renders_styles_in_tree_and_stamps_nothing():
+    """The chrome half of a static page is a Page's — same in-tree head styles, none in
+    the body — minus the hydration surface, which nothing would ever read."""
+    app = Basis()
+    app.bootstrap()
+
+    class StaticChromePage(StaticPage):
+        title = "Chrome"
+        root_component = ChromeRoot
+
+    app.include_page("/static-chrome", page_cls=StaticChromePage)
+    html = TestClient(app).get("/static-chrome").text
+    head = html.split("</head>", 1)[0]
+    body = html.split("</head>", 1)[1]
+
+    assert re.search(
+        r'<style data-component-class="ChromeRoot"[^>]*>.*?rgb\(1, 2, 3\)',
+        head,
+        re.S,
+    )
+    assert re.search(
+        r'<style data-component-class="ChromeRoot" data-extra-style="tweak"'
+        r"[^>]*>.*?content: 'x'",
+        head,
+        re.S,
+    )
+    assert _count(body, "data-component-class") == 0
+    # No ``h:0`` head root and no ids at all: hydration numbering is a client contract.
+    assert "data-hydration-id" not in html
     assert "[Error" not in head
