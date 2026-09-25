@@ -182,7 +182,7 @@ The class object and the `.py` module are untouched; only the stylesheet text ch
 
 1. Resolve the owning component class.
 2. Set `cls.__templatestr__ = content`.
-3. Clear `cls.__binding_blueprints__` and re-run `_initialize_blueprint()`, `_analyze_creation_args()`, and `_analyze_template()` so the binding blueprints are rebuilt from the new markup (they are replaced, never accumulated).
+3. Invalidate the class's definition revision and call `ensure_definition()`. The template prototype and immutable binding recipes compile once for that revision.
 4. Hot-swap every live instance: existing bindings are removed, the DAG is reset, and each instance re-renders from the new blueprint with its state restored.
 
 ### `.py` — re-import the module and hot-swap
@@ -207,17 +207,20 @@ The deepest path, because a module's behavior lives in its code object:
 `BaseComponent.hot_swap(new_cls)` re-renders a live instance from a (possibly new) class while preserving state:
 
 ```text
-1. _capture_state()          # snapshot plain (non-$/#) field values
-2. self.__class__ = new_cls  # adopt the new class
-3. _rerender_after_swap()    # rebuild bindings + DOM, restore state
+1. _capture_state()          # values + declared/dynamic origins + creation inputs
+2. _rerender_after_swap()    # teardown, adopt the definition, reconcile, rebuild
 ```
 
-`_rerender_after_swap(state)`:
+`_rerender_after_swap(captured, new_cls)`:
 
-1. Removes the instance's bindings and resets its `DependencyGraph`.
-2. Clears the cached `_template` / `_nodes` so the next access clones the (new) blueprint.
-3. **Rebinds against the fresh template nodes first, then swaps them into the DOM** — mirroring the normal `initialize()` + `mount()` order. This matters because `replaceWith(fragment)` moves the fragment's children into the DOM and empties the fragment; binding first keeps the bindings attached to the nodes that actually end up on the page.
-4. Restores the captured state inside `refrain()` (its `__exit__` triggers the affected DAG nodes) and re-caches a fresh template clone.
+1. Tears down JS resources, bindings, subscriptions, nested children, identities, and the old reactive scope.
+2. Adopts the new Python class with `object.__setattr__` and creates a fresh `DependencyGraph`.
+3. Reconciles the captured field inventory against the new definition before any binding evaluates. Still-declared fields and valid dynamic fields survive; removed declarations and new behavior/configuration collisions are discarded; added fields materialize their defaults once.
+4. Rebuilds remembered creation-attribute recipes, slot content, bindings, and nested children against a fresh template clone.
+5. **Binds the fresh template before moving it into the DOM.** `replaceWith(fragment)` empties the fragment, so this ordering keeps every binding attached to the nodes that become visible.
+6. Reattaches declarations and restarts JS-backed components on the new element.
+
+Reload capture is an in-memory operation, not Store serialization. It preserves typed callback/object props and local `serialize=False` state without requiring JSON conversion. Store boot snapshots are not consulted or consumed during component reload.
 
 ### Subclass instances
 
@@ -273,7 +276,7 @@ Intentional details worth knowing when extending or debugging HMR:
 
 - **Module names come from the server, not the filename.** The client module namespace (`myapp.components.statusbar`) differs from the file path relative to its mount, and filenames don't reliably encode class names (`titlebar.css` → `TitleBar`). `_build_hmr_file_map()` resolves both `.py` files and their `.css`/`.html` companions to the owning module.
 - **Only `.py` writes to the VFS.** CSS and HTML already exist in the browser as in-memory objects (class `style` / `__templatestr__`, blueprints, and mounted `<style>` / DOM nodes), so they're mutated directly. Python must be re-executed from fresh source, which is why it goes through the VFS + re-import.
-- **Binding blueprints are replaced, never extended.** Re-analysis clears `__binding_blueprints__` first, so repeated HTML updates don't stack duplicate bindings.
+- **Definition revisions are explicit.** `invalidate_definition()` advances the revision and `ensure_definition()` replaces the immutable binding recipe tuple once, so repeated HTML updates do not stack duplicate bindings.
 - **Subclass identity is preserved.** `hot_swap_template` keeps the instance's class and refreshes only the inherited template, so component subclasses defined in other modules survive reloads.
 - **Styles can live in two places.** The `_style_elements` registry covers shadow-root mounts; the light-DOM scan covers visible stylesheets. Both are updated so a stale copy can't mask the change.
 

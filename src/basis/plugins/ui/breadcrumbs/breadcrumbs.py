@@ -1,5 +1,5 @@
 from basis.shared.component import Component, scoped
-from basis.shared.reactive import computed
+from basis.shared.reactive import computed, state
 
 class Breadcrumbs(Component):
     """
@@ -11,7 +11,7 @@ class Breadcrumbs(Component):
     """
     __tag__ = "ui-breadcrumbs"
 
-    items = []
+    items: list = state(default_factory=list)
     separator = "/"
 
     @computed(dependencies=["items"])

@@ -13,6 +13,10 @@ package path, so the client can import the page module + root component and
 hydrate the SSR tree (isomorphism: VFS namespace == import namespace).
 """
 
+import asyncio
+
+from fastapi import HTTPException, Request
+
 from basis.server.app import Basis
 
 from browser_app.components.page import CounterPage
@@ -38,3 +42,16 @@ app.serve("/overlays")(OverlayPage)
 app.serve("/container")(ContainerPage)
 app.serve("/families")(FamiliesPage)
 app.serve("/loops")(LoopsPage)
+
+
+@app.post("/__test__/hmr")
+async def broadcast_hmr(request: Request):
+	for _ in range(100):
+		if app.hmr_manager.active_connections:
+			break
+		await asyncio.sleep(0.05)
+	else:
+		raise HTTPException(status_code=503, detail="HMR client did not connect")
+
+	await app.hmr_manager.broadcast(await request.json())
+	return {"connections": len(app.hmr_manager.active_connections)}

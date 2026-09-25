@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 from basis.shared.styling import compact_block
 from basis.shared.component import Component, IS_CLIENT
 from basis.shared.element import Element, DocumentType
@@ -341,7 +343,7 @@ class StaticPage(Component):
     apple_status_bar_style: str = "black-translucent" #: site that does not pad its top edge should set this to ``"default"``
 
     root_component = None
-    stores = []
+    stores: ClassVar[list] = []
     #: User stylesheet URLs, assembled last in ``<body>`` — after the app and the
     #: ``<head>`` component styles — so they load later and win the cascade at
     #: equal specificity (the "your CSS comes later" rule). The base template
@@ -437,13 +439,6 @@ class StaticPage(Component):
         # neutral defaults that client probes overwrite after mount.
         # FRAMEWORK_STORE_NAMES also serializes them on strict ``Page.stores``
         # pages.
-        #
-        # They are created BEFORE the page's own names, and that order matters:
-        # they come from their ``ensure_*`` factory rather than a blueprint, so a
-        # page whose ``stores`` names one would otherwise materialize a plain
-        # ``Store`` placeholder under that name, which ``ensure_*`` then returns
-        # as-is — silently dropping the real class's contributing API
-        # (``$head.add_link`` and friends).
         from basis.shared.head import ensure_head_store
         from basis.shared.device import ensure_device_store
         from basis.shared.network import ensure_network_store
@@ -838,6 +833,34 @@ class Page(StaticPage):
         return self._serialize_document()
 
 
+def _synthesized_page_base(component_cls, page_cls=None):
+    """Validate a root component and return its synthesized shell base."""
+    if isinstance(component_cls, type) and issubclass(component_cls, StaticPage):
+        raise TypeError(
+            f"{component_cls.__name__} is a Page, not a root component. "
+            "A Page is the document shell.\n"
+            "  • To expose a root component: decorate a Component with @app.page(path=...)\n"
+            "  • To register a Page: decorate it with @app.serve(path) "
+            f"or app.include_page(path, page_cls={component_cls.__name__})"
+        )
+
+    base = page_cls or Page
+    if getattr(base, "root_component", None) is not None or getattr(base, "stores", None):
+        raise ValueError(
+            f"{base.__name__} already declares root_component/stores — it's a complete "
+            f"page. Register it with app.include_page(path, page_cls={base.__name__}) "
+            f"instead of decorating a component with it."
+        )
+
+    if not getattr(base, "hydrates", True):
+        raise ValueError(
+            f"{base.__name__} has no client, so a component decorated with @app.page has "
+            "nothing to boot from. Register the page with "
+            "app.include_page(path, page_cls=...) instead."
+        )
+    return base
+
+
 def _synthesize_page(
     component_cls,
     *,
@@ -864,21 +887,7 @@ def _synthesize_page(
     browser here — a shell that declares its own ``root_component`` or ``stores``
     is a complete page and belongs in ``app.include_page`` instead.
     """
-    base = page_cls or Page
-
-    if getattr(base, "root_component", None) is not None or getattr(base, "stores", None):
-        raise ValueError(
-            f"{base.__name__} already declares root_component/stores — it's a complete "
-            f"page. Register it with app.include_page(path, page_cls={base.__name__}) "
-            f"instead of decorating a component with it."
-        )
-
-    if not getattr(base, "hydrates", True):
-        raise ValueError(
-            f"{base.__name__} has no client, so a component decorated with @app.page has "
-            f"nothing to boot from. Register the page with "
-            f"app.include_page(path, page_cls=...) instead."
-        )
+    base = _synthesized_page_base(component_cls, page_cls)
 
     derived = type(
         f"{component_cls.__name__}Page",

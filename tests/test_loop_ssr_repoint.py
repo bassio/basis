@@ -13,6 +13,7 @@ and body bindings from the shadow tree onto the SSR tree.
 from basis.shared.component import Component
 from basis.shared.element import Element
 from basis.shared.hydration import HydrationReport
+from basis.shared.reactive import state
 
 
 def _loop(owner):
@@ -28,8 +29,10 @@ def _text_of(node):
 
 
 class NestedOwner(Component):
-    groups = [{"g": "A", "items": [{"name": "a1"}, {"name": "a2"}]},
-              {"g": "B", "items": [{"name": "b1"}]}]
+    groups: list = state(default_factory=lambda: [
+        {"g": "A", "items": [{"name": "a1"}, {"name": "a2"}]},
+        {"g": "B", "items": [{"name": "b1"}]},
+    ])
 
     def template(self):
         """
@@ -46,7 +49,9 @@ def test_flat_loop_repoints_to_ssr():
     """A plain (flat) loop's item wrapper + body bindings move onto the SSR
     tree: wrapper matched by data-item-key, body nodes by relative path."""
     class Owner(Component):
-        items = [{"k": 1, "name": "Alpha"}, {"k": 2, "name": "Beta"}]
+        items: list = state(default_factory=lambda: [
+            {"k": 1, "name": "Alpha"}, {"k": 2, "name": "Beta"}
+        ])
 
         def template(self):
             """
@@ -149,7 +154,7 @@ def test_repoint_to_ssr_custom_element_children_repoint():
             """
 
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         def template(self):
             """
@@ -183,7 +188,7 @@ def test_repoint_unmatched_key_reports():
     """An item whose key is absent from the SSR tree is reported, not silently
     dropped."""
     class Owner(Component):
-        items = [{"k": 1, "name": "Alpha"}]
+        items: list = state(default_factory=lambda: [{"k": 1, "name": "Alpha"}])
 
         def template(self):
             """
@@ -221,8 +226,8 @@ def test_hidden_inner_loop_reports_nothing():
     """
     class Owner(Component):
         show_sub = False
-        groups = [{"g": "A"}, {"g": "B"}]
-        sub_items = [{"n": "a1"}, {"n": "a2"}]
+        groups: list = state(default_factory=lambda: [{"g": "A"}, {"g": "B"}])
+        sub_items: list = state(default_factory=lambda: [{"n": "a1"}, {"n": "a2"}])
 
         def template(self):
             """

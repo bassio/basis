@@ -116,7 +116,7 @@ class ServerComponent(BaseComponent):
         element = Element(tag, attrs={}, children=[])
         return element
 
-    def fill_slots(self, container):
+    def fill_slots(self, container=None):
         if not self.has_slots():
             # No slots in this component — nothing was moved, nothing to clear.
             return
@@ -131,5 +131,5 @@ class ServerComponent(BaseComponent):
         # On the client the browser does this automatically: once slot
         # distribution runs, the original host children are no longer rendered
         # at their original position.  We must replicate that here.
-        if isinstance(container, Element):
+        if container is not None and isinstance(container, Element):
             container.children = []

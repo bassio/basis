@@ -17,7 +17,7 @@ publishes the space it takes (``--shell-bottom-inset``) for the frame to reserve
 """
 from basis.shared.styling import compact_block
 from basis.shared.component import Component, extra_style, scoped
-from basis.shared.reactive import computed
+from basis.shared.reactive import computed, state
 
 _BASE_CSS = """
 :scope {
@@ -173,7 +173,7 @@ class Nav(Component):
 
     __tag__ = "ui-nav"
 
-    items = []
+    items: list = state(default_factory=list)
     arrangement = "auto"   # auto | inline | bottom | rail | drawer
     active = ""            # an item id; empty derives from the router
 

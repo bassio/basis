@@ -644,22 +644,16 @@ def test_page_load_instantiates_stores_without_ssr_flag():
     assert store.v == 7
 
 
-def test_client_basis_shim_mirrors_serve_onto_page():
-    """The client-side Basis shim mirrors ``serve`` onto ``page`` so the
-    single-file ``@app.serve`` component quickstart is accepted on the client.
-    The shim is a decorator-idom annotation (like ``@scoped``/``@py_event``): it
-    stamps the decorated root component's OWN ``__dict__`` with its
-    synthesized-shell recipe (``_synthesized_page_args``) and leaves mounting to
-    the client driver — no module-global registry, no import-time registration.
-    Source-level guard (the shim is only defined when IS_CLIENT)."""
+def test_client_basis_shim_declares_page_apis_without_mounting():
+    """Source guard for the client-only shim; behavior runs in test_isomorphism."""
     import inspect
 
     import basis.shared.component as component_mod
 
     src = inspect.getsource(component_mod)
-    assert "def serve(self, *args, **kwargs):" in src
-    assert "self.page(component, **kwargs)" in src
-    # Decorator-idom annotation on the class, not a module-global registry.
+    assert "def serve(self, path=" in src
+    assert "def include_page(" in src
+    assert "return self.page(" in src
     assert "_synthesized_page_args" in src
-    assert 'component.__dict__["_synthesized_page_args"]' in src
+    assert "setattr(" in src
     assert "_registered_root_components" not in src

@@ -34,10 +34,7 @@ class AppState(AppStateStore):
 
     def __init__(self, name: str = "app_state"):
         super().__init__(name)
-        # Client-side default — only when nothing was hydrated, else the list
-        # would disagree with the SSR tree this instance is hydrating against.
-        if not getattr(self, "_hydrated_from_ssr", False):
-            self.items = list(DEMO_ITEMS)
+        self.items = list(DEMO_ITEMS)
 
     @server_action
     def add_item(self) -> str:
@@ -52,16 +49,15 @@ class AppState(AppStateStore):
 class AppTheme(ThemeStore):
     """The app's theme store — seeds the `basis init` answer (dark/light).
 
-    The default is applied in ``__init__`` (guarded against SSR hydration) so
-    the seed survives the per-request store rebuild: SSR reconstructs stores
-    from their class blueprints, so a plain module-scope assignment would be
-    lost. Toggle at runtime via ``theme.set_mode(...)``.
+    The default is applied in ``__init__`` so the seed survives the per-request
+    store rebuild: SSR reconstructs stores from their class blueprints, so a
+    plain module-scope assignment would be lost. Toggle at runtime via
+    ``theme.set_mode(...)``.
     """
 
     def __init__(self, name="theme"):
         super().__init__(name)
-        if not getattr(self, "_hydrated_from_ssr", False):
-            self.dark_mode = {{ "True" if theme_seed == "dark" else "False" }}
+        self.dark_mode = {{ "True" if theme_seed == "dark" else "False" }}
 
 
 # Module-scope instances — the stores auto-discovery convention. Registering

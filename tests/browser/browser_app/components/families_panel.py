@@ -20,6 +20,7 @@ from basis.plugins.ui.slider.slider import Slider  # noqa: F401
 from basis.plugins.ui.stepper.stepper import Stepper  # noqa: F401
 from basis.plugins.ui.toggle.toggle import Toggle  # noqa: F401
 from basis.shared.component import Component
+from basis.shared.reactive import state
 
 
 class FamiliesPanel(Component):
@@ -27,22 +28,22 @@ class FamiliesPanel(Component):
 
     __tag__ = "browser-families-panel"
 
-    links = [
+    links: list = state(default_factory=lambda: [
         {"id": "home", "label": "Home", "href": "/"},
         {"id": "families", "label": "Families", "href": "/families", "icon": "🧩"},
-    ]
+    ])
 
-    views = [
+    views: list = state(default_factory=lambda: [
         {"id": "list", "label": "List"},
         {"id": "grid", "label": "Grid"},
         {"id": "board", "label": "Board"},
-    ]
+    ])
 
-    notes = [
+    notes: list = state(default_factory=lambda: [
         {"id": "a", "title": "Groceries"},
         {"id": "b", "title": "Standup notes"},
         {"id": "c", "title": "Trip packing list"},
-    ]
+    ])
 
     def style(self):
         """

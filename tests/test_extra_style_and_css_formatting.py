@@ -320,7 +320,7 @@ def test_page_stylesheets_default_empty():
     assert Page.stylesheets == ()
 
 
-# ── ThemeStore hydration guard + seed ──────────────────────────────────────
+# ── ThemeStore hydration + seed ────────────────────────────────────────────
 
 def test_theme_store_serializes_dark_mode_seed():
     from basis.plugins.theme import ThemeStore
@@ -330,20 +330,10 @@ def test_theme_store_serializes_dark_mode_seed():
     assert t.serialize().get("dark_mode") is True
 
 
-def test_theme_store_guard_skips_defaults_when_hydrated(monkeypatch):
+def test_theme_store_snapshot_overrides_constructed_defaults(monkeypatch):
     from basis.plugins.theme import ThemeStore
-    from basis.shared import store as store_module
+    from basis.shared.store import install_initial_state
 
-    real_init = store_module.Store.__init__
-
-    def hydrated_init(self, name):
-        real_init(self, name)
-        # Simulate SSR hydration running inside Store.__init__ (it reads
-        # #basis-initial-state): a persisted dark seed arrives as dark_mode=True
-        # and the hydrated flag is set before ThemeStore.__init__'s body runs.
-        self.__dict__["dark_mode"] = True
-        self.__dict__["_hydrated_from_ssr"] = True
-
-    monkeypatch.setattr(store_module.Store, "__init__", hydrated_init)
+    install_initial_state({"theme_hydration_test": {"dark_mode": True}})
     t = ThemeStore("theme_hydration_test")
-    assert t.dark_mode is True  # NOT clobbered by the built-in default
+    assert t.dark_mode is True

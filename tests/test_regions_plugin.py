@@ -168,8 +168,7 @@ class _AppBoundStore(Store):
 
     def __init__(self, name="appbound"):
         super().__init__(name)
-        if not getattr(self, "_hydrated_from_ssr", False):
-            self.__dict__["items"] = {}
+        self.__dict__["items"] = {}
 
     def _refresh_from_app(self):
         self.__dict__["items"] = {"v": 1}
@@ -422,6 +421,7 @@ def test_region_store_subscribes_to_plugins_via_dag_edge():
 
     plugins = PluginRegistryStore("plugins")
     regions = RegionStore("regions")
+    regions.on_client_ready()
     try:
         # target-side edge: $plugins tracked the subscription + wired a DAG effect
         assert (regions, "items") in plugins._subscriptions
@@ -442,6 +442,7 @@ def test_region_store_resyncs_when_plugins_items_change():
 
     plugins = PluginRegistryStore("plugins")
     regions = RegionStore("regions")
+    regions.on_client_ready()
     try:
         resynced = []
         regions._resync_from_plugins = lambda: resynced.append(True)

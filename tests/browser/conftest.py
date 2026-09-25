@@ -40,6 +40,7 @@ import pytest
 
 HERE = Path(__file__).parent
 APP_MODULE = "browser_app:app"
+DECORATED_APP_MODULE = "decorated_app:app"
 PWA_APP_MODULE = "pwa_app:app"
 
 
@@ -99,6 +100,13 @@ def _free_port() -> int:
 def app_server():
     """Boot the fixture Basis app under uvicorn; yield its base URL."""
     with _served_app(APP_MODULE) as base:
+        yield base
+
+
+@pytest.fixture(scope="session")
+def decorated_app_server():
+    """Boot the shared-decorator fixture app; yield its base URL."""
+    with _served_app(DECORATED_APP_MODULE) as base:
         yield base
 
 

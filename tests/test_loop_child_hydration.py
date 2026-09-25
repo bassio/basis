@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from basis.server.app import Basis
 from basis.shared.component import Component
 from basis.shared.element import Element
+from basis.shared.reactive import state
 from basis.shared.page import Page
 
 
@@ -32,7 +33,9 @@ class Row(Component):
 class BothShapes(Component):
     """The same child component under both loop shapes."""
 
-    items = [{"k": 1, "name": "Alpha"}, {"k": 2, "name": "Beta"}]
+    items: list = state(default_factory=lambda: [
+        {"k": 1, "name": "Alpha"}, {"k": 2, "name": "Beta"}
+    ])
 
     def template(self):
         """
@@ -52,8 +55,10 @@ class BothShapes(Component):
 class NestedShape(Component):
     """A component one loop deeper: an inner plain loop inside an outer plain item."""
 
-    groups = [{"g": "A", "items": [{"k": 1, "name": "a1"}, {"k": 2, "name": "a2"}]},
-              {"g": "B", "items": [{"k": 1, "name": "b1"}]}]
+    groups: list = state(default_factory=lambda: [
+        {"g": "A", "items": [{"k": 1, "name": "a1"}, {"k": 2, "name": "a2"}]},
+        {"g": "B", "items": [{"k": 1, "name": "b1"}]},
+    ])
 
     def template(self):
         """
@@ -78,7 +83,7 @@ def _child_instances(component):
 class HiddenBranch(Component):
     """A loop of children on a branch neither side renders."""
 
-    items = [{"k": 1, "name": "Alpha"}]
+    items: list = state(default_factory=lambda: [{"k": 1, "name": "Alpha"}])
 
     def template(self):
         """

@@ -42,3 +42,36 @@ def test_ssr_adopts_cleanly_and_updates_live(app_server, page, request):
         "() => document.querySelector('.counter .count')?.textContent === 'Count: 1'",
         timeout=15000,
     )
+
+
+def test_shared_page_decorators_boot_ssr_and_nested_csr(
+    decorated_app_server, page, request
+):
+    timeout = _timeout_ms(request)
+    page_errors = []
+    requested_urls = []
+    page.on("pageerror", lambda error: page_errors.append(str(error)))
+    page.on("request", lambda request: requested_urls.append(request.url))
+
+    for path in ("/", "/nested/decorated"):
+        page.goto(decorated_app_server + path, wait_until="domcontentloaded")
+        page.wait_for_selector(".decorated-counter .count", timeout=timeout)
+        page.wait_for_function(f"() => !!window.{REPORT_GLOBAL}", timeout=timeout)
+        report = page.evaluate(f"() => window.{REPORT_GLOBAL}")
+
+        assert page.title() == "Decorated browser fixture"
+        assert page.inner_text(".decorated-counter .count") == "Count: 0"
+        assert report["unhydrated_components"] == [], report
+        assert report["unmatched_bindings"] == [], report
+        assert not report.get("fallback"), report
+
+        page.click(".decorated-counter .inc")
+        page.wait_for_function(
+            "() => document.querySelector('.decorated-counter .count')?.textContent === 'Count: 1'",
+            timeout=15000,
+        )
+
+    assert page_errors == []
+    pyscript_urls = [url for url in requested_urls if "/pyscript/" in url]
+    assert pyscript_urls
+    assert not any("/nested/pyscript/" in url for url in pyscript_urls)

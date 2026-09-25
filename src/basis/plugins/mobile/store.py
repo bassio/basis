@@ -15,8 +15,8 @@ Field split (the ``$device`` contract)
 ``standalone`` is a **capability**: it is a CSS media feature, so it is *declared* with
 :func:`~basis.shared.media.media` and the browser answers it. Everything the browser
 learns only after the worker registers (``controlled``, ``ready``, ``waiting_version``,
-``can_install``) is a **measurement**: neutral in ``neutral_defaults`` so the server
-serializes the neutral and the client's first paint agrees, then overwritten after mount.
+``can_install``) is a **measurement** with a server-safe scalar default, then overwritten
+after mount.
 
 Identity fields are plain instance attributes so they serialize like any other store
 state — and, like every store subclass, they must never clobber a hydrated value
@@ -66,14 +66,12 @@ class PwaStore(Store):
     # Capability, answered by the browser as a CSS media feature (one shared listener).
     standalone = media(STANDALONE_QUERY)
 
-    # Measurement: the worker's state, which does not exist until the client registers.
-    neutral_defaults = {
-        "controlled": False,       # a worker is controlling this page
-        "ready": False,            # a newly installed worker is waiting to take over
-        "waiting_version": None,   # the waiting worker's shell version
-        "can_install": False,      # beforeinstallprompt has fired
-        "error": None,
-    }
+    # Worker state keeps these server-safe values until the client registers it.
+    controlled = False
+    ready = False
+    waiting_version = None
+    can_install = False
+    error = None
 
     def __init__(
         self,
@@ -92,9 +90,6 @@ class PwaStore(Store):
         offline: bool = True,
     ):
         super().__init__(name)
-        # The declaration is data the manifest generator and the client both read, so it
-        # lives in plain instance fields and serializes like any other store state.
-        # Absence, not hydration, is the guard: a hydrated value always wins.
         for key, value in (
             ("title", title),
             ("short_name", short_name),
@@ -108,8 +103,7 @@ class PwaStore(Store):
             ("background_color", background_color),
             ("offline", offline),
         ):
-            if key not in self.__dict__:
-                self.__dict__[key] = value
+            setattr(self, key, value)
 
     def apply_request(self, request) -> None:
         """Server-only: contribute this app's head links for the request being rendered.

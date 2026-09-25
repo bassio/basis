@@ -13,9 +13,8 @@ Covers:
 * the item shape — plain dicts so ``Store.serialize`` round-trips without
   special-casing (the ModelStore lesson: same shape on server, in
   ``#basis-initial-state``, and after client hydration);
-* the SSR-hydration guard — a store hydrated from ``#basis-initial-state`` never
-  has its lists clobbered by ``__init__`` defaults (the store-subclass footgun
-  the framework documents);
+* post-constructor hydration — ``#basis-initial-state`` wins over constructor
+    defaults;
 * the per-request reconstruction contract — ``Store._registry`` is cleared per
   request, so a HeadStore subclass that seeds items in ``__init__`` (the
   constructor-state path) is rebuilt with its items intact on ``reinstantiate``.
@@ -25,11 +24,12 @@ import json
 import pytest
 
 from basis.shared.head import HeadStore
-from basis.shared.store import Store
+from basis.shared.store import Store, install_initial_state
 
 
 @pytest.fixture(autouse=True)
 def _clean_registries():
+    install_initial_state({})
     Store._registry.clear()
     Store._store_blueprints.clear()
     yield
@@ -181,13 +181,15 @@ def test_add_link_refuses_an_attribute_the_head_loop_cannot_render():
 
 
 def test_hydration_never_clobbers_head_lists():
-    """A store hydrated from ``#basis-initial-state`` keeps its lists: the
-    ``__init__`` defaults must not re-apply over them."""
+    """The boot snapshot applies after constructor defaults."""
+    install_initial_state({
+        "head": {
+            "metas": [
+                {"key": "name:theme-color", "name": "theme-color", "content": "#1e1e2e"}
+            ]
+        }
+    })
     head = HeadStore("head")
-    head.__dict__["_hydrated_from_ssr"] = True
-    head.metas = [
-        {"key": "name:theme-color", "name": "theme-color", "content": "#1e1e2e"}
-    ]
 
     assert head.metas_for()[0]["content"] == "#1e1e2e"
 
@@ -200,9 +202,7 @@ def test_subclass_seeds_in_init_survive_reinstantiate():
     class SeededHead(HeadStore):
         def __init__(self, name="head"):
             super().__init__(name)
-            # Same store-subclass footgun guard: only seed when not hydrated.
-            if not getattr(self, "_hydrated_from_ssr", False):
-                self.add_meta("theme-color", "#1e1e2e")
+            self.add_meta("theme-color", "#1e1e2e")
 
     SeededHead("head")
     assert Store._registry["head"].metas_for()[0]["name"] == "theme-color"

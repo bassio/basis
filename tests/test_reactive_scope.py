@@ -6,6 +6,9 @@ GREEN immediately: P4a adds the primitive and a root scope but changes no
 existing behavior. P4b (loop/region/HMR/subscription adoption) and P4c
 (per-loop-item derived) build on it.
 """
+import gc
+import weakref
+
 import pytest
 
 from basis.shared.base_component import BaseComponent
@@ -16,6 +19,7 @@ from basis.shared.reactive import (
     DependencyGraph,
     ReactiveObject,
     ReactiveScope,
+    state,
     _wake_list,
 )
 from basis.shared.store import Store
@@ -45,9 +49,13 @@ def test_scope_add_effect_and_destroy():
     graph = DependencyGraph()
     scope = ReactiveScope()
     scope.add_effect(graph, "e1", lambda: None, ["x"])
+    source = graph.nodes["x"]
+    effect = graph.nodes["e1"]
     assert "e1" in graph.nodes
     scope.destroy()
     assert "e1" not in graph.nodes
+    assert effect not in source.dependents
+    assert source not in effect.dependencies
 
 
 def test_scope_add_computed_and_destroy():
@@ -126,7 +134,49 @@ def test_remove_node_computed_detaches_from_its_deps():
     graph.remove_node("c")
     assert "c" not in graph.nodes
     assert c_node not in x_node.dependents
+    assert c_node.dependencies == set()
+    assert c_node.dependents == set()
     assert "x" in graph.nodes  # the state node remains
+
+
+def test_remove_node_detaches_cross_graph_dependency():
+    producer = DependencyGraph()
+    consumer = DependencyGraph()
+    source = producer.get_or_create_state("x")
+    effect = consumer.add_effect("e", lambda: None, [])
+    effect.add_dependency(source)
+
+    consumer.remove_node("e")
+
+    assert effect not in source.dependents
+    assert source not in effect.dependencies
+    assert "x" in producer.nodes
+
+
+def test_remove_node_preserves_unrelated_pending_effect():
+    graph = DependencyGraph()
+    runs = []
+    graph.add_effect("removed", lambda: runs.append("removed"), ["x"])
+    graph.add_effect("kept", lambda: runs.append("kept"), ["x"])
+    graph.nodes["removed"].mark_stale()
+    graph.nodes["kept"].mark_stale()
+
+    graph.remove_node("removed")
+    graph.process_updates()
+
+    assert runs == ["kept"]
+
+
+def test_remove_node_drops_wildcard_membership():
+    graph = DependencyGraph()
+    effect = graph.add_wildcard_effect("all", lambda: None)
+
+    graph.remove_node("all")
+    new_state = graph.get_or_create_state("new")
+
+    assert effect not in graph._wildcard_effects
+    assert effect not in new_state.dependents
+    assert new_state not in effect.dependencies
 
 
 def test_remove_node_drops_enqueued_effect_from_pending():
@@ -146,6 +196,23 @@ def test_remove_node_drops_enqueued_effect_from_pending():
 def test_remove_node_missing_is_noop():
     graph = DependencyGraph()
     graph.remove_node("does_not_exist")  # no error
+
+
+def test_remove_node_releases_bound_callback_owner():
+    class CallbackOwner:
+        def update(self):
+            pass
+
+    graph = DependencyGraph()
+    owner = CallbackOwner()
+    owner_ref = weakref.ref(owner)
+    graph.add_effect("e", owner.update, ["x"])
+
+    graph.remove_node("e")
+    del owner
+    gc.collect()
+
+    assert owner_ref() is None
 
 
 # ─────────────────────────────────────────────
@@ -182,7 +249,7 @@ def test_mounted_component_has_root_scope():
 def test_loop_item_effects_are_scoped_and_dispose_cleans_them():
     class Owner(Component):
         __tag__ = "x-p4b-loop"
-        items = [{"n": 1, "k": "a"}]
+        items: list = state(default_factory=lambda: [{"n": 1, "k": "a"}])
         mode = "light"
 
         def template(self):
@@ -246,6 +313,6 @@ def test_rerender_after_swap_resets_scope():
 
     comp = _mount(C)
     old_scope = comp._scope
-    comp._rerender_after_swap({})
+    comp._rerender_after_swap(comp._capture_state())
     assert comp._scope is not old_scope
     assert isinstance(comp._scope, ReactiveScope)

@@ -5,7 +5,7 @@ import os
 import uuid
 from pathlib import Path
 from basis.shared.component import Component, IS_CLIENT, scoped
-from basis.shared.reactive import computed
+from basis.shared.reactive import computed, state
 from basis.shared.actions import server_action
 
 if IS_CLIENT:
@@ -41,13 +41,8 @@ class FileUpload(Component):
     description = "Drag & drop files here or click to browse"
 
     # Reactive states
-    files = []
+    files: list = state(default_factory=list)
     dragging = False
-
-    def __init__(self):
-        super().__init__()
-        self.files = []
-        self.dragging = False
 
     @computed(dependencies=["disabled"])
     def disabled_attr(self):

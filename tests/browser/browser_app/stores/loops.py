@@ -10,14 +10,15 @@ the server and the client agree on the first paint.
 """
 
 from basis.shared.store import Store
+from basis.shared.reactive import state
 
 
 class LoopsStore(Store):
-    items = [
+    items: list = state(default_factory=lambda: [
         {"id": "a", "title": "Alpha"},
         {"id": "b", "title": "Beta"},
         {"id": "c", "title": "Gamma"},
-    ]
+    ])
     active = "a"
 
 

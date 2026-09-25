@@ -128,7 +128,11 @@ Instantiating at module scope registers the store's persistent **blueprint**
 
 - `Page.stores` resolve stores **by name** (`stores = ["app_state", ...]`), or
 - a page with no `stores` default to **all auto-discovered stores**, and
-- SSR / server actions rebuild the proper subclass via `Store.resolve(name)`.
+- a fresh request can reconstruct the proper subclass from that definition.
+
+`Store.resolve(name)` returns the active instance when one exists and reconstructs
+from the blueprint only when the current context has no active instance. Code that
+deliberately needs a replacement uses `Store.reinstantiate(name)`.
 
 The client receives the list of store modules via a `#basis-store-imports` script
 and imports them on boot, so the same instances exist in the browser and hydrate

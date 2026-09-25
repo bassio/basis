@@ -20,7 +20,6 @@ def mock_environment():
     
     # Save original state
     orig_modules = dict(sys.modules)
-    orig_document = getattr(basis.shared.store, "document", None)
     orig_fetch = getattr(basis.shared.store_provider, "fetch", None)
     orig_is_client_component = basis.shared.component.IS_CLIENT
     orig_is_client_provider = basis.shared.store_provider.IS_CLIENT
@@ -42,22 +41,21 @@ def mock_environment():
     mock_fetch = AsyncMock()
     basis.shared.store_provider.fetch = mock_fetch
     
-    mock_document = MagicMock()
     mock_script_tag = MagicMock()
-    mock_document.getElementById.return_value = mock_script_tag
-    basis.shared.store.document = mock_document
+    mock_script_tag.textContent = "{}"
+    basis.shared.store.install_initial_state({})
     
     yield mock_script_tag, mock_fetch, mock_pyfetch
     
     # Restore original state
     sys.modules.clear()
     sys.modules.update(orig_modules)
-    basis.shared.store.document = orig_document
+    basis.shared.store.install_initial_state({})
     basis.shared.store_provider.fetch = orig_fetch
     basis.shared.component.IS_CLIENT = orig_is_client_component
     basis.shared.store_provider.IS_CLIENT = orig_is_client_provider
 
-from basis.shared.store import Store, ModelStore
+from basis.shared.store import Store, ModelStore, install_initial_state
 from basis.shared.store_provider import StoreProvider, ModelStoreProvider
 from basis.server.render import _serialize_initial_state
 from basis.shared.basis_await import BasisAwait
@@ -99,33 +97,36 @@ def test_ssr_serialization_and_client_hydration(mock_environment):
     # 4. Clean registry and simulate client hydration
     Store._registry.clear()
     mock_script_tag.textContent = serialized_json
+    install_initial_state(data)
     
     hydrated_store = Store("test_store")
     hydrated_model_store = ModelStore("test_model_store", TestModel)
     
-    assert hydrated_store._hydrated_from_ssr is True
-    assert hydrated_store._ssr_url == "/api/test"
+    assert hydrated_store._initial_load.snapshot_applied is True
+    assert hydrated_store._initial_load.url == "/api/test"
     
-    assert hydrated_model_store._hydrated_from_ssr is True
-    assert hydrated_model_store._ssr_params == {"id": "42"}
+    assert hydrated_model_store._initial_load.snapshot_applied is True
+    assert hydrated_model_store._initial_load.params == {"id": "42"}
 
 @pytest.mark.anyio
 async def test_hydration_guard_store_providers(mock_environment):
     mock_script_tag, mock_fetch, _ = mock_environment
     
     Store._registry.clear()
-    mock_script_tag.textContent = "{}"
+    install_initial_state({
+        "users": {},
+        "patients": {"items": []},
+        "__basis_meta__": {
+            "ssr_url": {"users": "/api/users"},
+            "ssr_params": {"patients": {"id": "99"}},
+        },
+    })
     
     # Setup hydrated stores
     store = Store("users")
-    store._ssr_url = "/api/users"
-    store._hydrated_from_ssr = True
-    
     model_store = ModelStore("patients", TestModel)
-    model_store._ssr_params = {"id": "99"}
-    model_store._hydrated_from_ssr = True
     
-    # 1. Test StoreProvider Hydration Guard
+    # 1. Matching StoreProvider provenance suppresses one fetch.
     provider = StoreProvider.initialize(MagicMock(), name="users", url="/api/users")
     
     mock_response = MagicMock()
@@ -137,14 +138,14 @@ async def test_hydration_guard_store_providers(mock_environment):
     
     # Verify fetch was skipped due to guard
     mock_fetch.assert_not_called()
-    assert store._hydrated_from_ssr is False
+    assert store._initial_load.fetch_consumed is True
     
     # Clear last fetched url to force refetch
     provider._last_fetched_url = ""
     await provider.fetch_data()
     mock_fetch.assert_called_once()
     
-    # 2. Test ModelStoreProvider Hydration Guard
+    # 2. Matching ModelStoreProvider provenance suppresses one fetch.
     model_provider = ModelStoreProvider.initialize(MagicMock(), name="patients", model="TestModel", one=True)
     model_provider._model_kwargs = {"id": "99"}
     
@@ -156,7 +157,7 @@ async def test_hydration_guard_store_providers(mock_environment):
     
     # Verify model_store fetch_one was skipped due to guard
     model_store.fetch_one.assert_not_called()
-    assert model_store._hydrated_from_ssr is False
+    assert model_store._initial_load.fetch_consumed is True
     
     # Clear last kwargs str to force refetch
     model_provider._last_kwargs_str = ""
@@ -220,7 +221,7 @@ def test_missing_store_safe_eval(mock_environment):
     result_bool = bool(safe_eval("BaseComponent.S['non_existent_store']", ctx, ALLOWED_BUILTINS))
     assert result_bool is False
 
-def test_empty_store_attribute_safe_eval(mock_environment):
+def test_empty_store_attribute_safe_eval_reports_missing_field(mock_environment):
     from basis.shared.bindings import safe_eval, ALLOWED_BUILTINS
     from basis.shared.base_component import BaseComponent
     
@@ -232,9 +233,9 @@ def test_empty_store_attribute_safe_eval(mock_environment):
         
     ctx = DummyContext()
     
-    # 2. Evaluating a non-existent public attribute on this existing store should return None
+    # 2. Existing stores do not invent optional fields for missing reads.
     val = safe_eval("BaseComponent.S['empty_store'].some_unpopulated_attr", ctx, ALLOWED_BUILTINS)
-    assert val is None
+    assert val == "[Error: BaseComponent.S['empty_store'].some_unpopulated_attr]"
 
 def test_empty_path_parameter_url_resolution(mock_environment):
     from basis.shared.store import _resolve_url_and_params
@@ -276,9 +277,10 @@ def test_store_typo_attribute_errors(mock_environment):
     with pytest.raises(AttributeError):
         _ = model_store.naame
         
-    # 3. For schema-less stores, accessing attributes before load returns None
+    # 3. Schema-less stores also require optional fields to be declared explicitly.
     schema_less = Store("schema_less")
-    assert schema_less.anything is None
+    with pytest.raises(AttributeError):
+        _ = schema_less.anything
     
     # 4. Once first load completes on the schema-less store, accessing missing attributes raises AttributeError
     schema_less.__dict__['_first_load_completed'] = True

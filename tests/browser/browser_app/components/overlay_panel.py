@@ -13,6 +13,7 @@ from basis.plugins.ui.context_menu.context_menu import ContextMenu  # noqa: F401
 from basis.plugins.ui.modal.modal import Modal  # noqa: F401
 from basis.plugins.ui.toast.toast import ToastContainer  # noqa: F401
 from basis.shared.component import Component
+from basis.shared.reactive import state
 
 
 class OverlayPanel(Component):
@@ -20,15 +21,15 @@ class OverlayPanel(Component):
 
     __tag__ = "browser-overlay-panel"
 
-    items = [
+    items: list = state(default_factory=lambda: [
         {"label": "Rename", "action": "rename"},
         {"label": "Duplicate", "action": "duplicate"},
         {"label": "Delete", "action": "delete", "danger": True},
-    ]
-    commands = [
+    ])
+    commands: list = state(default_factory=lambda: [
         {"id": "go", "label": "Go to file", "category": "Nav", "shortcut": "⌘P"},
         {"id": "theme", "label": "Toggle theme", "category": "View"},
-    ]
+    ])
 
     def style(self):
         """

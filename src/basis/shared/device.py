@@ -89,16 +89,13 @@ class DeviceStore(Store):
     compact = media(compact_query())
     medium = media(medium_query())
 
-    # Measurement, which no media feature can answer: the neutral stands until the client
-    # probe reads the window.
-    neutral_defaults = {
-        "width": 0,               # layout viewport width (px)
-        "height": 0,              # layout viewport height (px)
-        "dpr": 1,                 # window.devicePixelRatio
-        "orientation": "portrait",
-        "pointer": "fine",        # "fine" | "coarse"
-        "touch": False,           # any touch points
-    }
+    # Measurements keep their server-safe values until the client probe runs.
+    width = 0
+    height = 0
+    dpr = 1
+    orientation = "portrait"
+    pointer = "fine"
+    touch = False
 
     @computed(dependencies=["compact", "medium"])
     def tier(self) -> str:

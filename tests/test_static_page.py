@@ -267,14 +267,13 @@ def test_a_component_decorated_with_a_static_page_cls_is_refused():
             template = "<div>hi</div>"
 
 
-def test_the_client_page_shim_recognises_a_static_page():
-    """Source-level guard (the shim exists only under ``IS_CLIENT``, which these tests
-    never set): a page subclass is not a root component to annotate."""
+def test_the_client_page_shim_uses_shared_page_validation():
+    """The client-only shim validates the same root/shell contract as the server."""
     from basis.shared import component as component_module
 
     src = inspect.getsource(component_module)
-    assert "from basis.shared.page import StaticPage as _StaticPageBase" in src
-    assert "issubclass(component, _StaticPageBase)" in src
+    assert "from basis.shared.page import _synthesized_page_base" in src
+    assert "_synthesized_page_base(component_cls, page_cls)" in src
 
 
 # ---------------------------------------------------------------------------

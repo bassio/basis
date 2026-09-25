@@ -212,13 +212,13 @@ class TestMaterialisation:
         """The guard is absence, not the hydration flag."""
         store = LayoutStore("mat_restore")
         del store.__dict__["narrow"]
-        store._materialize_levels()
+        store._materialize_state_defaults()
         assert store.__dict__["narrow"] is False
 
     def test_existing_values_are_left_alone(self):
         store = LayoutStore("mat_keep")
         store.narrow = True
-        store._materialize_levels()
+        store._materialize_state_defaults()
         assert store.narrow is True
 
     def test_store_without_declarations_is_untouched(self):

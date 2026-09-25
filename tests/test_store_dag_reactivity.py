@@ -8,11 +8,16 @@ Validates that:
 4. refrain() on Store batches multiple attribute changes
 5. Wildcard subscriptions fire on any public attribute change
 """
+from contextvars import Context
+
 import pytest
+from typing import ClassVar
 from unittest.mock import MagicMock, call
 
-from basis.shared.reactive import ReactiveObject, DependencyGraph, computed, Refrain
-from basis.shared.store import Store
+from basis.shared import store as store_module
+from basis.shared.app_state import AppStateStore
+from basis.shared.reactive import ReactiveObject, DependencyGraph, computed, Refrain, batch, state
+from basis.shared.store import ModelStore, Store, WebSocketStore, install_initial_state
 from basis.shared.context import ContextVarProxyDict
 
 
@@ -31,6 +36,7 @@ def _clear_store_registry():
     Store._registry.clear()
     Store._pending_subscriptions.clear()
     Store._store_blueprints.clear()
+    install_initial_state({})
 
 
 # ──────────────────────────────────────────────
@@ -54,6 +60,48 @@ class TestReactiveObjectBasics:
         obj._internal = "secret"
         assert '_internal' not in obj._dag.nodes
         assert obj._internal == "secret"
+
+    def test_declared_defaults_are_materialized_per_instance(self):
+        class Basket(ReactiveObject):
+            count = 0
+            items: list[int] = state(default_factory=list)
+
+        first = Basket()
+        second = Basket()
+
+        assert first.__dict__["count"] == 0
+        assert first.items == []
+        assert first.items is not second.items
+        assert first._state_fields == {"count": "declared", "items": "declared"}
+
+    def test_inherited_state_uses_mro_overrides_and_excludes_classvars(self):
+        class Parent(ReactiveObject):
+            inherited = "parent"
+            setting: ClassVar[str] = "configuration"
+
+        class Child(Parent):
+            inherited = "child"
+            setting = {"child": True}
+            required: int
+
+        child = Child()
+
+        assert child.inherited == "child"
+        assert "setting" not in child.__dict__
+        assert child._required_state_fields == frozenset({"required"})
+
+    def test_mutable_class_default_requires_a_factory(self):
+        with pytest.raises(TypeError, match="Invalid.items.*state\\(default_factory"):
+            class Invalid(ReactiveObject):
+                items = []
+
+    def test_state_rejects_invalid_default_arguments(self):
+        with pytest.raises(TypeError, match="exactly one"):
+            state()
+        with pytest.raises(TypeError, match="immutable"):
+            state(default=[])
+        with pytest.raises(TypeError, match="callable"):
+            state(default_factory=[])
 
     def test_reactive_object_change_detection_identity(self):
         """Same identity → no trigger."""
@@ -188,6 +236,247 @@ class TestStoreReactivity:
         assert 'items' in store._dag.nodes
         assert store.items == [1, 2, 3]
 
+    def test_serialize_includes_defaults_and_omits_local_state(self):
+        class Preferences(Store):
+            mode = "system"
+            editing: bool = state(default=False, serialize=False)
+
+        store = Preferences("preferences")
+
+        assert store.serialize()["mode"] == "system"
+        assert "editing" not in store.serialize()
+
+    def test_snapshot_wins_after_the_complete_constructor(self, monkeypatch):
+        install_initial_state({"preferences": {"mode": "dark"}})
+
+        class Preferences(Store):
+            mode = "system"
+
+            def __init__(self, name):
+                super().__init__(name)
+                self.mode = "light"
+
+        class SpecializedPreferences(Preferences):
+            def __init__(self, name):
+                super().__init__(name)
+                self.mode = "contrast"
+
+        preferences = SpecializedPreferences("preferences")
+
+        assert preferences.mode == "dark"
+        assert preferences.serialize()["mode"] == "dark"
+        assert Store.resolve("preferences") is preferences
+
+    def test_pending_subscriber_observes_only_final_state(self, monkeypatch):
+        install_initial_state({"preferences": {"mode": "dark"}})
+        seen = []
+
+        class Subscriber(ReactiveObject):
+            def react(self, names):
+                seen.append(Store._registry["preferences"].mode)
+
+        subscriber = Subscriber()
+        subscriber._dag.add_effect(
+            "capture",
+            lambda: subscriber.react(["$preferences.mode"]),
+            ["$preferences.mode"],
+        )
+        Store._pending_subscriptions["preferences"] = [(subscriber, "mode")]
+
+        class Preferences(Store):
+            mode = "system"
+
+            def __init__(self, name):
+                super().__init__(name)
+                self.mode = "light"
+
+        Preferences("preferences")
+
+        assert seen == ["dark"]
+
+    def test_failed_constructor_cannot_displace_a_working_store(self):
+        class Fragile(Store):
+            @classmethod
+            def _capture_config(cls, fail=False):
+                return {}
+
+            def __init__(self, name, *, fail=False):
+                super().__init__(name)
+                if fail:
+                    raise RuntimeError("construction failed")
+
+        working = Fragile("fragile")
+
+        with pytest.raises(RuntimeError, match="construction failed"):
+            Fragile("fragile", fail=True)
+
+        assert Store._registry["fragile"] is working
+
+    def test_resolve_returns_the_active_instance(self):
+        store = Store("stable")
+
+        assert Store.resolve("stable") is store
+
+    def test_from_dict_publishes_explicit_initial_state(self):
+        seen = []
+
+        class Subscriber(ReactiveObject):
+            def react(self, names):
+                seen.append(Store._registry["payload"].value)
+
+        subscriber = Subscriber()
+        subscriber._dag.add_effect(
+            "capture",
+            lambda: subscriber.react(["$payload.value"]),
+            ["$payload.value"],
+        )
+        Store._pending_subscriptions["payload"] = [(subscriber, "value")]
+
+        store = Store.from_dict("payload", {"value": 7})
+
+        assert store.value == 7
+        assert seen == [7]
+
+    def test_invalid_initial_state_cannot_replace_a_working_store(self):
+        working = Store("payload")
+
+        with pytest.raises(ValueError, match="serialize"):
+            Store.from_dict("payload", {"serialize": "invalid"})
+
+        assert Store.resolve("payload") is working
+
+    def test_explicit_empty_state_does_not_merge_the_browser_snapshot(self, monkeypatch):
+        install_initial_state({"preferences": {"mode": "dark"}})
+
+        class Preferences(Store):
+            mode = "system"
+
+            def __init__(self, name):
+                super().__init__(name)
+                self.mode = "light"
+
+        preferences = Preferences.from_dict("preferences", {})
+
+        assert preferences.mode == "light"
+        assert preferences._initial_load is None
+
+        rebuilt = Store.reinstantiate("preferences")
+        assert rebuilt.mode == "light"
+
+    def test_boot_snapshot_is_consumed_after_successful_publication(self):
+        install_initial_state({"preferences": {"mode": "dark"}})
+
+        class Preferences(Store):
+            mode = "system"
+
+        hydrated = Preferences("preferences")
+        rebuilt = Store.reinstantiate("preferences")
+
+        assert hydrated.mode == "dark"
+        assert rebuilt.mode == "system"
+
+    def test_failed_construction_releases_the_boot_snapshot(self):
+        install_initial_state({"required": {}})
+
+        class RequiredStore(Store):
+            value: int
+
+        with pytest.raises(TypeError, match="RequiredStore.*value"):
+            RequiredStore("required")
+
+        install_initial_state({"required": {"value": 7}})
+        assert RequiredStore("required").value == 7
+
+    def test_failed_snapshot_preparation_leaves_entry_claimable(self):
+        install_initial_state({"payload": {"serialize": "invalid"}})
+
+        with pytest.raises(ValueError, match="serialize"):
+            Store("payload")
+
+        with pytest.raises(ValueError, match="serialize"):
+            Store("payload")
+
+    def test_empty_boot_snapshot_is_present_and_consumed(self):
+        install_initial_state({"preferences": {}})
+
+        class Preferences(Store):
+            mode = "system"
+
+            def __init__(self, name):
+                super().__init__(name)
+                self.mode = "light"
+
+        hydrated = Preferences("preferences")
+        rebuilt = Store.reinstantiate("preferences")
+
+        assert hydrated._initial_load.snapshot_applied is True
+        assert hydrated.mode == "light"
+        assert rebuilt._initial_load is None
+
+    def test_late_store_claims_retained_boot_entry(self):
+        install_initial_state({"late": {"ready": True}})
+        Store("unrelated")
+
+        late = Store("late")
+
+        assert late.ready is True
+        assert late._initial_load.snapshot_applied is True
+
+    def test_required_state_fails_before_publication(self):
+        class RequiredStore(Store):
+            value: int
+
+        with pytest.raises(TypeError, match="RequiredStore.*value"):
+            RequiredStore("required")
+
+        assert "required" not in Store._registry
+        assert "required" not in Store._store_blueprints
+
+    def test_active_registries_are_context_local(self):
+        first_context = Context()
+        second_context = Context()
+
+        first = first_context.run(Store, "scoped")
+        second = second_context.run(Store.resolve, "scoped")
+
+        assert first is not second
+        assert first_context.run(Store.resolve, "scoped") is first
+        assert second_context.run(Store.resolve, "scoped") is second
+
+    def test_websocket_activation_waits_for_client_ready(self, monkeypatch):
+        sockets = []
+
+        class FakeSocket:
+            def __init__(self, url):
+                self.url = url
+                self.onmessage = None
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        class FakeWebSocket:
+            @staticmethod
+            def new(url):
+                socket = FakeSocket(url)
+                sockets.append(socket)
+                return socket
+
+        monkeypatch.setattr(store_module, "WebSocket", FakeWebSocket)
+        store = WebSocketStore("updates", "wss://example.test/updates")
+
+        assert sockets == []
+        store.on_client_ready()
+        assert [socket.url for socket in sockets] == ["wss://example.test/updates"]
+        store.on_client_teardown()
+        assert sockets[0].closed is True
+
+    def test_store_subclasses_cannot_override_allocation(self):
+        with pytest.raises(TypeError, match="CustomAllocation.*cannot define __new__"):
+            class CustomAllocation(Store):
+                def __new__(cls, name):
+                    return super().__new__(cls)
+
     def test_store_private_attrs_bypass_dag(self):
         store = Store("test_store")
         store.__dict__['_custom'] = "private"
@@ -220,6 +509,94 @@ class TestStoreReactivity:
         assert "x" in calls
         assert "y" in calls
 
+    def test_apply_state_batches_fields_and_preserves_omitted_values(self):
+        store = Store("test_store")
+        store.x = 1
+        store.y = 2
+        store.untouched = 3
+        seen = []
+        store._dag.add_effect(
+            "pair", lambda: seen.append((store.x, store.y)), ["x", "y"]
+        )
+
+        result = store.apply_state({"x": 10, "y": 20})
+
+        assert result is None
+        assert seen == [(10, 20)]
+        assert store.untouched == 3
+
+    def test_apply_state_respects_outer_batch_and_empty_patch(self):
+        store = Store("test_store")
+        store.x = 1
+        store.y = 2
+        seen = []
+        store._dag.add_effect(
+            "pair", lambda: seen.append((store.x, store.y)), ["x", "y"]
+        )
+
+        assert store.apply_state({}) is None
+        assert seen == []
+        with batch():
+            store.apply_state({"x": 10})
+            store.apply_state({"y": 20})
+            assert seen == []
+
+        assert seen == [(10, 20)]
+
+    def test_apply_state_rejects_invalid_keys_before_mutating(self):
+        store = Store("test_store")
+        store.value = 1
+
+        for invalid_key in ("_private", "not-valid", "serialize"):
+            with pytest.raises(ValueError, match=invalid_key):
+                store.apply_state({"value": 2, invalid_key: 3})
+            assert store.value == 1
+
+    def test_apply_state_rejects_local_only_fields(self):
+        class Preferences(Store):
+            editing: bool = state(default=False, serialize=False)
+
+        store = Preferences("preferences")
+
+        with pytest.raises(ValueError, match="editing"):
+            store.apply_state({"editing": True})
+        assert store.editing is False
+
+    def test_apply_state_accepts_unknown_public_data_fields(self):
+        store = Store("test_store")
+
+        store.apply_state({"dynamic_value": 7})
+
+        assert store.dynamic_value == 7
+        assert store.serialize()["dynamic_value"] == 7
+
+    def test_missing_store_reads_raise_attribute_error_before_loading(self):
+        store = Store("test_store")
+
+        with pytest.raises(AttributeError, match="missing"):
+            _ = store.missing
+
+
+@pytest.mark.parametrize(
+    "store_factory",
+    [
+        lambda name: Store(name),
+        lambda name: AppStateStore(name),
+        lambda name: ModelStore(name, type("SnapshotModel", (), {})),
+    ],
+    ids=["store", "app-state-store", "model-store"],
+)
+def test_store_families_share_state_application(store_factory):
+    _clear_store_registry()
+    store = store_factory("state_family")
+    store.value = 1
+
+    result = store.apply_state({"value": 2})
+
+    assert result is None
+    assert store.value == 2
+    _clear_store_registry()
+
 
 # ──────────────────────────────────────────────
 # Test: @computed on Store
@@ -231,7 +608,7 @@ class TestStoreComputed:
 
     def test_computed_property_on_store(self):
         class CartStore(Store):
-            items = []
+            items: list = state(default_factory=list)
 
             @computed
             def item_count(self):
@@ -357,7 +734,7 @@ class TestStoreSubscriptions:
     def test_subscription_to_computed_property(self):
         """Component subscribing to a computed store property should react when it changes."""
         class CartStore(Store):
-            items = []
+            items: list = state(default_factory=list)
 
             @computed
             def count(self):

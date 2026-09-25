@@ -7,6 +7,9 @@ Covers the ``jsonable()`` projection boundary + the ``register_serializer`` /
 the ``Store.serialize()`` integration.
 """
 
+import math
+import re
+
 import pytest
 
 from basis.shared.serialization import (
@@ -256,13 +259,72 @@ def test_store_serialize_uses_jsonable():
     Store._store_blueprints.pop(name, None)
     try:
         store = Store(name)
-        store.__dict__["plain"] = 1
-        store.__dict__["obj"] = Jsonish()
-        store.__dict__["unsupported"] = object()
+        store.plain = 1
+        store.obj = Jsonish()
         state = store.serialize()
         assert state["plain"] == 1
         assert state["obj"] == {"ok": True}
-        # unsupported leaf → deterministic None (explicit, not silently dropped)
-        assert state["unsupported"] is None
     finally:
         Store._store_blueprints.pop(name, None)
+
+
+def test_store_export_is_detached():
+    store = Store("detached_export")
+    store.items = [{"id": 1}]
+
+    snapshot = store.serialize()
+    snapshot["items"][0]["id"] = 2
+
+    assert store.items == [{"id": 1}]
+
+
+@pytest.mark.parametrize(
+    ("value", "path"),
+    [
+        ([object()], "items[0]"),
+        ({1: "value"}, "items"),
+        ([math.nan], "items[0]"),
+        ([math.inf], "items[0]"),
+    ],
+)
+def test_store_export_rejects_invalid_nested_values(value, path):
+    store = Store("strict_export")
+    store.items = value
+
+    with pytest.raises(TypeError, match=rf"strict_export.*{re.escape(path)}"):
+        store.serialize()
+
+
+def test_store_export_validates_json_protocol_results_recursively():
+    class InvalidJson:
+        def __json__(self):
+            return {"value": object()}
+
+    store = Store("invalid_json_protocol")
+    store.payload = InvalidJson()
+
+    with pytest.raises(TypeError, match=r"invalid_json_protocol.*payload.value"):
+        store.serialize()
+
+
+def test_store_export_preserves_protocol_null():
+    class JsonNull:
+        def __json__(self):
+            return None
+
+    store = Store("json_protocol_null")
+    store.payload = JsonNull()
+
+    assert store.serialize()["payload"] is None
+
+
+def test_store_export_rejects_arbitrary_public_attribute_objects():
+    class Service:
+        def __init__(self):
+            self.connected = True
+
+    store = Store("service_snapshot")
+    store.service = Service()
+
+    with pytest.raises(TypeError, match=r"service_snapshot.*service"):
+        store.serialize()

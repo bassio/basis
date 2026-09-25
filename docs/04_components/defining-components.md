@@ -2,6 +2,17 @@
 
 A Basis component is a Python class that combines an HTML template, CSS styling, and reactive state. Basis supports both single-file and multi-file component layouts.
 
+Each authored component class has one prepared definition per revision: its
+template prototype, styles, and binding recipes are compiled once, then every
+mount clones fresh nodes and creates fresh binding objects. Mounted instances
+retain the authored Python type; passing different props never creates or
+registers another class.
+
+Props are instance values. Lists, models, callbacks, and other Python objects
+remain typed and are borrowed rather than copied. A parent or loop passes an
+already evaluated value through unchanged, even when that value is a string
+containing braces.
+
 ---
 
 ## Single-file components

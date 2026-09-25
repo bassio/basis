@@ -10,6 +10,7 @@ import pytest
 
 from basis.shared import events
 from basis.shared.component import Component
+from basis.shared.reactive import state
 from basis.shared.bindings import ChildBinding, EventBinding, FormModelBinding
 from basis.shared.element import Element
 from js_fakes import FakeFFI
@@ -197,7 +198,7 @@ def test_child_binding_lifecycle_mount():
 
 def test_loop_binding_lifecycle():
     class LoopOwner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         def template(self):
             """

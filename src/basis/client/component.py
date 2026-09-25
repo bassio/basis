@@ -633,6 +633,7 @@ class Component(BaseComponent):
         super().__init_subclass__(**kwargs)
 
         #client
+        cls.ensure_definition()
         cls._register_custom_element()
 
     def __init__(self):

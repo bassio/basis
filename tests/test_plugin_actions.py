@@ -256,6 +256,10 @@ def test_keyed_loop_binding_reordering_with_custom_elements():
             inst.__dict__['__element__'] = inst_inner
             return inst
 
+        @classmethod
+        def _mount_with_creation_inputs(cls, container, replace, creation_inputs):
+            return cls.mount(container, replace=replace, **creation_inputs.values)
+
     MockComponent._registry["hero-card"] = MockChildComponent
 
     comp_inst = MockComponent()
@@ -406,6 +410,10 @@ def test_unkeyed_loop_binding_with_custom_element():
             container.appendChild(inst_inner)
             inst.__dict__['__element__'] = inst_inner
             return inst
+
+        @classmethod
+        def _mount_with_creation_inputs(cls, container, replace, creation_inputs):
+            return cls.mount(container, replace=replace, **creation_inputs.values)
 
     MockComponent._registry["team-entry"] = MockChildComponent
 

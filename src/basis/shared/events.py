@@ -883,21 +883,6 @@ class BrowserMixin:
         self.__dict__.setdefault(_SUBSCRIBED, []).append(subscriber)
         return subscriber
 
-    def _materialize_levels(self) -> None:
-        """Give every declared level a real field, so it serialises and hydrates.
-
-        Guarded on absence rather than on hydration: a field the server did not ship still gets
-        its neutral, so a declaration skew between the two sides cannot leave a level without a
-        field.
-        """
-        for name, declarations in declared_declarations(type(self)).items():
-            if name in self.__dict__:
-                continue
-            for declaration in declarations:
-                if declaration.kind == "level":
-                    setattr(self, name, declaration.neutral)
-                    break
-
     def _attach_declarations(self) -> None:
         """Attach every declaration in effect for this class. Idempotent."""
         declared = declared_declarations(type(self))

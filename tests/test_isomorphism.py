@@ -60,6 +60,120 @@ assert Request is object, "client Request shim should be object"
 print("shim OK")
 """
 
+_CLIENT_PAGE_SHIM_SIM = r"""
+import importlib.util, sys, types
+from pathlib import Path
+sys.modules["pyscript"] = types.ModuleType("pyscript")
+src = Path(importlib.util.find_spec("basis").submodule_search_locations[0])
+def package(name, path):
+    module = types.ModuleType(name)
+    module.__path__ = [str(path)]
+    sys.modules[name] = module
+package("basis", src)
+package("basis.shared", src / "shared")
+package("basis.client", src / "client")
+client_component = types.ModuleType("basis.client.component")
+client_component.Component = type("Component", (), {})
+sys.modules["basis.client.component"] = client_component
+page = types.ModuleType("basis.shared.page")
+class StaticPage:
+    hydrates = False
+    root_component = None
+    stores = []
+class Page(StaticPage):
+    hydrates = True
+def synthesized_page_base(component_cls, page_cls=None):
+    if isinstance(component_cls, type) and issubclass(component_cls, StaticPage):
+        raise TypeError("Page is not a root component")
+    base = page_cls or Page
+    if base.root_component is not None or base.stores:
+        raise ValueError("complete page")
+    if not base.hydrates:
+        raise ValueError("no client")
+    return base
+def refuse_static_render_mode(page_cls, render_mode):
+    if render_mode is not None and not page_cls.hydrates:
+        raise ValueError("StaticPage")
+page.StaticPage = StaticPage
+page.Page = Page
+page._synthesized_page_base = synthesized_page_base
+page.refuse_static_render_mode = refuse_static_render_mode
+sys.modules["basis.shared.page"] = page
+base_component = types.ModuleType("basis.shared.base_component")
+base_component.include_store = lambda value: value
+base_component.include_model = lambda value: value
+sys.modules["basis.shared.base_component"] = base_component
+styling = types.ModuleType("basis.shared.styling")
+styling.scoped = lambda value: value
+styling.extra_style = lambda value: value
+sys.modules["basis.shared.styling"] = styling
+
+from basis.shared.component import Basis, Component
+
+class Root(Component):
+    pass
+
+app = Basis()
+decorated = app.page(Root, title="Client title")
+assert decorated is Root
+assert vars(Root)["_synthesized_page_args"] == {
+    "page_cls": None,
+    "title": "Client title",
+    "pyscript_src": "https://pyscript.net/releases/2026.3.1",
+}
+
+class FactoryRoot(Component):
+    pass
+assert app.page(
+    path="/factory",
+    title="Factory",
+    pyscript_src="/pyscript",
+    render_mode="csr",
+    name="factory",
+)(FactoryRoot) is FactoryRoot
+assert vars(FactoryRoot)["_synthesized_page_args"] == {
+    "page_cls": None,
+    "title": "Factory",
+    "pyscript_src": "/pyscript",
+}
+
+class ChildRoot(FactoryRoot):
+    pass
+assert "_synthesized_page_args" not in vars(ChildRoot)
+
+class ServedRoot(Component):
+    pass
+assert app.serve("/nested")(ServedRoot) is ServedRoot
+assert vars(ServedRoot)["_synthesized_page_args"]["pyscript_src"].startswith("https://")
+
+class InheritedSourceRoot(Component):
+    pass
+app.page(pyscript_src=None)(InheritedSourceRoot)
+assert vars(InheritedSourceRoot)["_synthesized_page_args"]["pyscript_src"] is None
+
+class FullPage(Page):
+    pass
+assert app.serve("/full")(FullPage) is FullPage
+assert app.include_page("/full", page_cls=FullPage) is FullPage
+assert app.include_page("/decorated")(FullPage) is FullPage
+assert "_synthesized_page_args" not in vars(FullPage)
+
+try:
+    app.page(FullPage)
+except TypeError:
+    pass
+else:
+    raise AssertionError("app.page must reject a Page subclass")
+
+try:
+    app.page(Root, stores=["items"])
+except TypeError:
+    pass
+else:
+    raise AssertionError("client app.page must reject stores")
+print("page shim OK")
+"""
+
 
 def test_request_shim_is_client_safe():
     result = subprocess.run(
@@ -67,6 +181,18 @@ def test_request_shim_is_client_safe():
     )
     assert result.returncode == 0, f"client shim sim failed:\n{result.stdout}\n{result.stderr}"
     assert "shim OK" in result.stdout
+
+
+def test_client_page_shim_annotates_the_root_class():
+    result = subprocess.run(
+        [sys.executable, "-c", _CLIENT_PAGE_SHIM_SIM],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"client page shim sim failed:\n{result.stdout}\n{result.stderr}"
+    )
+    assert "page shim OK" in result.stdout
 
 
 # --- 2. no unguarded top-level fastapi in client-reachable modules ---------

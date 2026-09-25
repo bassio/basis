@@ -15,6 +15,9 @@ Covers:
   marks dev mode.
 * friendly ImportError hints for server-only modules.
 """
+import asyncio
+from contextvars import Context
+
 import pytest
 
 from basis.shared.bindings import (
@@ -28,6 +31,7 @@ from basis.shared.errors import (
     EVAL_ERROR,
     BindingError,
     ErrorCollector,
+    error_sink,
     find_template_line,
     get_error_sink,
     import_error_hint,
@@ -206,6 +210,103 @@ def test_error_collector_restores_previous_sink():
     assert collector.to_dict()[0]["expr"] == "boom1"
 
     assert ErrorCollector().is_empty is True
+
+
+def test_error_collectors_are_isolated_between_tasks():
+    outer_errors = []
+    set_error_sink(lambda err: outer_errors.append(err) or True)
+
+    first = ErrorCollector()
+    second = ErrorCollector()
+
+    async def run():
+        first_entered = asyncio.Event()
+        second_entered = asyncio.Event()
+        first_exited = asyncio.Event()
+
+        async def collect_first():
+            with first:
+                first_entered.set()
+                await second_entered.wait()
+                record_error(expr="first")
+            first_exited.set()
+
+        async def collect_second():
+            await first_entered.wait()
+            with second:
+                second_entered.set()
+                await first_exited.wait()
+                record_error(expr="second")
+
+        await asyncio.gather(collect_first(), collect_second())
+
+    asyncio.run(run())
+
+    assert [error.expr for error in first.errors] == ["first"]
+    assert [error.expr for error in second.errors] == ["second"]
+    assert outer_errors == []
+    assert get_error_sink() is not first
+
+
+def test_error_sink_nesting_and_explicit_disable():
+    outer_errors = []
+    set_error_sink(lambda err: outer_errors.append(err) or True)
+
+    outer = ErrorCollector()
+    inner = ErrorCollector()
+    with outer:
+        record_error(expr="outer-before")
+        with inner:
+            record_error(expr="inner")
+        with error_sink(None):
+            assert record_error(expr="disabled") is False
+        record_error(expr="outer-after")
+
+    record_error(expr="default")
+    assert [error.expr for error in outer.errors] == ["outer-before", "outer-after"]
+    assert [error.expr for error in inner.errors] == ["inner"]
+    assert [error.expr for error in outer_errors] == ["default"]
+
+
+def test_error_collector_restores_sink_after_exception():
+    default = lambda err: True
+    set_error_sink(default)
+
+    with pytest.raises(RuntimeError, match="render failed"):
+        with ErrorCollector():
+            raise RuntimeError("render failed")
+
+    assert get_error_sink() is default
+
+
+def test_error_collector_restores_sink_after_cancellation():
+    default = lambda err: True
+    set_error_sink(default)
+
+    async def run():
+        entered = asyncio.Event()
+
+        async def collect():
+            with ErrorCollector():
+                entered.set()
+                await asyncio.Event().wait()
+
+        task = asyncio.create_task(collect())
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+    assert get_error_sink() is default
+
+
+def test_error_collector_rejects_same_instance_reentry():
+    collector = ErrorCollector()
+    with collector:
+        with pytest.raises(RuntimeError, match="cannot be re-entered"):
+            with collector:
+                pass
 
 
 def test_record_error_no_sink_returns_false():
@@ -473,6 +574,15 @@ def test_install_sink_records_globally_and_dispatches(client_env):
     assert len(win.warns) == 1
 
 
+def test_installed_sink_handles_later_fresh_context(client_env):
+    mod, win, doc, ffi = client_env
+    mod.set_overlay_enabled(False)
+    mod.install_error_sink()
+
+    assert Context().run(record_error, expr="later-callback", phase="client") is True
+    assert win.__basisErrors[0]["expr"] == "later-callback"
+
+
 def test_sink_deduplicates_recurring_failures(client_env):
     mod, win, doc, ffi = client_env
     mod.set_overlay_enabled(False)
@@ -703,6 +813,89 @@ def test_ssr_no_errors_means_no_basis_errors_key(monkeypatch):
     resp = client.get("/")
     assert resp.status_code == 200
     assert "__basis_errors__" not in resp.text
+
+
+def test_ssr_production_does_not_serialize_binding_errors(monkeypatch):
+    monkeypatch.delenv("BASIS_HMR", raising=False)
+    from fastapi.testclient import TestClient
+    from basis.server.app import Basis
+    from basis.shared.page import _synthesize_page
+    from basis.shared.component import Component
+
+    app = Basis()
+    app.bootstrap()
+
+    class Root(Component):
+        """<div>{missing_value}</div>"""
+
+    app.include_page("/", page_cls=_synthesize_page(Root, entry_module="/test_root.py"))
+    response = TestClient(app).get("/")
+
+    assert response.status_code == 200
+    assert "[Error:" not in response.text
+    assert "__basis_errors__" not in response.text
+
+
+def test_concurrent_renders_keep_diagnostics_request_local(monkeypatch):
+    monkeypatch.setenv("BASIS_HMR", "1")
+    import json
+    import re
+    from types import SimpleNamespace
+
+    from basis.server.app import Basis
+    from basis.server.render import render_page
+    from basis.shared.component import Component
+    from basis.shared.page import _synthesize_page
+
+    first_ready = asyncio.Event()
+    second_ready = asyncio.Event()
+
+    class FirstRoot(Component):
+        """<div>First</div>"""
+
+        async def server_load(self):
+            first_ready.set()
+            await second_ready.wait()
+            record_error(expr="first-render")
+
+    class SecondRoot(Component):
+        """<div>Second</div>"""
+
+        async def server_load(self):
+            second_ready.set()
+            await first_ready.wait()
+            record_error(expr="second-render")
+
+    app = Basis()
+    app.bootstrap()
+    first_page = _synthesize_page(FirstRoot, entry_module="/first.py")
+    second_page = _synthesize_page(SecondRoot, entry_module="/second.py")
+
+    async def run():
+        first_request = SimpleNamespace(
+            app=app, url=SimpleNamespace(path="/first"), cookies={}
+        )
+        second_request = SimpleNamespace(
+            app=app, url=SimpleNamespace(path="/second"), cookies={}
+        )
+        return await asyncio.gather(
+            render_page(first_request, first_page),
+            render_page(second_request, second_page),
+        )
+
+    first_html, second_html = asyncio.run(run())
+
+    def diagnostic_exprs(html):
+        match = re.search(
+            r'<script id="basis-initial-state"[^>]*>\s*(.*?)\s*</script>',
+            html,
+            re.S,
+        )
+        state = json.loads(match.group(1))
+        return [error["expr"] for error in state["__basis_errors__"]]
+
+    assert diagnostic_exprs(first_html) == ["first-render"]
+    assert diagnostic_exprs(second_html) == ["second-render"]
 
 
 def test_serialize_initial_state_includes_errors():

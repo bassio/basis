@@ -43,8 +43,8 @@ def test_event_handler_name_does_not_pollute_fields_or_dag():
 
     # _capture_state (HMR) never snapshots the handler.
     state = mounted._capture_state()
-    assert "count" in state
-    assert "on_select" not in state
+    assert "count" in state.values
+    assert "on_select" not in state.values
 
 
 def test_event_binding_fields_is_empty():

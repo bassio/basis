@@ -61,6 +61,21 @@ def resolve_value(val):
         return val
 
 
+def _apply_provider_data(store, data, target=None) -> None:
+    if target:
+        value = ReactiveCollection(data) if isinstance(data, list) else data
+        store.apply_state({target: value})
+    elif isinstance(data, list):
+        store.apply_state({"items": ReactiveCollection(data)})
+    else:
+        store.apply_state(dict(data))
+
+
+def _model_fields(item) -> dict:
+    values = item.__dict__ if hasattr(item, "__dict__") else item
+    return {key: value for key, value in values.items() if not key.startswith("_")}
+
+
 class StoreProvider(Component):
     __tag__ = "store-provider"
     
@@ -80,7 +95,7 @@ class StoreProvider(Component):
                 asyncio.create_task(self.fetch_data())
 
     @classmethod
-    def initialize(cls, container, **kwargs):
+    def initialize(cls, container, _creation_inputs=None, **kwargs):
         name = kwargs.get("name", "")
         if name and name not in Store._registry:
             # Create the store synchronously so children can bind to it. Prefer
@@ -90,7 +105,11 @@ class StoreProvider(Component):
             # guard and lose subclass constructor state.
             Store.reinstantiate(name) or Store(name)
             
-        instance = super().initialize(container, **kwargs)
+        instance = super().initialize(
+            container,
+            _creation_inputs=_creation_inputs,
+            **kwargs,
+        )
         
         # Schedule the fetch task if on client
         if IS_CLIENT:
@@ -126,16 +145,7 @@ class StoreProvider(Component):
             store = Store._registry.get(self.name)
             if store:
                 store.__dict__["_ssr_url"] = self.url
-                if self.target:
-                    if isinstance(data, list):
-                        setattr(store, self.target, ReactiveCollection(data))
-                    else:
-                        setattr(store, self.target, data)
-                elif isinstance(data, list):
-                    setattr(store, "items", ReactiveCollection(data))
-                else:
-                    for k, v in dict(data).items():
-                        setattr(store, k, v)
+                _apply_provider_data(store, data, self.target)
         except Exception as e:
             print(f"Server load failed for {self.name}: {e}")
 
@@ -152,11 +162,9 @@ class StoreProvider(Component):
             return
             
         store = Store._registry.get(self.name)
-        if store:
-            if getattr(store, "_hydrated_from_ssr", False) and getattr(store, "_ssr_url", None) == self.url:
-                store._hydrated_from_ssr = False
-                self.__dict__["_last_fetched_url"] = self.url
-                return
+        if store and store._consume_initial_fetch(url=self.url):
+            self.__dict__["_last_fetched_url"] = self.url
+            return
 
         try:
 
@@ -164,18 +172,7 @@ class StoreProvider(Component):
             data = await response.json()
             
             if store:
-                if self.target:
-                    if isinstance(data, list):
-                        setattr(store, self.target, ReactiveCollection(data))
-                    else:
-                        setattr(store, self.target, data)
-
-                elif isinstance(data, list):
-                    setattr(store, "items", ReactiveCollection(data))
-                else:
-                    for k, v in dict(data).items():
-                        setattr(store, k, v)
-
+                _apply_provider_data(store, data, self.target)
                 store.__dict__['_first_load_completed'] = True
                     
             self.__dict__["_last_fetched_url"] = self.url
@@ -189,7 +186,7 @@ class StoreProvider(Component):
         # This prevents orphan slot elements from polluting the SSR and client DOM.
         return cls.initialize(container, **attributes)
 
-    def fill_slots(self, container):
+    def fill_slots(self, container=None):
         # Logical-only component; do not consume or distribute child nodes.
         pass
 
@@ -226,14 +223,18 @@ class ModelStoreProvider(Component):
                     asyncio.create_task(self.fetch_data())
 
     @classmethod
-    def initialize(cls, container, **kwargs):
+    def initialize(cls, container, _creation_inputs=None, **kwargs):
         name = kwargs.get("name", "")
         model = kwargs.get("model", None)
         
         if name and model and name not in Store._registry:
             ModelStore(name, model)
             
-        instance = super().initialize(container, **kwargs)
+        instance = super().initialize(
+            container,
+            _creation_inputs=_creation_inputs,
+            **kwargs,
+        )
         
         # Capture the custom kwargs for fetching
         for k, v in kwargs.items():
@@ -265,16 +266,10 @@ class ModelStoreProvider(Component):
             if self.one:
                 data = await store.fetch_one(**resolved_kwargs)
                 if data:
-                    # Spread flat
-                    for k, v in data.__dict__.items():
-                        if not k.startswith("_"):
-                            setattr(store, k, v)
+                    store.apply_state(_model_fields(data))
             else:
                 data = await store.fetch_all(**resolved_kwargs)
-                if self.target:
-                    setattr(store, self.target, ReactiveCollection(data))
-                else:
-                    setattr(store, "items", ReactiveCollection(data))
+                _apply_provider_data(store, data, self.target or "items")
         except Exception as e:
             print(f"Server load failed for ModelStore {self.name}: {e}")
 
@@ -295,35 +290,18 @@ class ModelStoreProvider(Component):
         if not isinstance(store, ModelStore):
             return
 
-        # Check SSR Hydration Guard
-        if getattr(store, "_hydrated_from_ssr", False):
-            ssr_params = getattr(store, "_ssr_params", None)
-            if ssr_params is not None:
-                # Compare current model kwargs with ssr_params
-                match = True
-                for k, v in self._model_kwargs.items():
-                    if k not in ssr_params or str(ssr_params[k]) != str(v):
-                        match = False
-                        break
-                if match:
-                    print(f"[Basis] SSR Hydration Guard: skipping fetch for ModelStore {self.name}")
-                    store._hydrated_from_ssr = False
-                    self.__dict__["_last_kwargs_str"] = kwarg_str
-                    return
+        if store._consume_initial_fetch(params=self._model_kwargs):
+            self.__dict__["_last_kwargs_str"] = kwarg_str
+            return
 
         try:
             if self.one:
                 data = await store.fetch_one(**self._model_kwargs)
                 if data:
-                    for k, v in data.__dict__.items():
-                        if not k.startswith("_"):
-                            setattr(store, k, v)
+                    store.apply_state(_model_fields(data))
             else:
                 data = await store.fetch_all(**self._model_kwargs)
-                if self.target:
-                    setattr(store, self.target, ReactiveCollection(data))
-                else:
-                    setattr(store, "items", ReactiveCollection(data))
+                _apply_provider_data(store, data, self.target or "items")
                     
             self.__dict__["_last_kwargs_str"] = kwarg_str
             
@@ -336,7 +314,7 @@ class ModelStoreProvider(Component):
         # This prevents orphan slot elements from polluting the SSR and client DOM.
         return cls.initialize(container, **attributes)
 
-    def fill_slots(self, container):
+    def fill_slots(self, container=None):
         # Logical-only component; do not consume or distribute child nodes.
         pass
 

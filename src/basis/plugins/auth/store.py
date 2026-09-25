@@ -26,14 +26,11 @@ class AuthStore(Store):
     """
 
     _requires_app = True
+    user = None
+    authenticated = False
 
     def __init__(self, name: str = "auth"):
         super().__init__(name)
-        # Store-subclass footgun: assigning instance attrs after super().__init__()
-        # would clobber the SSR-hydrated values, because hydration runs inside it.
-        if not getattr(self, "_hydrated_from_ssr", False):
-            self.user = None
-            self.authenticated = False
 
     def apply_request(self, request) -> None:
         """Server-only: resolve this request's session cookie."""

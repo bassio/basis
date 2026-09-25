@@ -13,9 +13,12 @@ The fix:
     instance is missing from the current request's registry.
 """
 import asyncio
+import logging
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from basis.server.app import Basis
 from basis.server.plugin import BasisPlugin
@@ -74,6 +77,35 @@ class PluginTargetStore(Store):
 @server_action
 def echo(value):
     return f"echo: {value}"
+
+
+@server_action
+def no_args():
+    return "ok"
+
+
+@server_action
+def deny_fastapi():
+    raise HTTPException(
+        status_code=403, detail="denied", headers={"X-Reason": "policy"}
+    )
+
+
+@server_action
+def deny_starlette():
+    raise StarletteHTTPException(
+        status_code=409, detail="conflict", headers={"X-Reason": "state"}
+    )
+
+
+@server_action
+def disclose_secret():
+    raise RuntimeError("sensitive-action-marker")
+
+
+@server_action
+async def cancel_action():
+    raise asyncio.CancelledError
 
 
 @pytest.fixture(autouse=True)
@@ -339,6 +371,125 @@ def test_invalid_json_payload_returns_400():
     resp = client.post("/basis/api/action", content=b"not-json", headers={"content-type": "application/json"})
     assert resp.status_code == 400
     assert "Invalid JSON payload" in resp.text
+
+
+@pytest.mark.parametrize(
+    ("payload", "field"),
+    [
+        (None, "payload"),
+        ([], "payload"),
+        ("action", "payload"),
+        (1, "payload"),
+        (True, "payload"),
+        ({}, "path"),
+        ({"path": None}, "path"),
+        ({"path": 1}, "path"),
+        ({"path": ""}, "path"),
+        ({"path": "   "}, "path"),
+        ({"path": _action_path(no_args), "store_name": ""}, "store_name"),
+        ({"path": _action_path(no_args), "store_name": []}, "store_name"),
+        ({"path": _action_path(no_args), "args": None}, "args"),
+        ({"path": _action_path(no_args), "args": {}}, "args"),
+        ({"path": _action_path(no_args), "kwargs": None}, "kwargs"),
+        ({"path": _action_path(no_args), "kwargs": []}, "kwargs"),
+        ({"path": _action_path(no_args), "action_name": 1}, "action_name"),
+        ({"path": _action_path(no_args), "plugin_name": []}, "plugin_name"),
+    ],
+)
+def test_invalid_rpc_envelope_returns_400_without_dispatch(
+    monkeypatch, payload, field
+):
+    invoked = False
+
+    async def fake_run_action(func, instance, args, kwargs):
+        nonlocal invoked
+        invoked = True
+
+    monkeypatch.setattr("basis.server.rpc._run_action", fake_run_action)
+    app = Basis()
+    app.bootstrap()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post("/basis/api/action", json=payload)
+
+    assert response.status_code == 400
+    assert field in response.text
+    assert invoked is False
+
+
+def test_minimal_rpc_envelope_uses_default_arguments():
+    app = Basis()
+    app.bootstrap()
+    client = TestClient(app)
+
+    response = client.post(
+        "/basis/api/action", json={"path": _action_path(no_args), "extra": "ignored"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"data": "ok"}
+
+
+@pytest.mark.parametrize(
+    ("action", "status", "detail", "reason"),
+    [
+        (deny_fastapi, 403, "denied", "policy"),
+        (deny_starlette, 409, "conflict", "state"),
+    ],
+)
+def test_intentional_http_errors_are_preserved(action, status, detail, reason):
+    app = Basis()
+    app.bootstrap()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post("/basis/api/action", json={"path": _action_path(action)})
+
+    assert response.status_code == status
+    assert response.json() == {"detail": detail}
+    assert response.headers["X-Reason"] == reason
+
+
+def test_unexpected_action_error_is_logged_and_sanitized(caplog):
+    app = Basis()
+    app.bootstrap()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    with caplog.at_level(logging.ERROR, logger="uvicorn.error"):
+        response = client.post(
+            "/basis/api/action", json={"path": _action_path(disclose_secret)}
+        )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Server action failed"}
+    assert "sensitive-action-marker" not in response.text
+    assert "sensitive-action-marker" in caplog.text
+
+
+def test_unexpected_response_error_is_sanitized(monkeypatch):
+    def fail_response(result, instance):
+        raise RuntimeError("sensitive-response-marker")
+
+    monkeypatch.setattr("basis.server.rpc._rpc_response", fail_response)
+    app = Basis()
+    app.bootstrap()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post("/basis/api/action", json={"path": _action_path(no_args)})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Server action failed"}
+    assert "sensitive-response-marker" not in response.text
+
+
+def test_action_cancellation_propagates():
+    from basis.server.rpc import _handle_action
+
+    class Request:
+        async def json(self):
+            return {"path": _action_path(cancel_action)}
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(_handle_action(Basis(), Request()))
 
 
 # ---------------------------------------------------------------------------

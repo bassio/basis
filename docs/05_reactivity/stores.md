@@ -10,7 +10,7 @@ A `Store` inherits from `ReactiveObject`. Any component can subscribe to a store
 
 ```python
 from basis.shared.store import Store
-from basis.shared.reactive import computed
+from basis.shared.reactive import computed, state
 
 class UserSession(Store):
     username = "Guest"
@@ -35,7 +35,7 @@ prices = Store("prices")
 prices.rates = {"apple": 1.5, "banana": 0.5}
 
 class Cart(Store):
-    items = [{"name": "apple", "qty": 2}]
+    items: list = state(default_factory=lambda: [{"name": "apple", "qty": 2}])
 
     @computed
     def total(self):
@@ -85,8 +85,46 @@ class HomePage(Page):
     # or: stores = []  → all auto-discovered stores
 ```
 
-`Store.resolve(name)` rebuilds a store from its blueprint (preserving subclass
-constructor args), which is what SSR and store-bound server actions use.
+`Store.resolve(name)` returns the active instance, or rebuilds the proper subclass
+from its blueprint when the current context has none. `Store.reinstantiate(name)`
+is the explicit replacement operation used by request and action boundaries that
+need a fresh instance.
+
+### State and snapshots
+
+Immutable scalar class defaults become instance state. Mutable defaults use a
+factory so instances never share a list or dictionary:
+
+```python
+from basis.shared.reactive import state
+
+class Basket(Store):
+    count = 0
+    items: list = state(default_factory=list)
+    editing = state(default=False, serialize=False)
+```
+
+Assign a replacement value to notify subscribers. Nested mutation such as
+`items.append(...)` does not notify the reactive graph:
+
+```python
+basket.items = [*basket.items, {"id": 7}]
+basket.apply_state({"count": len(basket.items)})
+```
+
+`serialize()` returns detached JSON-compatible data. Unsupported nested values,
+cycles, non-string mapping keys, and non-finite floats raise with the failing
+field path. `apply_state()` validates every field before changing the store;
+private names, methods, configuration, and `serialize=False` fields cannot be
+set from a snapshot. Missing fields raise `AttributeError`, so optional values
+must be declared explicitly.
+
+On the client, Basis parses `#basis-initial-state` once before importing Store
+modules. Each named snapshot is applied to the first successful construction of
+that Store and then consumed. Stores constructed later can still claim retained
+entries, while `reinstantiate()` starts from constructor state rather than
+replaying the page's boot snapshot. Explicit `from_dict()` state takes precedence
+and also consumes any same-name boot entry after successful construction.
 
 ---
 
@@ -138,7 +176,9 @@ Basis provides declarative components for fetching remote data directly into sto
 </div>
 ```
 
-Both providers feature **SSR Hydration Guards**: if data was already server-rendered and injected during initial page load, the client provider skips redundant network fetches.
+When initial state records the provider's URL or parameters, the matching
+provider skips its first redundant client fetch. That provenance is consumed
+once; later refreshes fetch normally.
 
 ---
 
@@ -147,16 +187,17 @@ Both providers feature **SSR Hydration Guards**: if data was already server-rend
 A `@server_action` decorator marks a method to execute exclusively on the server. On the client, the decorator replaces the method with an async RPC proxy pointing to `/basis/api/action`.
 
 ```python
+from basis.shared.reactive import state
 from basis.shared.store import Store
 from basis.shared.actions import server_action
 
 class CartStore(Store):
-    items = []
+    items: list = state(default_factory=list)
 
     @server_action
     async def add_item(self, item_name: str, price: float):
         # Executes on the server
-        self.items.append({"name": item_name, "price": price})
+        self.items = [*self.items, {"name": item_name, "price": price}]
         return f"Added {item_name}"
 ```
 

@@ -12,7 +12,7 @@ control is driven from outside by the same prop it writes back.
 """
 from basis.shared.styling import compact_block
 from basis.shared.component import IS_CLIENT, Component, scoped
-from basis.shared.reactive import computed
+from basis.shared.reactive import computed, state
 
 if IS_CLIENT:
     from pyscript import ffi, window
@@ -126,7 +126,7 @@ class Segmented(Component):
 
     __tag__ = "ui-segmented"
 
-    items = []
+    items: list = state(default_factory=list)
     value = ""
     label = ""
     disabled = ""

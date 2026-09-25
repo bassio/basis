@@ -45,7 +45,7 @@ src/basis/
     ├── hydration.py      # Canonical hydration paths + SSR re-pointing
     ├── base_component.py # Component lifecycle, blueprint analysis, slots, subscriptions
     ├── store.py          # Store, ModelStore, WebSocketStore, ReactiveCollection
-    ├── store_provider.py # StoreProvider / ModelStoreProvider (SSR hydration guards)
+    ├── store_provider.py # StoreProvider / ModelStoreProvider (initial-fetch suppression)
     ├── router.py         # RouterStore, Route (<basis-route>), Link (<basis-link>)
     ├── media.py          # media() — named CSS media queries as reactive store fields
     ├── styling.py        # The stylesheet contract: viewport + capability queries, @media/@container blocks, style markers

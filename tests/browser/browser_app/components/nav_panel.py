@@ -8,6 +8,7 @@ from basis.plugins.shell.regions import Footer, Header, Main  # noqa: F401
 from basis.plugins.shell.site import SiteShell  # noqa: F401
 from basis.plugins.ui.nav.nav import Nav  # noqa: F401
 from basis.shared.component import Component
+from basis.shared.reactive import state
 
 
 class NavPanel(Component):
@@ -15,11 +16,11 @@ class NavPanel(Component):
 
     __tag__ = "browser-nav-panel"
 
-    links = [
+    links: list = state(default_factory=lambda: [
         {"id": "home", "label": "Home", "href": "/"},
         {"id": "nav", "label": "Nav", "href": "/nav", "icon": "🧭"},
         {"id": "elsewhere", "label": "Elsewhere", "href": "/elsewhere", "badge": "3"},
-    ]
+    ])
 
     def style(self):
         """

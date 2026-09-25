@@ -20,11 +20,17 @@ Coverage boundary (why some plan items are documented here, not asserted):
 """
 
 import pytest
+from typing import ClassVar
 
-from basis.shared.base_component import BaseComponent
+from basis.shared.base_component import (
+    BaseComponent,
+    _effective_store_inclusions,
+    include_store,
+)
 from basis.shared.bindings import ChildBinding
 from basis.shared.component import Component
-from basis.shared.element import Element
+from basis.shared.element import Element, ElementString
+from basis.shared.reactive import computed, state
 from basis.shared.store import Store
 
 import basis.shared.reactive as _reactive
@@ -104,6 +110,394 @@ def test_on_hydrated_is_not_part_of_server_mount():
 
     _mount(Life)
     assert history == ["mounted"]
+
+
+def test_component_state_factories_are_instance_owned():
+    class ListView(Component):
+        __tag__ = "x-life-state-factory"
+        items: list[str] = state(default_factory=list)
+
+        def template(self):
+            """<div>{items}</div>"""
+
+    first = _mount(ListView)
+    second = _mount(ListView)
+
+    assert first.items == []
+    assert first.items is not second.items
+
+    first.destroy()
+    second.destroy()
+
+
+def test_computed_metadata_is_not_rescanned_per_mount(monkeypatch):
+    class Summary(Component):
+        __tag__ = "x-life-computed-definition"
+        value = 2
+
+        @computed(dependencies=["value"])
+        def doubled(self):
+            return self.value * 2
+
+        def template(self):
+            """<div>{doubled}</div>"""
+
+    def rescan(*args, **kwargs):
+        raise AssertionError("computed metadata was rescanned during mount")
+
+    monkeypatch.setattr(_reactive.inspect, "getmembers", rescan)
+
+    first = _mount(Summary)
+    second = _mount(Summary)
+
+    assert first.__element__.childNodes[0].textContent == "4"
+    assert second.__element__.childNodes[0].textContent == "4"
+
+    first.destroy()
+    second.destroy()
+
+
+def test_hot_swap_reconciles_state_before_rebuilt_bindings_evaluate():
+    evaluations = []
+    factory_calls = []
+
+    class OldView(Component):
+        __tag__ = "x-life-hot-old"
+        title = "old default"
+        removed = "remove me"
+
+        def template(self):
+            """<div>{title}</div>"""
+
+    view = _mount(OldView)
+    view.title = "live title"
+    view.hidden = "dynamic value"
+
+    class NewView(Component):
+        __tag__ = "x-life-hot-new"
+        title = "new default"
+        added: list[str] = state(
+            default_factory=lambda: factory_calls.append("called") or []
+        )
+
+        @computed
+        def summary(self):
+            evaluations.append((self.title, self.hidden, self.added))
+            return f"{self.title}:{self.hidden}:{len(self.added)}"
+
+        def template(self):
+            """<div>{summary}</div>"""
+
+    view.hot_swap(NewView)
+
+    assert type(view) is NewView
+    assert view.title == "live title"
+    assert view.hidden == "dynamic value"
+    assert view.added == []
+    assert "removed" not in view.__dict__
+    assert evaluations
+    assert all(
+        evaluation == ("live title", "dynamic value", [])
+        for evaluation in evaluations
+    )
+    assert factory_calls == ["called"]
+    assert view.__element__.childNodes[0].textContent == "live title:dynamic value:0"
+
+    view.destroy()
+
+
+def test_hot_swap_preserves_creation_props_and_drops_new_behavior_collisions():
+    callback = lambda: "called"
+
+    class OldView(Component):
+        __tag__ = "x-life-hot-props-old"
+        source = "initial"
+
+        def template(self):
+            """<div>{source}</div>"""
+
+    view = _mount(OldView, title="{source}", callback=callback)
+    view.source = "preserved"
+    view.collision = "dynamic"
+
+    class NewView(Component):
+        __tag__ = "x-life-hot-props-new"
+        source = "new"
+
+        def collision(self):
+            return "behavior"
+
+        def template(self):
+            """<section>{source}</section>"""
+
+    view.hot_swap(NewView)
+
+    assert view.callback is callback
+    assert "collision" not in view.__dict__
+    assert view.collision() == "behavior"
+    assert view.title == "preserved"
+    assert view.__element__.childNodes[0].textContent == "preserved"
+
+    view.destroy()
+
+
+def test_hot_swap_reconnects_store_subscriptions_without_identity_growth():
+    store = Store("hot_counter")
+    store.value = "before"
+
+    class OldView(Component):
+        __tag__ = "x-life-hot-store-old"
+        __component_id__ = "hot-store-view"
+
+        def template(self):
+            """<div>{$hot_counter.value}</div>"""
+
+    class NewView(Component):
+        __tag__ = "x-life-hot-store-new"
+        __component_id__ = "hot-store-view"
+
+        def template(self):
+            """<section>{$hot_counter.value}</section>"""
+
+    view = _mount(OldView)
+    view.hot_swap(NewView)
+    store.value = "after"
+
+    assert view.__element__.childNodes[0].textContent == "after"
+    assert view._registered_identities == ["hot-store-view"]
+    assert store._subscriptions == [(view, "value")]
+    assert len([name for name in store._dag.nodes if name.startswith("sub_")]) == 1
+
+    view.destroy()
+
+
+def test_hot_swap_mounts_nested_children_from_the_new_definition():
+    class OldView(Component):
+        __tag__ = "x-life-hot-nested-old"
+
+        class OldChild(Component):
+            __tag__ = "x-life-hot-nested-old-child"
+
+            def template(self):
+                """<span>old</span>"""
+
+        def template(self):
+            """<div></div>"""
+
+    class NewView(Component):
+        __tag__ = "x-life-hot-nested-new"
+
+        class NewChild(Component):
+            __tag__ = "x-life-hot-nested-new-child"
+
+            def template(self):
+                """<strong>new</strong>"""
+
+        def template(self):
+            """<section></section>"""
+
+    view = _mount(OldView)
+    old_child = _child_of(view, OldView.OldChild)
+    view.hot_swap(NewView)
+
+    assert old_child._destroyed is True
+    assert isinstance(_child_of(view, NewView.NewChild), NewView.NewChild)
+
+    view.destroy()
+
+
+def test_hot_swap_moves_existing_slot_content_into_the_new_template():
+    light = Element("span", attrs={"class": "light"}, children=[ElementString("kept")])
+    container = Element("div", attrs={}, children=[light])
+    light.parent = container
+
+    class OldView(Component):
+        __tag__ = "x-life-hot-slot-old"
+
+        def template(self):
+            """<div><slot></slot></div>"""
+
+    class NewView(Component):
+        __tag__ = "x-life-hot-slot-new"
+
+        def template(self):
+            """<section><header>new</header><slot></slot></section>"""
+
+    view = OldView.mount(container)
+    view.hot_swap(NewView)
+
+    assert light.parentNode is view.__element__
+    assert light in view.__element__.childNodes
+
+    view.destroy()
+
+
+def test_hot_swap_restarts_js_backed_resources_on_the_new_element():
+    calls = []
+
+    class OldWidget(Component):
+        __tag__ = "x-life-hot-js-old"
+        __js_component__ = True
+
+        def _teardown_js(self):
+            calls.append(("teardown", self.__element__.tagName.lower()))
+
+        def template(self):
+            """<div>old</div>"""
+
+    class NewWidget(Component):
+        __tag__ = "x-life-hot-js-new"
+        __js_component__ = True
+
+        def on_mounted(self):
+            calls.append(("mounted", self.__element__.tagName.lower()))
+
+        def template(self):
+            """<section>new</section>"""
+
+    widget = _mount(OldWidget)
+    widget.hot_swap(NewWidget)
+
+    assert calls == [("teardown", "div"), ("mounted", "section")]
+
+    widget.destroy()
+
+
+def test_mount_preserves_authored_class_and_registry_identity():
+    class Counter(Component):
+        __tag__ = "x-life-stable-definition"
+        count = 0
+
+        def template(self):
+            """<button>{count}</button>"""
+
+    registered = BaseComponent._registry[Counter.__tag__]
+
+    first = _mount(Counter, count=1)
+    second = _mount(Counter, count=2)
+
+    assert type(first) is Counter
+    assert type(second) is Counter
+    assert BaseComponent._registry[Counter.__tag__] is registered is Counter
+    assert first.__element__ is not second.__element__
+    assert first.__bindings__[0] is not second.__bindings__[0]
+
+    first.destroy()
+    second.destroy()
+
+
+def test_typed_and_callback_props_are_borrowed_instance_values():
+    class PropView(Component):
+        __tag__ = "x-life-typed-props"
+        items = None
+        on_select = None
+
+        def template(self):
+            """<div>{items}</div>"""
+
+    items = [{"id": 1}]
+    callback = lambda item: item
+
+    view = _mount(PropView, items=items, on_select=callback)
+
+    assert type(view) is PropView
+    assert view.items is items
+    assert view.on_select is callback
+    assert "items" not in PropView.__dict__ or PropView.__dict__["items"] is None
+    assert PropView.__dict__["on_select"] is None
+
+    view.destroy()
+
+
+@pytest.mark.parametrize("name", ["_scope", "destroy", "configuration"])
+def test_creation_props_reject_private_behavior_and_configuration(name):
+    class Protected(Component):
+        __tag__ = "x-life-protected-props"
+        configuration: ClassVar[str] = "fixed"
+
+        def template(self):
+            """<div></div>"""
+
+    with pytest.raises(ValueError, match=name):
+        _mount(Protected, **{name: "invalid"})
+
+
+def test_store_inclusions_are_owned_and_resolved_through_the_mro():
+    @include_store("shared", url="/left")
+    @include_store("left")
+    class Left(Component):
+        def template(self):
+            """<div></div>"""
+
+    @include_store("right")
+    class Right(Component):
+        def template(self):
+            """<div></div>"""
+
+    @include_store("shared", url="/child")
+    @include_store("child")
+    class Child(Left, Right):
+        pass
+
+    assert tuple(item.name for item in Left.__dict__["__basis_stores__"]) == (
+        "left",
+        "shared",
+    )
+    assert tuple(item.name for item in Right.__dict__["__basis_stores__"]) == ("right",)
+    assert tuple(item.name for item in Child.__dict__["__basis_stores__"]) == (
+        "child",
+        "shared",
+    )
+
+    effective = _effective_store_inclusions(Child)
+    assert tuple(item.name for item in effective) == ("right", "left", "shared", "child")
+    assert next(item for item in effective if item.name == "shared").url == "/child"
+
+
+def test_definition_compiles_once_per_revision(monkeypatch):
+    calls = []
+    initialize_blueprint = Component._initialize_blueprint.__func__
+    analyze_template = Component._analyze_template.__func__
+
+    def counted_initialize(cls):
+        calls.append(("blueprint", cls))
+        return initialize_blueprint(cls)
+
+    def counted_analyze(cls):
+        calls.append(("analyze", cls))
+        return analyze_template(cls)
+
+    monkeypatch.setattr(Component, "_initialize_blueprint", classmethod(counted_initialize))
+    monkeypatch.setattr(Component, "_analyze_template", classmethod(counted_analyze))
+
+    class Prepared(Component):
+        __tag__ = "x-life-prepared-definition"
+        value = 0
+
+        def template(self):
+            """<div>{value}</div>"""
+
+    assert calls == []
+
+    Prepared.ensure_definition()
+    Prepared.ensure_definition()
+    first = _mount(Prepared, value=1)
+    second = _mount(Prepared, value=2)
+
+    assert calls == [("blueprint", Prepared), ("analyze", Prepared)]
+    assert isinstance(Prepared.__binding_blueprints__, tuple)
+
+    Prepared.invalidate_definition()
+    Prepared.ensure_definition()
+    assert calls == [
+        ("blueprint", Prepared),
+        ("analyze", Prepared),
+        ("blueprint", Prepared),
+        ("analyze", Prepared),
+    ]
+
+    first.destroy()
+    second.destroy()
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +622,7 @@ def test_custom_element_loop_child_store_subscription_removed_on_item_removal():
 
     class Owner(Component):
         __tag__ = "x-life-loop-owner"
-        items = []
+        items: list = state(default_factory=list)
 
         def template(self):
             """
@@ -277,7 +671,7 @@ def test_region_removal_tears_down_contribution_scope_and_node():
     from basis.plugins.regions.store import RegionStore
 
     region_store = RegionStore("regions")
-    region_store.__dict__["items"] = {}  # avoid double-hydration guards
+    region_store.__dict__["items"] = {}
     region_store.add_local("sb", cls_path_of(Pill), {"text": "x"})
 
     region = _mount(Region, name="sb")
@@ -354,6 +748,7 @@ def test_destroy_removes_store_subscription_edges():
     inst.destroy()
     assert inst._destroyed is True
     assert [n for n in store._dag.nodes if n.startswith("sub_")] == []
+    assert store._subscriptions == []
 
 
 def test_destroy_cascades_through_nested_child_subtree():
@@ -476,7 +871,7 @@ class LoggedLeaf(Component):
 
     __tag__ = "x-life-p2-logged-leaf"
     text = ""
-    log = []
+    log: ClassVar[list[str]] = []
 
     def on_unmounted(self):
         self.log.append("leaf")
@@ -492,7 +887,7 @@ class LoggedPill(Component):
     scope-destroy + node.remove)."""
 
     text = ""
-    log = []
+    log: ClassVar[list[str]] = []
 
     def on_unmounted(self):
         self.log.append("pill")
@@ -519,7 +914,7 @@ def test_region_item_removal_routes_through_destroy_and_cascades():
     LoggedLeaf.log = []
 
     region_store = RegionStore("regions")
-    region_store.__dict__["items"] = {}  # avoid double-hydration guards
+    region_store.__dict__["items"] = {}
     region_store.add_local("sb", cls_path_of(LoggedPill), {"text": "x"})
 
     region = _mount(Region, name="sb")
@@ -551,7 +946,7 @@ def test_region_destroy_cleans_leftover_contributions():
     from basis.plugins.regions.store import RegionStore
 
     region_store = RegionStore("regions")
-    region_store.__dict__["items"] = {}  # avoid double-hydration guards
+    region_store.__dict__["items"] = {}
     region_store.add_local("sb", cls_path_of(Pill), {"text": "x"})
 
     region = _mount(Region, name="sb")
@@ -582,7 +977,7 @@ def test_owner_destroy_cascades_into_custom_element_loop_children():
 
     class Owner(Component):
         __tag__ = "x-life-p2-loop-owner"
-        items = []
+        items: list = state(default_factory=list)
 
         def template(self):
             """
@@ -665,7 +1060,7 @@ def test_a_class_in_a_component_body_mounts_as_its_child():
 
 
 def test_nested_children_are_collected_when_the_class_is_defined():
-    assert _Panel.__dict__["__nested_children__"] == [_Panel.Body]
+    assert _Panel.__dict__["__nested_children__"] == (_Panel.Body,)
 
 
 def test_the_nested_child_lookup_is_not_a_scan(monkeypatch):
@@ -678,4 +1073,4 @@ def test_the_nested_child_lookup_is_not_a_scan(monkeypatch):
 
     monkeypatch.setattr(_Panel, "_find_nested_children", classmethod(rescan))
 
-    assert _Panel.get_nested_children() == [_Panel.Body]
+    assert _Panel.get_nested_children() == (_Panel.Body,)

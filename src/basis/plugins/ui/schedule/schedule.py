@@ -2,7 +2,7 @@ import json
 from basis.shared.styling import compact_block
 from basis.shared.component import Component, IS_CLIENT, extra_style, scoped
 from basis.shared.events import py_event
-from basis.shared.reactive import computed
+from basis.shared.reactive import computed, state
 
 if IS_CLIENT:
     from pyscript import window, ffi
@@ -39,11 +39,11 @@ class Schedule(Component):
     """
     __tag__ = "ui-schedule"
 
-    entries = []
+    entries: list = state(default_factory=list)
     time_attr = "time"
     duration_attr = "duration"
     all_day_attr = "all_day"
-    columns = []
+    columns: list = state(default_factory=list)
     tick_interval = 30
     start_hour = 6
     end_hour = 20

@@ -166,13 +166,10 @@ class HMRClient:
             self._notify(f"No component matched {file}; HTML not applied", error=True)
             return
 
-        # Rebuild blueprint + binding blueprints from scratch (never accumulate).
         cls.__templatestr__ = content
-        cls.__binding_blueprints__ = []
         try:
-            cls._initialize_blueprint()
-            cls._analyze_creation_args()
-            cls._analyze_template()
+            cls.invalidate_definition()
+            cls.ensure_definition()
         except Exception as e:
             self._notify(f"Template analysis failed for {cls.__name__}: {e}", error=True)
             return
@@ -269,6 +266,11 @@ class HMRClient:
     # ── hot-swap helpers ───────────────────────────────────────────────────
     def _hot_swap_class(self, old_cls, new_cls, module=None):
         """Find all live instances of old_cls and re-render them with new_cls."""
+        if old_cls is not new_cls:
+            for tag, registered in list(BaseComponent._registry.items()):
+                if registered is old_cls:
+                    del BaseComponent._registry[tag]
+
         count = 0
         for instance in list(BaseComponent._live_instances):
             if isinstance(instance, old_cls):

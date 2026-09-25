@@ -14,6 +14,7 @@ from basis.server.app import Basis
 from basis.shared.styling import compact_media
 from basis.shared.component import Component
 from basis.shared.page import _synthesize_page
+from basis.shared.reactive import state
 
 import basis.plugins.ui.schedule.schedule  # noqa: F401
 from basis.plugins.ui.schedule import Schedule
@@ -47,7 +48,7 @@ def _render(root_component, entry_module):
 
 
 class _ScheduleFixture(Component):
-    entries = ENTRIES
+    entries: list = state(default_factory=lambda: [dict(entry) for entry in ENTRIES])
 
     def template(self):
         """

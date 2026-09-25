@@ -24,6 +24,7 @@ handlers compose.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, Callable
 
 
@@ -47,6 +48,7 @@ def json_dumps_script_safe(obj, **kwargs) -> str:
 #: wins). Process-global, populated at boot / plugin-include time (single
 #: threaded), so no locking is required.
 _HANDLERS: dict[type, Callable[[Any], Any]] = {}
+_NO_EXPORT = object()
 
 
 def register_serializer(
@@ -148,3 +150,66 @@ def jsonable(value: Any, _seen: set[int] | None = None) -> Any:
 
     # 5. Unsupported leaf → deterministic None.
     return None
+
+
+def snapshot_jsonable(
+    value: Any,
+    *,
+    path: str,
+    _seen: set[int] | None = None,
+) -> Any:
+    """Return detached JSON data or raise with the failing snapshot path."""
+    if _seen is None:
+        _seen = set()
+
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise TypeError(f"Cannot serialize snapshot at {path}: non-finite float")
+        return value
+
+    value_id = id(value)
+    if value_id in _seen:
+        raise TypeError(f"Cannot serialize snapshot at {path}: cyclic value")
+    nested_seen = _seen | {value_id}
+
+    if isinstance(value, (list, tuple, set)):
+        return [
+            snapshot_jsonable(item, path=f"{path}[{index}]", _seen=nested_seen)
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, dict):
+        converted = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError(
+                    f"Cannot serialize snapshot at {path}: non-string mapping key"
+                )
+            converted[key] = snapshot_jsonable(
+                item,
+                path=f"{path}.{key}",
+                _seen=nested_seen,
+            )
+        return converted
+
+    try:
+        if hasattr(value, "__json__"):
+            exported = value.__json__()
+        else:
+            exported = _NO_EXPORT
+            for cls in type(value).__mro__:
+                handler = _HANDLERS.get(cls)
+                if handler is not None:
+                    exported = handler(value)
+                    break
+            if exported is _NO_EXPORT:
+                model_export = _model_export(value)
+                if model_export is not None:
+                    exported = model_export
+    except Exception as exc:
+        raise TypeError(f"Cannot serialize snapshot at {path}: conversion failed") from exc
+
+    if exported is _NO_EXPORT:
+        raise TypeError(f"Cannot serialize snapshot at {path}: unsupported value")
+    return snapshot_jsonable(exported, path=path, _seen=nested_seen)

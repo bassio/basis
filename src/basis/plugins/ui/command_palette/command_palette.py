@@ -1,7 +1,7 @@
 from basis.shared.styling import compact_block
 from basis.shared.component import Component, IS_CLIENT, extra_style, scoped
 from basis.shared.events import on_key
-from basis.shared.reactive import computed
+from basis.shared.reactive import computed, state
 
 if IS_CLIENT:
     from pyscript import window, ffi
@@ -56,16 +56,9 @@ class CommandPalette(Component):
     open = ""
     placeholder = "Type a command or search..."
     query = ""
-    commands = []
+    commands: list = state(default_factory=list)
     active_index = 0
     arrangement = "auto"
-
-    def __init__(self):
-        super().__init__()
-        self.commands = []
-        self.query = ""
-        self.active_index = 0
-        self.open = ""
 
     @computed
     def is_open(self):

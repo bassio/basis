@@ -4,7 +4,7 @@ Covers the projection contract (default ``app_state_keys`` + full-app
 ``project(app)`` override), app attachment via the existing
 ``attach_app_to_store`` machinery, the ``refresh`` RPC round-trip, server
 authority over local state, the ``mutate()`` thread-safety guard, SSR
-integration, client import-safety, and the store-subclass clobber guard.
+integration, client import-safety, and post-constructor snapshot authority.
 """
 
 import json
@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from basis.server.app import Basis
 from basis.shared.app_state import AppStateStore
-from basis.shared.store import Store, attach_app_to_store
+from basis.shared.store import Store, attach_app_to_store, install_initial_state
 
 
 def _action_path(func) -> str:
@@ -242,26 +242,17 @@ def test_app_state_module_is_client_safe():
 # ── store-subclass clobber guard (documented pattern) ──────────────────────
 
 
-def test_subclass_guard_pattern_preserves_hydrated_projection():
+def test_snapshot_overrides_subclass_constructor_projection():
+    install_initial_state({"guard_store": {"items": [1, 2, 3]}})
+
     class P(AppStateStore):
         def __init__(self, name):
             super().__init__(name)
-            # the documented guard: never clobber an SSR-hydrated projection
-            if not getattr(self, "_hydrated_from_ssr", False):
-                self.__dict__["items"] = []
+            self.items = []
 
     store = P("guard_store")
     try:
-        # server construction (not hydrated) → default applied
-        assert store.__dict__["items"] == []
-
-        # simulate the client: hydration already populated `items`
-        store.__dict__["_hydrated_from_ssr"] = True
-        store.__dict__["items"] = [1, 2, 3]
-        # re-running the guarded init body would skip the default
-        if not getattr(store, "_hydrated_from_ssr", False):
-            store.__dict__["items"] = []
-        assert store.__dict__["items"] == [1, 2, 3]
+        assert store.items == [1, 2, 3]
     finally:
         _cleanup("guard_store")
 

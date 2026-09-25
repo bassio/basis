@@ -49,7 +49,7 @@ honest.
 
 | scenario | scale | median | p95 | measures |
 |---|---|---|---|---|
-| `mount_50_components` | 50 instances | 61 ms | 109 ms | real `mount()` path incl. **per-mount template re-analysis** (T1 #11/#15 target) |
+| `mount_50_components` | 50 instances | 61 ms | 109 ms | real `mount()` path with one prepared definition and fresh per-instance clones |
 | `mount_200_components` | 200 instances | 198 ms | 200 ms | same, scaled (~1 ms/instance) |
 | `mutate_10_fields_sequential` | 10 fields | 0.06 ms | 0.12 ms | one handler, 10 DAG passes (T1 #6 target) |
 | `mutate_25_fields_sequential` | 25 fields | 0.11 ms | 0.18 ms | one handler, 25 DAG passes |

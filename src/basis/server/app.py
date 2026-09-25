@@ -360,17 +360,9 @@ class Basis(FastAPI, DBAppMixin, HMRMixin, PluginMixin, BootstrapMixin):
                 name=name,
             )
 
-        from basis.shared.page import _synthesize_page, StaticPage
+        from basis.shared.page import _synthesize_page, _synthesized_page_base
 
-        # Contract: @app.page decorates a root Component, not a Page shell.
-        if isinstance(component_cls, type) and issubclass(component_cls, StaticPage):
-            raise TypeError(
-                f"{component_cls.__name__} is a Page, not a root component. "
-                "A Page is the document shell.\n"
-                f"  • To expose a root component: decorate a Component with @app.page(path=...)\n"
-                f"  • To register a Page: decorate it with @app.serve(path) "
-                f"or app.include_page(path, page_cls={component_cls.__name__})"
-            )
+        _synthesized_page_base(component_cls, page_cls)
 
         self.bootstrap()
 

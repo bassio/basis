@@ -17,7 +17,7 @@ from basis.server.app import Basis
 from basis.shared.page import _synthesize_page
 from basis.server.render import _get_all_stores, _serialize_initial_state
 from basis.shared.store import Store
-from basis.shared.component import Component
+from basis.shared.component import Component, include_store
 
 
 # ---------------------------------------------------------------------------
@@ -63,8 +63,9 @@ class _NoStores:
 def test_get_all_stores_reconstructs_subclass_for_basis_stores():
     CounterStore("ssr_counter")
 
+    @include_store("ssr_counter")
     class PageWithStore:
-        __basis_stores__ = [{"name": "ssr_counter"}]
+        pass
 
     # Simulate the per-request registry reset
     Store._registry.clear()
@@ -103,8 +104,9 @@ def test_get_all_stores_falls_back_to_plain_store_without_blueprint():
 def test_serialize_initial_state_includes_subclass_constructor_state():
     CounterStore("ssr_serialize")
 
+    @include_store("ssr_serialize")
     class PageWithStore:
-        __basis_stores__ = [{"name": "ssr_serialize"}]
+        pass
 
     Store._registry.clear()
     stores = _get_all_stores(PageWithStore, _NoStores)

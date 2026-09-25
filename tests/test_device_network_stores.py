@@ -5,8 +5,6 @@ the SSR-safe one: neutral values that serialise, capability fields the browser a
 through a declared media query, and hydration that wins over both.
 """
 
-import json
-
 import pytest
 
 from basis.shared import store as store_module
@@ -14,7 +12,8 @@ from basis.shared.device import DeviceStore, ensure_device_store
 from basis.shared.events import declared_declarations
 from basis.shared.media import MediaQuery
 from basis.shared.network import NetworkStore, ensure_network_store
-from basis.shared.store import FRAMEWORK_STORE_NAMES, Store
+from basis.shared.page import Page, StaticPage
+from basis.shared.store import FRAMEWORK_STORE_NAMES, Store, install_initial_state
 from basis.shared.styling import HOVER_QUERY, compact_query, medium_query
 
 DEVICE_NEUTRALS = {
@@ -35,28 +34,11 @@ NETWORK_NEUTRALS = {
 }
 
 
-class _Script:
-    """Stand-in for the ``#basis-initial-state`` script tag."""
-
-    def __init__(self, payload: str):
-        self.textContent = payload
-
-
-class _Document:
-    """Stand-in for the client document, serving one initial-state payload."""
-
-    def __init__(self, state: dict):
-        self._state = state
-
-    def getElementById(self, element_id: str):
-        return _Script(json.dumps(self._state))
-
-
 @pytest.fixture(autouse=True)
 def isolate_registries(monkeypatch):
     """Store names and media-query runtime state are process-global: reset them."""
     monkeypatch.setattr(store_module, "_client_ready", False)
-    monkeypatch.setattr(store_module, "document", None)
+    install_initial_state({})
     Store._registry.clear()
     Store._store_blueprints.clear()
     for query in list(MediaQuery._instance_registry.values()):
@@ -113,15 +95,13 @@ def test_declared_fields_are_real_fields_without_a_browser():
 def test_hydrated_values_win_over_neutrals(monkeypatch):
     """``#basis-initial-state`` is authoritative — neither the declared default nor an
     ``__init__`` neutral may clobber it."""
-    monkeypatch.setattr(
-        store_module,
-        "document",
-        _Document({"device": {"hover": False, "reduced_motion": True, "width": 390}}),
+    install_initial_state(
+        {"device": {"hover": False, "reduced_motion": True, "width": 390}}
     )
 
     device = DeviceStore("device")
 
-    assert device._hydrated_from_ssr is True
+    assert device._initial_load.snapshot_applied is True
     assert device.hover is False
     assert device.reduced_motion is True
     assert device.width == 390
@@ -136,6 +116,22 @@ def test_ensure_helpers_resolve_one_instance_per_name():
     assert ensure_device_store() is device
 
 
+@pytest.mark.parametrize("page_base", [Page, StaticPage])
+def test_explicit_page_subset_keeps_specialized_context_stores(page_base):
+    class ContextPage(page_base):
+        stores = ["device", "network"]
+
+    ContextPage._ensure_stores()
+    device = Store._registry["device"]
+    network = Store._registry["network"]
+    ContextPage._ensure_stores()
+
+    assert type(device) is DeviceStore
+    assert type(network) is NetworkStore
+    assert Store._registry["device"] is device
+    assert Store._registry["network"] is network
+
+
 def test_offline_is_the_inverse_of_online():
     network = NetworkStore("network")
     assert network.offline is False
@@ -145,7 +141,7 @@ def test_offline_is_the_inverse_of_online():
 
 
 def test_offline_follows_a_hydrated_online(monkeypatch):
-    monkeypatch.setattr(store_module, "document", _Document({"network": {"online": False}}))
+    install_initial_state({"network": {"online": False}})
 
     network = NetworkStore("network")
 
@@ -153,11 +149,11 @@ def test_offline_follows_a_hydrated_online(monkeypatch):
     assert network.offline is True
 
 
-def test_neutral_defaults_merge_across_inheritance():
-    """A subclass extends the neutrals; the base declaration still applies."""
+def test_state_defaults_merge_across_inheritance():
+    """A subclass extends state; the base declarations still apply."""
 
     class TabletStore(DeviceStore):
-        neutral_defaults = {"density": "tablet"}
+        density = "tablet"
 
     store = TabletStore("tablet_device")
 

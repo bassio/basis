@@ -19,9 +19,6 @@ class PrefsStore(CookieStore):
 
     def __init__(self, name="prefs"):
         super().__init__(name)
-        # Store-subclass footgun: never clobber SSR-hydrated values.
-        if getattr(self, "_hydrated_from_ssr", False):
-            return
         self.volume = 0.5
         self.muted = False
         # a public attr NOT in persisted_fields must never leak into the cookie

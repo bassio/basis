@@ -1,4 +1,5 @@
 from basis.shared.component import Component, scoped
+from basis.shared.reactive import state
 
 
 class Checkbox(Component):
@@ -166,7 +167,7 @@ class RadioGroup(Component):
     """
     __tag__ = "ui-radio-group"
 
-    options  = []
+    options: list = state(default_factory=list)
     value    = ""
     name     = "radio-group"
     disabled = ""

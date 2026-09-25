@@ -16,6 +16,7 @@ from basis.server.app import Basis
 from basis.shared.styling import compact_media
 from basis.shared.component import Component
 from basis.shared.page import _synthesize_page
+from basis.shared.reactive import state
 from basis.shared.store import Store
 
 # Registers the <ui-nav> custom element (and, with it, the $router store's blueprint).
@@ -77,7 +78,7 @@ def _render(root_component, entry_module, paths=("/",), target="/"):
 class _NavFixture(Component):
     """A page body that renders one ``ui-nav`` over :data:`LINKS`."""
 
-    links = LINKS
+    links: list = state(default_factory=lambda: [dict(item) for item in LINKS])
     nav_arrangement = "auto"
     pinned = ""
 

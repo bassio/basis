@@ -25,6 +25,8 @@ keep working alongside the structured API.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, fields
 import sys
 
@@ -195,23 +197,39 @@ def find_template_line(template: str | None, expr: str) -> int | None:
 # Error sink
 # ---------------------------------------------------------------------------
 
-_error_sink = None
+_NO_ERROR_SINK_OVERRIDE = object()
+_error_sink_override = ContextVar(
+    "basis_error_sink_override", default=_NO_ERROR_SINK_OVERRIDE
+)
+_default_error_sink = None
 
 
 def set_error_sink(fn) -> None:
-    """Register the callable that consumes :class:`BindingError` records.
+    """Install the page-runtime default :class:`BindingError` destination.
 
     ``fn(err)`` should return a truthy value to confirm it handled the record.
-    Only one sink is active at a time (the SSR collector restores the previous
-    one on exit).
+    Scoped server destinations take precedence without replacing this default.
     """
-    global _error_sink
-    _error_sink = fn
+    global _default_error_sink
+    _default_error_sink = fn
 
 
 def get_error_sink():
     """The currently registered sink, or None."""
-    return _error_sink
+    override = _error_sink_override.get()
+    if override is not _NO_ERROR_SINK_OVERRIDE:
+        return override
+    return _default_error_sink
+
+
+@contextmanager
+def error_sink(fn):
+    """Temporarily override the diagnostic destination in this task context."""
+    token = _error_sink_override.set(fn)
+    try:
+        yield
+    finally:
+        _error_sink_override.reset(token)
 
 
 def record_error(**kwargs) -> bool:
@@ -221,7 +239,7 @@ def record_error(**kwargs) -> bool:
     False when no sink is registered (callers keep the sentinel behaviour).
     A failing sink never raises — error capture must not crash the renderer.
     """
-    sink = _error_sink
+    sink = get_error_sink()
     if sink is None:
         return False
     err = BindingError(**kwargs)
@@ -245,20 +263,23 @@ class ErrorCollector:
 
     def __init__(self):
         self.errors: list[BindingError] = []
-        self._prev = None
+        self._sink_context = None
 
     def __call__(self, err: BindingError) -> bool:
         self.errors.append(err)
         return True
 
     def __enter__(self) -> "ErrorCollector":
-        self._prev = get_error_sink()
-        set_error_sink(self)
+        if self._sink_context is not None:
+            raise RuntimeError("An ErrorCollector cannot be re-entered")
+        self._sink_context = error_sink(self)
+        self._sink_context.__enter__()
         return self
 
     def __exit__(self, *exc_info) -> bool:
-        set_error_sink(self._prev)
-        return False
+        sink_context = self._sink_context
+        self._sink_context = None
+        return sink_context.__exit__(*exc_info)
 
     @property
     def is_empty(self) -> bool:
@@ -277,6 +298,7 @@ __all__ = [
     "ERRORS_GLOBAL",
     "ERROR_PREFIX",
     "EVAL_ERROR",
+    "error_sink",
     "find_template_line",
     "get_error_sink",
     "import_error_hint",

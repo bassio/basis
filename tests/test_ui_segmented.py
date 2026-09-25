@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from basis.server.app import Basis
 from basis.shared.component import Component
 from basis.shared.page import _synthesize_page
+from basis.shared.reactive import state
 from basis.shared.styling import COARSE_QUERY, compact_media
 
 import basis.plugins.ui.segmented.segmented  # noqa: F401
@@ -47,7 +48,7 @@ def _render(root_component, entry_module):
 
 
 class _SegmentedFixture(Component):
-    items = ITEMS
+    items: list = state(default_factory=lambda: [dict(item) for item in ITEMS])
     value = "grid"
     label = "View"
     disabled = ""
@@ -151,7 +152,7 @@ def test_clicking_the_pressed_item_is_not_a_change():
 
 def test_plain_strings_are_items_too():
     class Names(_SegmentedFixture):
-        items = ["Day", "Week", "Month"]
+        items: list = state(default_factory=lambda: ["Day", "Week", "Month"])
         value = "Week"
 
     html = _render(Names, "/test_segmented_strings.py")

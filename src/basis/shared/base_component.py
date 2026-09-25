@@ -1,5 +1,8 @@
 import inspect
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
+from typing import ClassVar
 import weakref
 
 from basis.shared.bindings import BindingBlueprint, Binding, SelfBinding, TextBinding, \
@@ -14,20 +17,69 @@ from basis.shared.reactive import ReactiveObject, DependencyGraph, StateNode, Co
 from basis.shared.context import ContextVarProxyDict
 
 
+@dataclass(frozen=True)
+class _CreationInputs:
+    values: dict
+    raw_attributes: bool
+
+
+@dataclass(frozen=True)
+class _ReloadState:
+    values: dict
+    origins: dict
+    creation_inputs: _CreationInputs
+
+
+@dataclass(frozen=True)
+class StoreInclusion:
+    name: str
+    url: str | None = None
+    target: str | None = None
+
+
+@dataclass(frozen=True)
+class ModelInclusion:
+    model: type
+    name: str
+    one: bool = False
+    target: str = "items"
+    kwargs: dict = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "kwargs", MappingProxyType(dict(self.kwargs or {})))
+
+
+def _owned_inclusion(cls, attr_name, inclusion):
+    owned = tuple(cls.__dict__.get(attr_name, ()))
+    owned = tuple(item for item in owned if item.name != inclusion.name)
+    setattr(cls, attr_name, (*owned, inclusion))
+
+
+def _effective_inclusions(cls, attr_name):
+    if cls is None:
+        return ()
+    effective = {}
+    for base in reversed(cls.__mro__):
+        for inclusion in base.__dict__.get(attr_name, ()):
+            effective[inclusion.name] = inclusion
+    return tuple(effective.values())
+
+
+def _effective_store_inclusions(cls):
+    return _effective_inclusions(cls, "__basis_stores__")
+
+
+def _effective_model_inclusions(cls):
+    return _effective_inclusions(cls, "__basis_models__")
+
+
 def include_store(name: str, url: str = None, target: str = None):
 
     """
     Decorator to include a reactive store in a Page or Component.
     """
     def decorator(cls):
-        if not hasattr(cls, '__basis_stores__'):
-            cls.__basis_stores__ = []
-        if not any(s['name'] == name for s in cls.__basis_stores__):
-            cls.__basis_stores__.append({
-                'name': name,
-                'url': url,
-                'target': target
-            })
+        _owned_inclusion(cls, "__basis_stores__", StoreInclusion(name, url, target))
         return cls
     return decorator
 
@@ -37,16 +89,11 @@ def include_model(model: type, name: str, one: bool = False, target: str = "item
     Decorator to include a model-backed store in a Page or Component.
     """
     def decorator(cls):
-        if not hasattr(cls, '__basis_models__'):
-            cls.__basis_models__ = []
-        if not any(s['name'] == name for s in cls.__basis_models__):
-            cls.__basis_models__.append({
-                'model': model,
-                'name': name,
-                'one': one,
-                'target': target,
-                'kwargs': kwargs
-            })
+        _owned_inclusion(
+            cls,
+            "__basis_models__",
+            ModelInclusion(model, name, one, target, kwargs),
+        )
         return cls
     return decorator
 
@@ -140,38 +187,40 @@ def _mount_root_providers(cls, container):
 
     for comp_cls in all_component_classes:
         # Handle @include_store decorators
-        if hasattr(comp_cls, '__basis_stores__'):
+        store_inclusions = _effective_store_inclusions(comp_cls)
+        if store_inclusions:
             try:
                 from basis.shared.store_provider import StoreProvider
-                for store_cfg in comp_cls.__basis_stores__:
-                    name = store_cfg['name']
+                for store_cfg in store_inclusions:
+                    name = store_cfg.name
                     if name not in mounted_stores:
                         mounted_stores.add(name)
                         provider = StoreProvider.mount(
                             container,
                             name=name,
-                            url=store_cfg['url'],
-                            target=store_cfg.get('target'),
+                            url=store_cfg.url,
+                            target=store_cfg.target,
                         )
                         mounted_providers.append(provider)
             except ImportError:
                 pass
 
         # Handle @include_model decorators
-        if hasattr(comp_cls, '__basis_models__'):
+        model_inclusions = _effective_model_inclusions(comp_cls)
+        if model_inclusions:
             try:
                 from basis.shared.store_provider import ModelStoreProvider
-                for model_cfg in comp_cls.__basis_models__:
-                    name = model_cfg['name']
+                for model_cfg in model_inclusions:
+                    name = model_cfg.name
                     if name not in mounted_models:
                         mounted_models.add(name)
                         provider = ModelStoreProvider.mount(
                             container,
                             name=name,
-                            model=model_cfg['model'],
-                            one=model_cfg['one'],
-                            target=model_cfg['target'],
-                            **model_cfg['kwargs'],
+                            model=model_cfg.model,
+                            one=model_cfg.one,
+                            target=model_cfg.target,
+                            **model_cfg.kwargs,
                         )
                         mounted_providers.append(provider)
             except ImportError:
@@ -191,8 +240,8 @@ class BaseComponent(BrowserMixin, ReactiveObject):
     # the root element's `id`. Default: the root element's `id`.
     __component_id__ = None
 
-    S = Store._registry
-    C = _instance_registry
+    S: ClassVar = Store._registry
+    C: ClassVar = _instance_registry
 
 
     @classmethod
@@ -318,6 +367,7 @@ class BaseComponent(BrowserMixin, ReactiveObject):
     @classmethod
     def _get_extra_style_names(cls):
         """The ``@extra_style`` method names for this class (MRO order)."""
+        cls.ensure_definition()
         return list(getattr(cls, "__extra_style_names__", ()) or ())
 
     @classmethod
@@ -360,9 +410,6 @@ class BaseComponent(BrowserMixin, ReactiveObject):
 
     @classmethod
     def _register_component_subclass(cls):
-        if cls.__name__.endswith("Subclass"):
-            return
-
         if hasattr(cls, '__tag__') and "-" in cls.__tag__:
             tag = cls.__tag__
         else:
@@ -374,48 +421,52 @@ class BaseComponent(BrowserMixin, ReactiveObject):
     @classmethod
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__()
-
-        setattr(cls, "__nested_children__", cls._find_nested_children())
-
         templatestr = cls._get_template_string()
-        
         if not templatestr:
             return
-        
-        setattr(cls, "__templatestr__", templatestr)
+        cls.__templatestr__ = templatestr
+        cls.__nested_children__ = tuple(cls._find_nested_children())
+        cls.__binding_blueprints__ = ()
+        cls._creation_kwargs = MappingProxyType(dict(kwargs))
+        cls.__definition_revision__ = 0
+        cls.__prepared_revision__ = -1
+        cls._register_component_subclass()
+
+    @classmethod
+    def ensure_definition(cls):
+        revision = cls.__dict__.get("__definition_revision__", 0)
+        if cls.__dict__.get("__prepared_revision__", -1) == revision:
+            return
 
         cls._set_style_string()
-
-        # Collect @extra_style methods: inherited names (via the MRO) plus any
-        # defined on this class, in definition order (parent extras first). The
-        # decorated value may be a plain function or a classmethod/staticmethod
-        # (whose __func__ carries the marker).
         extra_names = list(getattr(cls, "__extra_style_names__", ()) or ())
-        for _name, value in cls.__dict__.items():
+        for name, value in cls.__dict__.items():
             marked = getattr(value, "__extra_style__", False) or (
                 getattr(getattr(value, "__func__", None), "__extra_style__", False)
             )
-            if marked and _name not in extra_names:
-                extra_names.append(_name)
-        setattr(cls, "__extra_style_names__", extra_names)
-
-        setattr(cls, "__binding_blueprints__", [])
-
-        #set kwargs
-        setattr(cls, "_creation_kwargs", kwargs)
-
+            if marked and name not in extra_names:
+                extra_names.append(name)
+        cls.__extra_style_names__ = tuple(extra_names)
+        cls.__nested_children__ = tuple(cls._find_nested_children())
+        cls.__binding_blueprints__ = []
         cls._initialize_blueprint()
-
         cls._analyze_creation_args()
-
         cls._analyze_template()
+        cls.__binding_blueprints__ = tuple(cls.__binding_blueprints__)
+        cls.__prepared_revision__ = revision
 
-        cls._register_component_subclass()
+    @classmethod
+    def invalidate_definition(cls):
+        cls.__definition_revision__ = cls.__dict__.get("__definition_revision__", 0) + 1
+        cls.__prepared_revision__ = -1
 
 
     def __init__(self):
         super().__init__()
         self.__dict__['__bindings__'] = []
+        self.__dict__['_creation_inputs'] = _CreationInputs({}, False)
+        self.__dict__['_creation_binding_blueprints'] = ()
+        self.__dict__['_slot_content'] = None
         self.__dict__['_selfattr_bindings'] = {}
         self.__dict__['__fields__'] = []
         self.__dict__['_subscriptions'] = []
@@ -451,40 +502,25 @@ class BaseComponent(BrowserMixin, ReactiveObject):
                     self.add_binding(binding)
     
     #
-    def __init_self_attr_bindings__(self, **attrs_dict):
-        for k, v in attrs_dict.items():
-            self.__dict__[k] = v
-
-        attr_names = [k for k in attrs_dict.keys()]
-
-        self_attr_binding_blueprints = [bp for bp in self.__class__.__binding_blueprints__
-                                        if bp.binding_class == SelfAttributeBinding]
-
-        attr_bindings = []
-
-        for bp in self_attr_binding_blueprints:
-            attr_bindings.append(SelfAttributeBinding.from_blueprint(self, bp.node, bp))
-
-        for b in attr_bindings:
-            self.add_binding(b)
-            self.__dict__['_selfattr_bindings'][b.attr] = b
-
     @classmethod
-    def initialize(cls, container, **kwargs):
+    def initialize(cls, container, _creation_inputs=None, **kwargs):
+        cls.ensure_definition()
+        creation_inputs = _creation_inputs or _CreationInputs(dict(kwargs), True)
+        new_instance = cls()
+        new_instance.__dict__['_creation_inputs'] = _CreationInputs(
+            dict(creation_inputs.values),
+            creation_inputs.raw_attributes,
+        )
 
-        cls_dict = dict(cls.__dict__)
-        
-        new_cls = type(cls.__name__, (cls,), cls_dict, **kwargs)
-
-        new_instance = new_cls()
-
-        for k, v in kwargs.items():
+        for k, v in creation_inputs.values.items():
+            new_instance._validate_creation_prop(k)
             new_instance.__dict__[k] = v
-
-        # Declared levels (a media query, a held key) become real fields before
-        # ``__init_fields__`` reads the class attributes, so a template-bound level binds the
-        # field rather than the declaration.
-        new_instance._materialize_levels()
+            new_instance._record_state_field(k)
+            new_instance._dag.get_or_create_state(k)
+        if creation_inputs.raw_attributes:
+            new_instance.__dict__['_creation_binding_blueprints'] = tuple(
+                cls._creation_arg_blueprints(creation_inputs.values)
+            )
 
         new_instance.__init_selfbinding__()
 
@@ -503,6 +539,22 @@ class BaseComponent(BrowserMixin, ReactiveObject):
         new_instance._attach_declarations()
 
         return new_instance
+
+    @classmethod
+    def _validate_creation_prop(cls, name):
+        normalized = name.strip("{}") if name.startswith("{") and name.endswith("}") else name
+        if normalized.startswith("_"):
+            raise ValueError(f"Creation prop '{name}' cannot target a private field")
+        specs = cls.__dict__.get("__state_field_specs__", {})
+        if normalized in specs:
+            return
+        try:
+            inspect.getattr_static(cls, normalized)
+        except AttributeError:
+            return
+        raise ValueError(
+            f"Creation prop '{name}' collides with class behavior or configuration"
+        )
 
     def set_selfbinding(self, node):
         #template is ServerFragment on server and DocumentFragment on client
@@ -563,6 +615,13 @@ class BaseComponent(BrowserMixin, ReactiveObject):
         self._detach_declarations()
         self._scope.destroy()
 
+    def _deregister_identities(self):
+        registry = self.__class__._instance_registry
+        for identity in self.__dict__.get("_registered_identities", ()):
+            if registry.get(identity) is self:
+                del registry[identity]
+        self.__dict__["_registered_identities"] = []
+
     def _teardown_js(self):
         """Teardown of JS subresources (widgets, ffi proxies, module refs).
         Overridden by ``JsComponent``; a no-op for plain components. Called by
@@ -602,14 +661,7 @@ class BaseComponent(BrowserMixin, ReactiveObject):
         # Deregister identities registered in __init_bindings__ — but only if
         # this instance is STILL the occupant (a later mount may have taken the
         # same #id, in which case it must survive).
-        registry = self.__class__._instance_registry
-        for cid in list(self.__dict__.get("_registered_identities", ())):
-            try:
-                if cid in registry and registry.get(cid) is self:
-                    del registry[cid]
-            except Exception:
-                pass
-        self.__dict__["_registered_identities"] = []
+        self._deregister_identities()
 
         # Drop pending-subscription entries where this instance is the waiting
         # subscriber (its target never mounted / never resolved).
@@ -698,7 +750,7 @@ class BaseComponent(BrowserMixin, ReactiveObject):
             pass
         if hasattr(binding, 'update'):
             effect_name = f"effect_{id(binding)}"
-            self._dag.remove_effect(effect_name)
+            self._dag.remove_node(effect_name)
 
     @classmethod
     def _get_nodes(cls, element, skip_loop_descendants=False):
@@ -717,17 +769,21 @@ class BaseComponent(BrowserMixin, ReactiveObject):
     
     @classmethod
     def _analyze_creation_args(cls):
+        cls.__binding_blueprints__.extend(
+            cls._creation_arg_blueprints(cls._creation_kwargs)
+        )
+
+    @classmethod
+    def _creation_arg_blueprints(cls, attrs):
 
         blueprints = []
 
-        for k, v in cls._creation_kwargs.items():
+        for k, v in attrs.items():
 
             if k.startswith("{") and k.endswith("}"):
                 attr_no_braces = k.strip("{}")
                 attr_isboolean = True
-
-                if (v == "") or (v == None):
-                    attr_value = k
+                attr_value = k if v in ("", None) else v
             
             else:
                 attr_no_braces = k
@@ -753,8 +809,8 @@ class BaseComponent(BrowserMixin, ReactiveObject):
 
             except:
                 continue
-        
-        cls.__binding_blueprints__.extend(blueprints)
+
+        return blueprints
 
     @classmethod
     def _loop_body_nodes(cls, body):
@@ -976,7 +1032,11 @@ class BaseComponent(BrowserMixin, ReactiveObject):
     def __init_bindings__(self):
         nodes = self._get_instance_nodes()
 
-        for blueprint in self.__class__.__binding_blueprints__:
+        blueprints = (
+            *self.__class__.__binding_blueprints__,
+            *self.__dict__['_creation_binding_blueprints'],
+        )
+        for blueprint in blueprints:
             if blueprint.binding_class == SlotBinding:
                 continue
             elif blueprint.binding_class == SelfAttributeBinding:
@@ -1017,25 +1077,12 @@ class BaseComponent(BrowserMixin, ReactiveObject):
     def __init_fields__(self):
         cls = self.__class__
 
-        fields_on_class = [attr for attr in self.__fields__ \
-                                if (attr not in self.__dict__) and \
-                                (attr in cls.__dict__) \
-                                and (not inspect.isfunction(getattr(cls, attr)))]
-
-        # Collect dependencies from computed properties
-        for name, member in inspect.getmembers(cls):
-            member_func = getattr(member, 'fget', member)
-            if hasattr(member_func, '_is_computed'):
-                deps = getattr(member_func, '_dependencies', [])
-                for d in deps:
-                    if d not in self.__fields__:
-                        self.__fields__.append(d)
+        for spec in cls.__computed_field_specs__:
+            for dependency in spec.dependencies:
+                if dependency not in self.__fields__:
+                    self.__fields__.append(dependency)
 
         with self.refrain() as refrained:
-
-            for field in fields_on_class:
-                setattr(refrained, field, cls.__dict__[field])
-
             for field in self.__fields__:
                 if field.startswith("$"):
                     
@@ -1102,7 +1149,7 @@ class BaseComponent(BrowserMixin, ReactiveObject):
                 return binding.node
         return None
 
-    def fill_slots(self, container):
+    def fill_slots(self, container=None):
         
         slot_bindings:list[SlotBinding] = [b for b in self.__bindings__ if isinstance(b, SlotBinding)]
 
@@ -1112,25 +1159,26 @@ class BaseComponent(BrowserMixin, ReactiveObject):
         named_slot_bindings = [nb for nb in slot_bindings if not nb.is_default]
         default_slot_bindings = [db for db in slot_bindings if db.is_default]
         
-        light_children = list(container.childNodes)
+        if container is not None:
+            named_children: dict = {}
+            default_children: list = []
+            for child in list(container.childNodes):
+                slot_attr = None
+                try:
+                    slot_attr = child.getAttribute('slot')
+                except Exception:
+                    pass
 
-        # Partition by slot attribute value
-        named_children: dict = {}
-        default_children: list = []
-
-        for child in light_children:
-            slot_attr = None
-            try:
-                slot_attr = child.getAttribute('slot')
-            except Exception:
-                pass  # Text nodes don't have getAttribute
-
-            if slot_attr:
-                if slot_attr not in named_children:
-                    named_children[slot_attr] = []
-                named_children[slot_attr].append(child)
-            else:
-                default_children.append(child)
+                if slot_attr:
+                    named_children.setdefault(slot_attr, []).append(child)
+                else:
+                    default_children.append(child)
+            self.__dict__['_slot_content'] = (named_children, default_children)
+        else:
+            slot_content = self.__dict__.get('_slot_content')
+            if slot_content is None:
+                return
+            named_children, default_children = slot_content
 
         for sb in named_slot_bindings:
             slot_node = sb.node
@@ -1207,9 +1255,20 @@ class BaseComponent(BrowserMixin, ReactiveObject):
     
     @classmethod
     def mount(cls, container, replace=False, **attributes):
-        container = container
+        return cls._mount_with_creation_inputs(
+            container,
+            replace,
+            _CreationInputs(dict(attributes), True),
+        )
 
-        new_instance = cls.initialize(container, **attributes)
+    @classmethod
+    def _mount_with_creation_inputs(cls, container, replace, creation_inputs):
+        attributes = creation_inputs.values
+        new_instance = cls.initialize(
+            container,
+            _creation_inputs=creation_inputs,
+            **attributes,
+        )
         new_template = new_instance.__template__
         self_element = new_instance.__element__
                 
@@ -1221,16 +1280,19 @@ class BaseComponent(BrowserMixin, ReactiveObject):
         else:
             container.appendChild(new_template)
 
-        for nested_child in cls.get_nested_children():
-            child_instance = nested_child.mount(self_element, replace=False) #appendChild
-
-            new_instance.add_binding(ChildBinding(component_instance=new_instance,
-                                                          node=self_element,
-                                                          childclass=nested_child,
-                                                          childinstance=child_instance,
-                                                          ))
+        new_instance._mount_nested_children()
 
         return new_instance
+
+    def _mount_nested_children(self):
+        for nested_child in self.__class__.get_nested_children():
+            child_instance = nested_child.mount(self.__element__, replace=False)
+            self.add_binding(ChildBinding(
+                component_instance=self,
+                node=self.__element__,
+                childclass=nested_child,
+                childinstance=child_instance,
+            ))
 
 
     @classmethod
@@ -1247,12 +1309,14 @@ class BaseComponent(BrowserMixin, ReactiveObject):
         sources: list[tuple] = []
         mains: list[tuple] = []
         for _tag, c in cls._registry.items():
+            c.ensure_definition()
             if hasattr(c, "style"):
                 css = c._get_style_string()
                 if css:
                     mains.append((c, c.__name__, None, css))
         sources.extend(reversed(mains))
         for _tag, c in cls._registry.items():
+            c.ensure_definition()
             for extra_name, extra_css in c._get_extra_styles():
                 sources.append((c, c.__name__, extra_name, extra_css))
         return sources
@@ -1275,35 +1339,96 @@ class BaseComponent(BrowserMixin, ReactiveObject):
         return new_instance
 
     def _capture_state(self):
-        """Snapshot the instance's plain (non-$/#) field values before a hot-swap."""
-        state = {}
-        for field in self.__fields__:
-            if not field.startswith(("$", "#")):
-                try:
-                    value = getattr(self, field)
-                except AttributeError:
-                    continue
-                # Fields are state values, never callables.  Skipping methods
-                # keeps a stray handler name out of the snapshot (it would
-                # otherwise be setattr back onto the instance on hot-swap,
-                # shadowing the class method with a stale bound method).
-                if callable(value):
-                    continue
-                state[field] = value
-        return state
+        """Capture owned instance state for definition reconciliation."""
+        origins = dict(self.__dict__.get("_state_fields", {}))
+        values = {
+            name: self.__dict__[name]
+            for name in origins
+            if name in self.__dict__
+        }
+        return _ReloadState(
+            values,
+            origins,
+            self.__dict__.get("_creation_inputs", _CreationInputs({}, False)),
+        )
 
-    def _rerender_after_swap(self, state):
+    def _reconcile_reload_state(self, captured):
+        cls = type(self)
+        specs = cls.__dict__.get("__state_field_specs__", MappingProxyType({}))
+        creation_names = set(captured.creation_inputs.values)
+        preserved = {}
+
+        for name, value in captured.values.items():
+            origin = captured.origins[name]
+            if name in specs:
+                preserved[name] = (value, "declared")
+                continue
+            if origin == "declared" and name not in creation_names:
+                continue
+            try:
+                cls._validate_creation_prop(name)
+            except ValueError:
+                continue
+            preserved[name] = (value, "dynamic")
+
+        for name in captured.origins:
+            self.__dict__.pop(name, None)
+
+        self.__dict__["_state_specs"] = specs
+        self.__dict__["_state_fields"] = {}
+        self.__dict__["_required_state_fields"] = frozenset(
+            name for name, spec in specs.items() if spec.required
+        )
+
+        for name, spec in specs.items():
+            if name in preserved:
+                value, _origin = preserved.pop(name)
+            elif spec.required:
+                continue
+            else:
+                value = spec.materialize()
+            self.__dict__[name] = value
+            self.__dict__["_state_fields"][name] = "declared"
+            self._dag.get_or_create_state(name)
+
+        for name, (value, origin) in preserved.items():
+            self.__dict__[name] = value
+            self.__dict__["_state_fields"][name] = origin
+            self._dag.get_or_create_state(name)
+
+        self._validate_required_state()
+
+        creation_inputs = captured.creation_inputs
+        self.__dict__["_creation_inputs"] = creation_inputs
+        if creation_inputs.raw_attributes:
+            self.__dict__["_creation_binding_blueprints"] = tuple(
+                cls._creation_arg_blueprints(creation_inputs.values)
+            )
+        else:
+            self.__dict__["_creation_binding_blueprints"] = ()
+
+    def _rerender_after_swap(self, captured, new_cls=None):
         """Rebind + re-render this instance against the (possibly new) class blueprint."""
-        # 1. Clean up old bindings + DAG via the SHARED teardown path (this now
-        #    also recursively destroys stale mounted children instead of leaking
-        #    them), then a FRESH scope for the rebuilt instance.
+        # Child bindings own their mounted subtrees, so this teardown must run
+        # before the instance adopts another definition.
+        self._teardown_js()
         self._teardown_bindings()
+        self._deregister_identities()
         self.__dict__['_scope'] = ReactiveScope()
 
+        if new_cls is not None:
+            object.__setattr__(self, "__class__", new_cls)
+        self.__dict__.pop("__class__", None)
+
         self.__dict__['__bindings__'] = []
+        self.__dict__['__fields__'] = []
         self.__dict__['_selfattr_bindings'] = {}
         self.__dict__['_dag'] = DependencyGraph()
         self.__dict__['_dag_nodes'] = self._dag.nodes
+        self._reconcile_reload_state(captured)
+        for name in tuple(self.__dict__):
+            if name.startswith(("$", "#")):
+                del self.__dict__[name]
 
         # 2. Clear cached template/nodes to force reload from the (new) class blueprint
         if '_template' in self.__dict__:
@@ -1322,18 +1447,13 @@ class BaseComponent(BrowserMixin, ReactiveObject):
             # stays unbound (raw {placeholders}).
             self.__init_selfbinding__()
             self.__init_slot_bindings__()
+            self.fill_slots()
             self.__init_bindings__()
             self.__init_fields__()
+            self._mount_nested_children()
 
             new_fragment = self.__template__
             old_element.replaceWith(new_fragment)
-
-            # 4. Restore state. __init_fields__ already force-triggered every plain
-            # field against the fresh DAG and rendered the new fragment, so this only
-            # has to fire for values that actually differ.
-            with self.refrain() as refrained:
-                for k, v in state.items():
-                    setattr(refrained, k, v)
 
             # The fragment was emptied by replaceWith; re-cache a fresh clone so
             # any later __template__ access (e.g. another hot-swap) still works.
@@ -1343,6 +1463,9 @@ class BaseComponent(BrowserMixin, ReactiveObject):
             except Exception:
                 pass
 
+            if getattr(type(self), "__js_component__", False):
+                self.on_mounted()
+
         # The rebuild owns a fresh scope and an empty binding list, and _teardown_bindings
         # released the previous subscribers, so the declarations attach again.
         self._attach_declarations()
@@ -1350,18 +1473,16 @@ class BaseComponent(BrowserMixin, ReactiveObject):
     def hot_swap(self, new_cls):
         """Hot-swap this instance to a fully new class definition (exact-class match)."""
         print(f"HMR: Hot-swapping instance {self} to {new_cls}")
-        state = self._capture_state()
-        self.__class__ = new_cls
-        self._rerender_after_swap(state)
+        new_cls.ensure_definition()
+        captured = self._capture_state()
+        self._rerender_after_swap(captured, new_cls)
 
     @classmethod
     def _adopt_template(cls, new_base):
         """Re-point a subclass's inherited template to a reloaded base class."""
         setattr(cls, "__templatestr__", new_base.__templatestr__)
-        cls.__binding_blueprints__ = []
-        cls._initialize_blueprint()
-        cls._analyze_creation_args()
-        cls._analyze_template()
+        cls.invalidate_definition()
+        cls.ensure_definition()
 
     def hot_swap_template(self, new_cls):
         """
@@ -1379,8 +1500,8 @@ class BaseComponent(BrowserMixin, ReactiveObject):
         except Exception as e:
             print(f"HMR: Template refresh failed for {sub.__name__}: {e}")
             return
-        state = self._capture_state()
-        self._rerender_after_swap(state)
+        captured = self._capture_state()
+        self._rerender_after_swap(captured)
 
         print(f"HMR: Hot-swap complete for {self}")
     
@@ -1394,6 +1515,7 @@ class BaseComponent(BrowserMixin, ReactiveObject):
         quadratic work. HMR replaces a definition with a new class, which computes its
         own answer.
         """
+        cls.ensure_definition()
         return cls.__dict__.get("__nested_children__", ())
 
     @classmethod
@@ -1509,7 +1631,7 @@ class BaseComponent(BrowserMixin, ReactiveObject):
         ]
         # Remove the DAG edge.
         effect_name = f"sub_{id(component_instance)}_{attr_name}"
-        self._dag.remove_effect(effect_name)
+        self._dag.remove_node(effect_name)
 
     # react() is inherited from ReactiveObject
         

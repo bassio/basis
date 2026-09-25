@@ -1,5 +1,6 @@
 from basis.shared.styling import compact_block
 from basis.shared.component import Component, extra_style, scoped
+from basis.shared.reactive import state
 from basis.shared.store import Store
 from dataclasses import dataclass
 import sys
@@ -19,9 +20,10 @@ class ToastStore(Store):
     """
     A reactive store managing the toast notification queue.
     """
+    toasts: list = state(default_factory=list)
+
     def __init__(self, name="toast"):
         super().__init__(name)
-        self.toasts = []
         self._counter = 0
 
     def show(self, message, variant="info", title=None, duration=5000):

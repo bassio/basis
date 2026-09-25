@@ -1,5 +1,5 @@
 import sys
-from functools import wraps
+from functools import partial, wraps
 
 # Framework check
 IS_CLIENT = "pyscript" in sys.modules
@@ -9,38 +9,87 @@ if IS_CLIENT:
     from basis.client.component import Component as ClientComponent
 
     Component = ClientComponent
+    ONLINE_PYSCRIPT = "https://pyscript.net/releases/2026.3.1"
 
     class Basis(object):
-        def page(self, component, **kwargs):
-            # A real page subclass never reaches this shim on the client (it boots
-            # through the manifest's basis.bootstrap.entrypoint); if one does, leave it
-            # alone rather than annotate it.
-            from basis.shared.page import StaticPage as _StaticPageBase
+        def page(
+            self,
+            component_cls=None,
+            *,
+            path="/",
+            page_cls=None,
+            title=None,
+            pyscript_src=ONLINE_PYSCRIPT,
+            render_mode=None,
+            name=None,
+        ):
+            from basis.shared.page import _synthesized_page_base
 
-            if isinstance(component, type) and issubclass(component, _StaticPageBase):
-                return component
-            # Annotate the decorated root component with its synthesized-shell
-            # recipe (the same decoration inputs the server used). This follows
-            # the framework's decorator idiom (``__scoped__`` /
-            # ``__extra_style__``): metadata travels with the object, never in a
-            # module global. Mounting is NOT a side effect — the client driver
-            # (client/entrypoint.py) reads the annotation off the class and
-            # calls Page.mount_document. Writing into the class's OWN __dict__
-            # (vars) keeps the annotation from leaking down to subclasses.
-            component.__dict__["_synthesized_page_args"] = {
-                k: kwargs[k]
-                for k in ("page_cls", "title", "stores", "pyscript_src")
-                if k in kwargs
-            }
-            # Decorator form: return the DECORATED component class.
-            return component
+            if component_cls is None:
+                return partial(
+                    self.page,
+                    path=path,
+                    page_cls=page_cls,
+                    title=title,
+                    pyscript_src=pyscript_src,
+                    render_mode=render_mode,
+                    name=name,
+                )
 
-        def serve(self, *args, **kwargs):
-            # Client-side: ``@app.serve`` on a root Component (the single-file
-            # quickstart) behaves exactly like ``@app.page`` — annotate the
-            # class; the driver mounts. Page subclasses never reach this shim.
-            component = args[0] if args else kwargs.get("page_cls")
-            return self.page(component, **kwargs)
+            _synthesized_page_base(component_cls, page_cls)
+            setattr(
+                component_cls,
+                "_synthesized_page_args",
+                {
+                    "page_cls": page_cls,
+                    "title": title,
+                    "pyscript_src": pyscript_src,
+                },
+            )
+            return component_cls
+
+        def serve(self, path="/", *, render_mode=None, name=None):
+            def decorate(page_cls):
+                from basis.shared.page import StaticPage
+
+                if isinstance(page_cls, type) and issubclass(page_cls, StaticPage):
+                    return page_cls
+                return self.page(
+                    page_cls,
+                    path=path,
+                    render_mode=render_mode,
+                    name=name,
+                )
+
+            return decorate
+
+        def include_page(
+            self,
+            path,
+            *,
+            page_cls=None,
+            render_mode=None,
+            name=None,
+        ):
+            from basis.shared.page import StaticPage, refuse_static_render_mode
+
+            if page_cls is None:
+                def register_page(cls):
+                    return self.include_page(
+                        path,
+                        page_cls=cls,
+                        render_mode=render_mode,
+                        name=name,
+                    )
+
+                return register_page
+            if not (isinstance(page_cls, type) and issubclass(page_cls, StaticPage)):
+                raise TypeError(
+                    f"include_page(path={path!r}) requires a Page subclass, got "
+                    f"{page_cls!r}."
+                )
+            refuse_static_render_mode(page_cls, render_mode)
+            return page_cls
 
     Basis = Basis
 

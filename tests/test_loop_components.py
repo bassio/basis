@@ -21,6 +21,7 @@ from basis.server.app import Basis
 from basis.shared.component import Component
 from basis.shared.element import Element
 from basis.shared.page import _synthesize_page
+from basis.shared.reactive import state
 
 import basis.plugins.ui.card.card  # noqa: F401
 from basis.plugins.ui.card.card import Card
@@ -67,7 +68,9 @@ def _render(root_component, entry_module):
 def test_a_component_inside_a_loop_body_reads_the_item():
     """The plain-element body's bindings cover the component's content too."""
     class Owner(Component):
-        notes = [{"id": "a", "title": "Alpha"}, {"id": "b", "title": "Beta"}]
+        notes: list = state(default_factory=lambda: [
+            {"id": "a", "title": "Alpha"}, {"id": "b", "title": "Beta"}
+        ])
 
         def template(self):
             """
@@ -90,7 +93,7 @@ def test_an_owners_field_bound_beside_the_item_stays_reactive():
     body — which is what makes the highlighted row follow the store.
     """
     class Owner(Component):
-        notes = [{"id": 1}, {"id": 2}]
+        notes: list = state(default_factory=lambda: [{"id": 1}, {"id": 2}])
         active = 2
 
         def template(self):
@@ -114,7 +117,9 @@ def test_an_owners_field_bound_beside_the_item_stays_reactive():
 def test_a_component_as_the_loop_element_gets_its_data_as_attributes():
     """The component owns its subtree, so an item reaches it through its props."""
     class Owner(Component):
-        notes = [{"id": "a", "title": "Alpha"}, {"id": "b", "title": "Beta"}]
+        notes: list = state(default_factory=lambda: [
+            {"id": "a", "title": "Alpha"}, {"id": "b", "title": "Beta"}
+        ])
 
         def template(self):
             """
@@ -130,10 +135,29 @@ def test_a_component_as_the_loop_element_gets_its_data_as_attributes():
     assert rows == ["Alpha", "Beta"], rows
 
 
+def test_resolved_loop_prop_with_braces_remains_literal():
+    class Owner(Component):
+        notes: list = state(default_factory=lambda: [
+            {"id": "a", "title": "{literal braces}"}
+        ])
+
+        def template(self):
+            """
+            <div>
+                <loop-probe-row for="note" in="{notes}" key="id"
+                                label="{note['title']}"></loop-probe-row>
+            </div>
+            """
+
+    html = _render(Owner, "/test_loop_component_literal_braces.py")
+
+    assert "{literal braces}" in html
+
+
 def test_a_loop_body_beside_a_child_component_still_builds():
     """The body's other bindings must not depend on a component binding's fields."""
     class Owner(Component):
-        notes = [{"id": "a", "title": "Alpha"}]
+        notes: list = state(default_factory=lambda: [{"id": "a", "title": "Alpha"}])
         heading = "Notes"
 
         def template(self):

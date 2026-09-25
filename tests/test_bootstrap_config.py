@@ -206,9 +206,8 @@ def test_hand_rolled_route_self_registers_page_for_manifest(tmp_path):
     manifest: the shell appends ?url= from the request and self-registers the
     route→page mapping so the endpoint can resolve the page.
 
-    Note: ``Page._load()`` reconstructs the class via ``initialize()``
-    (``type(cls.__name__, (cls,), ...)``), so ``app._pages["/"]`` is that
-    reconstructed subclass — assert by name/module, not identity.
+    ``Page._load()`` mounts the authored Page class directly; the route registry
+    and manifest therefore retain its stable identity.
     """
     from fastapi import Request
     from fastapi.responses import HTMLResponse

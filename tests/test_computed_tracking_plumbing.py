@@ -243,7 +243,7 @@ def test_works_on_plain_reactive_object():
 # P2 — @computed on execution tracking (lazy + tracked deps)
 # ─────────────────────────────────────────────────────────────
 
-def test_computed_is_lazy_until_first_access():
+def test_computed_primes_dependencies_but_caches_on_first_access():
     class M(Store):
         x = 1
 
@@ -257,9 +257,9 @@ def test_computed_is_lazy_until_first_access():
             return self.x * 2
 
     store = M("m")
-    assert store.__dict__["_calls"] == 0  # not computed at construction
-    assert store.d == 2
     assert store.__dict__["_calls"] == 1
+    assert store.d == 2
+    assert store.__dict__["_calls"] == 2
 
 
 def test_computed_tracks_class_attr_not_referenced_elsewhere():

@@ -17,6 +17,7 @@ from basis.shared import events
 from basis.shared.component import Component
 from basis.shared.bindings import LoopItem
 from basis.shared.element import Element
+from basis.shared.reactive import state
 from js_fakes import FakeFFI
 
 
@@ -43,7 +44,7 @@ def test_plain_loop_item_is_thin_holder_not_component():
     per-item mini-DAG for @derived values, but no reactive attribute registry
     (``_dag_nodes``) and no lifecycle."""
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         def on_item_click(self, event=None):
             pass
@@ -70,7 +71,7 @@ def test_loop_body_handler_runs_on_owner():
     receivers = []
 
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         def on_item_click(self, event=None):
             receivers.append(self)
@@ -97,7 +98,7 @@ def test_nested_handler_in_loop_body_runs_on_owner():
     receivers = []
 
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         def on_nested_click(self, event=None):
             receivers.append(self)
@@ -138,7 +139,7 @@ def test_custom_element_loop_child_keeps_own_receiver():
             """
 
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         def on_item_click(self, event=None):
             receivers.append("owner")
@@ -178,7 +179,7 @@ def test_custom_element_loop_child_is_still_a_component_child():
             """
 
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         def template(self):
             """
@@ -212,7 +213,7 @@ def test_plain_loop_exposes_body_bindings_for_hydration():
     all_body_bindings(), so the client hydration pass can re-point them to SSR
     nodes by canonical path -> ssr_map."""
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         def template(self):
             """
@@ -245,7 +246,7 @@ def test_plain_loop_exposes_body_bindings_for_hydration():
 def test_each_loop_item_has_its_own_scope():
     """Each LoopItem carries its own item overlay; no leakage across items."""
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         def template(self):
             """
@@ -269,7 +270,7 @@ def test_item_binding_renders_per_item():
     """The body text binding resolves against the item's scope and renders each
     item's own value, with the owner as the live context for non-item names."""
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
         suffix = "!"
 
         def template(self):
@@ -305,7 +306,7 @@ def test_custom_element_loop_stays_before_trailing_sibling():
             """
 
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         def template(self):
             """

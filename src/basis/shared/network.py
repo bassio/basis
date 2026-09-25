@@ -40,11 +40,9 @@ class NetworkStore(Store):
     """
 
     # Optimistic: a healthy connection is the neutral that leaves desktop SSR untouched.
-    neutral_defaults = {
-        "online": True,               # navigator.onLine
-        "effective_type": "unknown",  # navigator.connection.effectiveType
-        "save_data": False,           # navigator.connection.saveData
-    }
+    online = True
+    effective_type = "unknown"
+    save_data = False
 
     @computed(dependencies=["online"])
     def offline(self) -> bool:

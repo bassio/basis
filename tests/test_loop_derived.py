@@ -18,6 +18,7 @@ from basis.shared.reactive import (
     EffectNode,
     _wake_list,
     derived,
+    state,
 )
 from basis.shared.store import Store
 
@@ -53,7 +54,7 @@ def _text_of(node):
 def test_derived_renders_in_loop_body():
     """A @derived value referenced by name in a loop body renders per item."""
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         @derived
         def full_name(self, it):
@@ -82,7 +83,7 @@ def test_derived_is_memoized_per_item():
     calls = []
 
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         @derived
         def label(self, it):
@@ -113,7 +114,7 @@ def test_owner_state_change_recomputes_derived():
     state changes, and the DOM binding showing it updates end-to-end (owner →
     per-item node → binding effect → DOM)."""
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
         show_rank = False
 
         @derived
@@ -145,7 +146,7 @@ def test_derived_reads_store_state():
     store.rate = 10
 
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         @derived
         def total(self, it):
@@ -173,7 +174,7 @@ def test_item_reuse_recomputes_derived():
     item's deps haven't changed — its input key has — so the memo is
     invalidated explicitly on reuse)."""
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         @derived
         def doubled(self, it):
@@ -211,7 +212,7 @@ def test_item_reuse_recomputes_a_derived_read_by_a_component_prop():
             """<div class="t-derived-row" data-shown="{shown}">row</div>"""
 
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         @derived
         def doubled(self, it):
@@ -248,7 +249,7 @@ def test_per_item_derived_nodes_are_independent():
     """Each item owns its own derived ComputedNode; reusing item A's key does
     not touch item B's memo."""
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         @derived
         def scaled(self, it):
@@ -287,7 +288,7 @@ def test_nested_loop_derived_binds_to_innermost_level():
     item, and the innermost level wins (standard scoping — inner shadows outer,
     like Svelte/Vue)."""
     class Owner(Component):
-        groups = []
+        groups: list = state(default_factory=list)
 
         @derived
         def group_label(self, it):
@@ -318,7 +319,7 @@ def test_removing_item_disposes_derived_and_effect():
     """Removing an item tears down its derived node and detaches the owner
     effect's cross-graph edge (no dangling references)."""
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         @derived
         def doubled(self, it):
@@ -355,7 +356,7 @@ def test_removing_all_items_clears_item_effects():
     """After clearing the collection, no per-item body effect remains on the
     owner DAG and no item's derived node is wired into it."""
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         @derived
         def doubled(self, it):
@@ -396,7 +397,9 @@ def test_ssr_renders_derived():
 
     @app.page
     class Team(Component):
-        members = [{"first": "Ada", "last": "Lovelace"}]
+        members: list = state(
+            default_factory=lambda: [{"first": "Ada", "last": "Lovelace"}]
+        )
 
         @derived
         def full_name(self, it):

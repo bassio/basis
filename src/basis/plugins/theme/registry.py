@@ -13,6 +13,7 @@ builder calls it lazily for ``kind == "theme"`` entries."""
 from basis.shared.actions import server_action
 from basis.shared.app_state import AppStateStore
 from basis.shared.plugin_registry import _registry_listing
+from basis.shared.reactive import state
 
 
 def theme_metadata(plugin) -> dict | None:
@@ -49,11 +50,7 @@ class ThemeRegistryStore(AppStateStore):
     carries.
     """
 
-    def __init__(self, name: str = "themes"):
-        super().__init__(name)
-        # Never clobber the SSR-hydrated items (see the store-subclass footgun).
-        if not getattr(self, "_hydrated_from_ssr", False):
-            self.__dict__["items"] = {}
+    items: dict = state(default_factory=dict)
 
     def project(self, app) -> dict:
         """Project the app's *theme* registrations as the store's ``items``."""

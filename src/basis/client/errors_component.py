@@ -23,6 +23,7 @@ owner) as ``self``, so ``toggle_entry`` can mutate ``self.items`` and re-render.
 """
 
 from basis.shared.component import Component, IS_CLIENT
+from basis.shared.reactive import state
 
 
 def _format_detail(err_dict: dict) -> str:
@@ -58,13 +59,8 @@ class ErrorOverlay(Component):
 
     __tag__ = "basis-error-overlay"
 
-    items = []       # display entries: {key, component, binding_type, expr, detail, expanded}
+    items: list = state(default_factory=list)
     collapsed = ""   # "" | "true" — whole-panel collapse
-
-    def __init__(self):
-        super().__init__()
-        self.items = []
-        self.collapsed = ""
 
     # -- record API (called by the client error sink) ------------------------
     def add(self, err_dict: dict) -> None:

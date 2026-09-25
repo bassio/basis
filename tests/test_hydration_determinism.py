@@ -9,6 +9,7 @@ scheme, ``data-hydration-id``).  Canonical is the only hydration mode (the
 legacy mode has been removed).
 """
 import pytest
+from basis.shared.reactive import state
 
 from basis.server.tree_builder import html_to_element
 from basis.shared.element import Element, ElementString, Comment
@@ -556,7 +557,9 @@ def test_ssr_stamps_loop_body_nodes_and_text_ordinals():
         </div>
         """
 
-        items = [{"k": 1, "name": "Alpha"}, {"k": 2, "name": "Beta"}]
+        items: list = state(default_factory=lambda: [
+            {"k": 1, "name": "Alpha"}, {"k": 2, "name": "Beta"}
+        ])
 
     app.include_page("/", page_cls=_synthesize_page(Root, entry_module="/test_loop_root.py"))
     client = TestClient(app)
@@ -596,8 +599,10 @@ def test_ssr_stamps_nested_loop_body_nodes_and_text_ordinals():
         </div>
         """
 
-        groups = [{"g": "A", "items": [{"name": "a1"}, {"name": "a2"}]},
-                  {"g": "B", "items": [{"name": "b1"}]}]
+        groups: list = state(default_factory=lambda: [
+            {"g": "A", "items": [{"name": "a1"}, {"name": "a2"}]},
+            {"g": "B", "items": [{"name": "b1"}]},
+        ])
 
     app.include_page("/", page_cls=_synthesize_page(Root, entry_module="/test_nested_loop_root.py"))
     client = TestClient(app)

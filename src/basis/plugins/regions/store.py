@@ -17,7 +17,8 @@ trigger into a server re-pull (``refresh()``). No framework code knows
 import asyncio
 
 from basis.shared.app_state import AppStateStore
-from basis.shared.store import Store, ensure_store
+from basis.shared.reactive import state
+from basis.shared.store import IS_CLIENT, Store, ensure_store
 
 from basis.plugins.regions.registry import _region_listing
 
@@ -32,18 +33,17 @@ class RegionStore(AppStateStore):
     server registry).
     """
 
-    def __init__(self, name: str = "regions"):
-        super().__init__(name)
-        # Reactive projection: {region: [{cls_path, props, order}, ...]}.
-        # Never clobber the SSR-hydrated items (store-subclass footgun).
-        if not getattr(self, "_hydrated_from_ssr", False):
-            self.__dict__["items"] = {}
-        # $regions projects app state that plugin lifecycle changes mutate
-        # (disable/enable unwinds/restores a plugin's contributions), so re-sync
-        # whenever the $plugins control-plane store updates on the client. The
-        # dependency is a cross-object DAG edge, not a
-        # parallel registry — see _wire_plugins_dependency / react.
+    items: dict = state(default_factory=dict)
+
+    def on_client_ready(self) -> None:
+        super().on_client_ready()
         self._wire_plugins_dependency()
+
+    def on_client_teardown(self) -> None:
+        plugins = Store._registry.get("plugins")
+        if plugins is not None:
+            plugins.remove_subscription(self, "items")
+        super().on_client_teardown()
 
     def _wire_plugins_dependency(self) -> None:
         """Subscribe to ``$plugins.items`` via a first-class DAG edge.
@@ -75,7 +75,8 @@ class RegionStore(AppStateStore):
 
     def _resync_from_plugins(self) -> None:
         """Schedule a server re-pull after a ``$plugins`` change (client RPC)."""
-        asyncio.ensure_future(self.refresh())
+        if IS_CLIENT:
+            asyncio.ensure_future(self.refresh())
 
     def project(self, app) -> dict:
         """Project the app's region contributions as the store's ``items``."""

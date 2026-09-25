@@ -19,7 +19,7 @@ fastapi/server modules at module scope.
 from __future__ import annotations
 
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 from basis.shared.actions import server_action
 from basis.shared.serialization import jsonable
@@ -41,7 +41,7 @@ class AppStateStore(Store):
     _requires_app = True
 
     #: Default source: project these keys from ``app.state`` (a missing key → None).
-    app_state_keys: tuple[str, ...] = ()
+    app_state_keys: ClassVar[tuple[str, ...]] = ()
 
     # ── the projection boundary (the ONLY thing that crosses the wire) ──
     def project(self, app) -> dict:
@@ -62,15 +62,13 @@ class AppStateStore(Store):
     def _refresh_from_app(self) -> None:
         """Recompute the projection from the app (no-op without an app).
 
-        Server-side projection writes go through ``__dict__`` (no subscribers
-        server-side); the client hydrates reactively via ``#basis-initial-state``
-        / ``store.update(new_state)``.
+        Projection writes use the normal state path so dynamic fields are part
+        of the store's snapshot inventory.
         """
         app = self.__dict__.get("_app")
         if app is None:
             return
-        for k, v in self.project(app).items():
-            self.__dict__[k] = v
+        self.apply_state(self.project(app))
 
     def serialize(self) -> dict:
         self._refresh_from_app()
@@ -82,8 +80,8 @@ class AppStateStore(Store):
         """Pull the latest projection from the server (client RPC).
 
         The RPC layer re-applies ``new_state`` to the client store via
-        ``store.update()``, so subscribers re-render reactively. Pushing changes
-        without a client pull is not implemented.
+        ``store.apply_state()``, so subscribers re-render reactively. Pushing
+        changes without a client pull is not implemented.
         """
         self._refresh_from_app()
         return {"ok": True}

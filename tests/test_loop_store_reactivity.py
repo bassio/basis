@@ -18,7 +18,7 @@ same way (they read owner fields, @derived values and ``$store.*`` alike).
 
 from basis.shared.component import Component
 from basis.shared.element import Element
-from basis.shared.reactive import derived
+from basis.shared.reactive import derived, state
 from basis.shared.store import Store
 
 
@@ -225,7 +225,7 @@ def test_a_looped_component_element_prop_reads_the_owner_and_its_deriveds():
             """<div class="loop-row" data-selected="{position}">row</div>"""
 
     class Owner(Component):
-        items = [{"n": 1}, {"n": 2}]
+        items: list = state(default_factory=lambda: [{"n": 1}, {"n": 2}])
         mark = 2
 
         @derived

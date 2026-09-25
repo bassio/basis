@@ -66,36 +66,25 @@ class ThemeStore(CookieStore):
 
     def __init__(self, name="theme", definition: ThemeDefinition | None = None):
         super().__init__(name)
-        # Store subclass footgun: assigning instance attrs after
-        # super().__init__() would CLOBBER the SSR-hydrated values (hydration
-        # runs inside Store.__init__). Only apply defaults when nothing was
-        # hydrated — otherwise a persisted theme / seed is lost.
-        if not getattr(self, "_hydrated_from_ssr", False):
-            self.__dict__["_definition"] = definition or DEFAULT_DEFINITION
-            self.dark_mode = False
-            self.active_theme = self._definition.id
-            self.data_theme = self._definition.data_theme
-            self.accent = None  # user accent override (unset → theme's accent)
+        self.__dict__["_definition"] = definition or DEFAULT_DEFINITION
+        self.dark_mode = False
+        self.active_theme = self._definition.id
+        self.data_theme = self._definition.data_theme
+        self.accent = None
 
-            # Reactive token attributes — the exact names the UI/shell consume
-            # (docs/04_components/ui-components.md). Missing/invalid slots fall
-            # back to the default theme (themes are overlays).
-            base = self._definition.tokens
-            for slot in TOKEN_SLOTS:
-                value = getattr(base, slot) or getattr(DEFAULT_TOKENS, slot, "")
-                setattr(self, slot, value)
-            # Resolve the active definition's browser-chrome colors into public
-            # attrs — serialized into #basis-initial-state and hydrated on the
-            # client, so the live sync below needs no definition lookup.
-            self._derive_chrome_colors()
+        base = self._definition.tokens
+        for slot in TOKEN_SLOTS:
+            value = getattr(base, slot) or getattr(DEFAULT_TOKENS, slot, "")
+            setattr(self, slot, value)
+        self._derive_chrome_colors()
 
-        # Client-only live re-sync (B.9 / F1): a DAG effect re-upserts the
-        # ``theme-color`` ``$head`` item whenever the chrome color — or the mode
-        # picking its side — changes, so the head ``<meta for>`` loop reconciles
-        # the live node on ANY write path (a direct ``dark_mode = …``
-        # assignment included), not just the dual-path methods.
-        if IS_CLIENT:
-            self._install_meta_color_watch()
+    def on_client_ready(self) -> None:
+        super().on_client_ready()
+        self._install_meta_color_watch()
+
+    def on_client_teardown(self) -> None:
+        self._dag.remove_node(f"theme_meta_color_{id(self)}")
+        super().on_client_teardown()
 
     # ── browser-chrome color: derived public attrs + live $head re-sync ──────
 
@@ -124,12 +113,16 @@ class ThemeStore(CookieStore):
         trigger this — closing the gap where only the dual-path methods
         remembered to call :meth:`_sync_meta_color`."""
 
+        effect_name = f"theme_meta_color_{id(self)}"
+        if effect_name in self._dag.nodes:
+            return
+
         def _resync():
             self._sync_meta_color()
 
         self._scope.add_effect(
             self._dag,
-            f"theme_meta_color_{id(self)}",
+            effect_name,
             _resync,
             ["dark_mode", "theme_color_light", "theme_color_dark"],
         )

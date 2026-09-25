@@ -259,8 +259,7 @@ def test_an_app_declared_store_wins(engine):
     class AppAuth(AuthStore):
         def __init__(self, name="auth"):
             super().__init__(name)
-            if not getattr(self, "_hydrated_from_ssr", False):
-                self.site = "example"
+            self.site = "example"
 
     mine = AppAuth("auth")  # the app's stores/ module-scope instance
 

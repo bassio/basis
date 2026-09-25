@@ -3,6 +3,7 @@ from basis.shared.store import Store
 from basis.shared.component import Component, IS_CLIENT, client
 from basis.shared.context import ContextVarProxyDict
 from basis.shared.events import on_window
+from basis.shared.reactive import state
 
 if IS_CLIENT:
     from pyscript import window
@@ -12,15 +13,11 @@ else:
 
 class RouterStore(Store):
     current_path: str = ""
-    params: dict = {}
+    params: dict = state(default_factory=dict)
 
     def __init__(self, name):
         super().__init__(name)
-        # Hydration runs inside Store.__init__ and has already written both fields from
-        # #basis-initial-state: the page stamped current_path from the request, and
-        # Route.check_match filled params in the same render.  The browser's own answer is
-        # what a store built on the client from scratch needs, and only that.
-        if not getattr(self, "_hydrated_from_ssr", False) and window:
+        if window:
             self.current_path = window.location.pathname
 
     def _read_path(self):
@@ -72,8 +69,12 @@ class Route(Component):
         self.__dict__['router'] = Component.S['router']
 
     @classmethod
-    def initialize(cls, container, **kwargs):
-        new_instance = super().initialize(container, **kwargs)
+    def initialize(cls, container, _creation_inputs=None, **kwargs):
+        new_instance = super().initialize(
+            container,
+            _creation_inputs=_creation_inputs,
+            **kwargs,
+        )
         Route._route_registry[new_instance.path] = new_instance
         return new_instance
  

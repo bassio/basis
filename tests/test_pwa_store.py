@@ -21,30 +21,13 @@ from basis.plugins import mobile
 from basis.plugins.mobile import PwaStore
 from basis.plugins.mobile.store import STANDALONE_QUERY
 from basis.shared.media import MediaQuery
-from basis.shared.store import Store
-
-
-class _Script:
-    """Stand-in for the ``#basis-initial-state`` script tag."""
-
-    def __init__(self, payload: str):
-        self.textContent = payload
-
-
-class _Document:
-    """Stand-in for the client document, serving one initial-state payload."""
-
-    def __init__(self, state: dict):
-        self._state = state
-
-    def getElementById(self, element_id: str):
-        return _Script(json.dumps(self._state))
+from basis.shared.store import Store, install_initial_state
 
 
 @pytest.fixture(autouse=True)
 def _clean_registries(monkeypatch):
     monkeypatch.setattr(store_module, "_client_ready", False)
-    monkeypatch.setattr(store_module, "document", None)
+    install_initial_state({})
     Store._registry.clear()
     Store._store_blueprints.clear()
     for query in list(MediaQuery._instance_registry.values()):
@@ -105,10 +88,8 @@ def test_the_worker_fields_are_neutrals_the_client_overwrites():
 def test_hydration_wins_over_the_constructor_defaults(monkeypatch):
     """A hydrated identity must survive construction — the defaulting loop runs after
     ``Store.__init__`` already read ``#basis-initial-state`` (the store-subclass footgun)."""
-    monkeypatch.setattr(
-        store_module,
-        "document",
-        _Document({"pwa": {"title": "Hydrated", "icons": [{"src": "/a.png"}]}}),
+    install_initial_state(
+        {"pwa": {"title": "Hydrated", "icons": [{"src": "/a.png"}]}}
     )
 
     pwa = PwaStore("pwa", title="Myapp", icons=["/i.png"])

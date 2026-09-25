@@ -1,5 +1,6 @@
 from basis.shared.component import Component, IS_CLIENT, scoped
 from basis.shared.events import py_event
+from basis.shared.reactive import state
 
 if IS_CLIENT:
     from pyscript import window, ffi
@@ -17,7 +18,10 @@ class TreeView(Component):
     """
     __tag__ = "ui-tree-view"
 
-    data = [{"label": "src", "path": "/src", "children": []},{"label": "src", "path": "/src", "children": []},]
+    data: list = state(default_factory=lambda: [
+        {"label": "src", "path": "/src", "children": []},
+        {"label": "src", "path": "/src", "children": []},
+    ])
     selected_path = ""
 
     @py_event
@@ -70,7 +74,7 @@ class TreeNode(Component):
 
     label = ""
     path = ""
-    children = []
+    children: list = state(default_factory=list)
     selected_path = ""
     open = False
 

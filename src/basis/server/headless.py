@@ -119,10 +119,8 @@ def refresh_headless_class(cls, template: str, style: str) -> None:
         cls.template = template
         cls.style = style or ""
         cls.__templatestr__ = template
-        cls.__binding_blueprints__ = []
-        cls._initialize_blueprint()
-        cls._analyze_creation_args()
-        cls._analyze_template()
+        cls.invalidate_definition()
+        cls.ensure_definition()
     except Exception:
         pass
 

@@ -1,4 +1,5 @@
 import importlib
+import json
 import sys
 
 from pyscript import document
@@ -7,7 +8,7 @@ from basis.client.errors import install_error_sink
 from basis.shared.hmr import start_hmr
 from basis.shared.events import install_resync
 from basis.shared.reactive import batch
-from basis.shared.store import Store, mark_client_ready
+from basis.shared.store import Store, install_initial_state, mark_client_ready
 
 # The per-page manifest (/pyscript.json?url=<route>) carries the pre-mount plan
 # (stores / headless / page stores / entrypoint) under ``basis.bootstrap``. PyScript
@@ -24,6 +25,10 @@ bootstrap = (config.get("basis") or {}).get("bootstrap") or {}
 # in rendered output), replays SSR errors, and creates the dev overlay.
 # Installed BEFORE any component module is imported or mounted.
 install_error_sink()
+
+initial_state_script = document.getElementById("basis-initial-state")
+initial_state = json.loads(initial_state_script.textContent) if initial_state_script else {}
+install_initial_state(initial_state)
 
 print("[Basis] Running Python version:", sys.version)
 
@@ -63,8 +68,8 @@ try:
 except Exception as e:
     print(f"[Basis] Error initializing framework stores: {e}")
 
-# 2. App-level stores (stores/). Their module-scope instances self-hydrate from
-# #basis-initial-state, so Page.stores name-lists and default-to-all resolution
+# 2. App-level stores (stores/). Their module-scope instances claim their
+# bootstrap snapshots, so Page.stores name-lists and default-to-all resolution
 # find them in Store._registry.
 store_modules = bootstrap.get("store_modules", [])
 print(f"[Basis] Importing store modules: {store_modules}")

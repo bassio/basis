@@ -1,4 +1,4 @@
-from basis.shared.reactive import computed
+from basis.shared.reactive import computed, state
 from basis.shared.component import Component, scoped
 
 
@@ -19,7 +19,7 @@ class Select(Component):
     __tag__ = "ui-select"
 
     label       = ""
-    options     = []
+    options: list = state(default_factory=list)
     value       = ""
     placeholder = "Select an option…"
     disabled    = ""

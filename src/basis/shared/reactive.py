@@ -2,7 +2,153 @@ import contextlib
 import inspect
 import itertools
 import weakref
-from typing import Callable, Set, Dict, List, Any
+from annotationlib import Format, get_annotations
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any, Callable, ClassVar, Dict, List, Set, TypeVar, get_origin, overload
+
+
+_MISSING = object()
+_StateValue = TypeVar("_StateValue")
+
+
+@dataclass(frozen=True)
+class _StateDeclaration:
+    default: Any = _MISSING
+    default_factory: Callable[[], Any] | None = None
+    serialize: bool = True
+
+
+@dataclass(frozen=True)
+class StateFieldSpec:
+    name: str
+    default: Any = _MISSING
+    default_factory: Callable[[], Any] | None = None
+    serialize: bool = True
+    required: bool = False
+
+    def materialize(self) -> Any:
+        if self.default_factory is not None:
+            return self.default_factory()
+        return self.default
+
+
+@dataclass(frozen=True)
+class _ComputedFieldSpec:
+    name: str
+    func: Callable
+    dependencies: tuple[str, ...]
+
+
+@overload
+def state(*, default: _StateValue, serialize: bool = True) -> _StateValue: ...
+
+
+@overload
+def state(*, default_factory: Callable[[], _StateValue], serialize: bool = True) -> _StateValue: ...
+
+
+def state(*, default=_MISSING, default_factory=None, serialize=True):
+    """Declare reactive state requiring a factory or export policy."""
+    if (default is _MISSING) == (default_factory is None):
+        raise TypeError("state() accepts exactly one of default and default_factory")
+    if default is not _MISSING and not _is_immutable_default(default):
+        raise TypeError("state(default=...) requires an immutable value; use default_factory")
+    if default_factory is not None and not callable(default_factory):
+        raise TypeError("state(default_factory=...) requires a callable")
+    return _StateDeclaration(default, default_factory, serialize)
+
+
+def _is_classvar(annotation: Any) -> bool:
+    if annotation is ClassVar or get_origin(annotation) is ClassVar:
+        return True
+    annotation_text = getattr(annotation, "__forward_arg__", annotation)
+    if isinstance(annotation_text, str):
+        normalized = annotation_text.replace(" ", "")
+        return normalized.startswith(("ClassVar[", "typing.ClassVar["))
+    return False
+
+
+def _is_immutable_default(value: Any) -> bool:
+    if value is None or isinstance(value, (bool, int, float, complex, str, bytes)):
+        return True
+    if isinstance(value, tuple):
+        return all(_is_immutable_default(item) for item in value)
+    if isinstance(value, frozenset):
+        return all(_is_immutable_default(item) for item in value)
+    return False
+
+
+def _is_declaration_descriptor(value: Any) -> bool:
+    return isinstance(value, (property, classmethod, staticmethod)) or inspect.isroutine(value) \
+        or inspect.isclass(value) or hasattr(value, "__set_name__")
+
+
+def _state_field_specs(cls: type) -> dict[str, StateFieldSpec]:
+    specs: dict[str, StateFieldSpec] = {}
+    configuration_names: set[str] = set()
+    for owner in reversed(cls.__mro__):
+        annotations = get_annotations(owner, format=Format.FORWARDREF)
+        names = dict.fromkeys((*annotations, *owner.__dict__))
+        for name in names:
+            if name.startswith("_"):
+                continue
+            annotation = annotations.get(name, _MISSING)
+            value = owner.__dict__.get(name, _MISSING)
+            if annotation is not _MISSING and _is_classvar(annotation):
+                specs.pop(name, None)
+                configuration_names.add(name)
+                continue
+            if annotation is not _MISSING:
+                configuration_names.discard(name)
+            elif name in configuration_names:
+                specs.pop(name, None)
+                continue
+            if isinstance(value, _StateDeclaration):
+                specs[name] = StateFieldSpec(
+                    name,
+                    default=value.default,
+                    default_factory=value.default_factory,
+                    serialize=value.serialize,
+                    required=value.default is _MISSING and value.default_factory is None,
+                )
+                continue
+            if value is _MISSING:
+                if annotation is not _MISSING:
+                    specs[name] = StateFieldSpec(name, required=True)
+                continue
+            if hasattr(value, "declarations") and hasattr(value, "neutral"):
+                specs[name] = StateFieldSpec(name, default=value.neutral)
+                continue
+            if _is_declaration_descriptor(value):
+                specs.pop(name, None)
+                continue
+            if _is_immutable_default(value):
+                specs[name] = StateFieldSpec(name, default=value)
+                continue
+            if isinstance(value, (list, dict, set, bytearray)):
+                raise TypeError(
+                    f"{owner.__name__}.{name} has a mutable class default; "
+                    f"use state(default_factory=...)"
+                )
+            specs.pop(name, None)
+    return specs
+
+
+def _computed_field_specs(cls: type) -> tuple[_ComputedFieldSpec, ...]:
+    specs = []
+    for name, member in inspect.getmembers(cls):
+        member_func = getattr(member, "fget", member)
+        if not hasattr(member_func, "_is_computed"):
+            continue
+        original_func = getattr(member_func, "_original_func", None)
+        if original_func is not None:
+            specs.append(_ComputedFieldSpec(
+                name,
+                original_func,
+                tuple(getattr(member_func, "_dependencies", ())),
+            ))
+    return tuple(specs)
 
 
 # ──────────────────────────────────────────────
@@ -338,27 +484,18 @@ class DependencyGraph:
                 node.add_dependency(existing_node)
         return node
 
-    def remove_effect(self, name: str):
-        node = self.nodes.pop(name, None)
-        if node and node in self.effects:
-            self.effects.remove(node)
-        if node and node in self._wildcard_effects:
-            self._wildcard_effects.remove(node)
-        if node:
-            self._pending.pop(node, None)
-            if not self._pending:
-                _wake_list.pop(self._order, None)
-
     def remove_node(self, name: str):
         """Remove any node (state, computed, or effect) by name, detaching it
         from both its dependencies and dependents so nothing dangles."""
         node = self.nodes.pop(name, None)
         if node is None:
             return
-        for dep in node.dependencies:
+        for dep in tuple(node.dependencies):
             dep.dependents.discard(node)
-        for depd in node.dependents:
+        for depd in tuple(node.dependents):
             depd.dependencies.discard(node)
+        node.dependencies.clear()
+        node.dependents.clear()
         if node in self.effects:
             self.effects.remove(node)
         if node in self._wildcard_effects:
@@ -513,6 +650,7 @@ class ReactiveScope:
         self.children = []
         self._effects = []      # list[(DependencyGraph, name)]
         self._computeds = []    # list[(DependencyGraph, name)]
+        self._cleanups = []
         if parent is not None:
             parent.children.append(self)
 
@@ -533,6 +671,9 @@ class ReactiveScope:
         """Record an effect created elsewhere (e.g. a subscription edge on a
         target's graph) so ``destroy()`` removes it from that graph."""
         self._effects.append((graph, name))
+
+    def record_cleanup(self, callback):
+        self._cleanups.append(callback)
 
     # ── pending / discard — owner-scoped flush boundary ──
 
@@ -571,12 +712,15 @@ class ReactiveScope:
         parent scope. Idempotent."""
         for child in list(self.children):
             child.destroy()
+        for cleanup in self._cleanups:
+            cleanup()
         for graph, name in self._effects:
-            graph.remove_effect(name)
+            graph.remove_node(name)
         for graph, name in self._computeds:
             graph.remove_node(name)
         self._effects = []
         self._computeds = []
+        self._cleanups = []
         self.children = []
         if self.parent is not None and self in self.parent.children:
             self.parent.children.remove(self)
@@ -695,6 +839,7 @@ class Refrain(object):
         for k, v in inner_dict.items():
             moved = k not in owner_dict or not _unchanged(v, owner_dict[k])
             owner_dict[k] = v
+            self.owner._record_state_field(k)
             if moved:
                 changed.append(k)
 
@@ -715,6 +860,11 @@ class ReactiveObject:
     Both BaseComponent and Store inherit from this.
     """
 
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls.__state_field_specs__ = MappingProxyType(_state_field_specs(cls))
+        cls.__computed_field_specs__ = _computed_field_specs(cls)
+
     def __init__(self):
         super().__init__()
         self.__dict__['_dag'] = DependencyGraph()
@@ -722,12 +872,49 @@ class ReactiveObject:
         # Root reactive scope — owns the effects/computeds/subscriptions this
         # object creates so they can be torn down together (P4).
         self.__dict__['_scope'] = ReactiveScope()
+        cls = type(self)
+        specs = cls.__dict__.get("__state_field_specs__")
+        if specs is None:
+            specs = MappingProxyType(_state_field_specs(cls))
+            cls.__state_field_specs__ = specs
+        self.__dict__['_state_specs'] = specs
+        self.__dict__['_state_fields'] = {}
+        self.__dict__['_required_state_fields'] = frozenset(
+            name for name, spec in specs.items() if spec.required
+        )
+        self._materialize_state_defaults()
+
+    def _materialize_state_defaults(self) -> None:
+        for name, spec in self._state_specs.items():
+            if spec.required or name in self.__dict__:
+                continue
+            self.__dict__[name] = spec.materialize()
+            self.__dict__['_state_fields'][name] = "declared"
+            self._dag.get_or_create_state(name)
+
+    def _record_state_field(self, name: str) -> None:
+        if name.startswith(("_", "$", "#")):
+            return
+        fields = self.__dict__.get('_state_fields')
+        if fields is not None and name not in fields:
+            fields[name] = "declared" if name in self._state_specs else "dynamic"
+
+    def _validate_required_state(self) -> None:
+        missing = [
+            name for name in self._required_state_fields
+            if name not in self.__dict__
+        ]
+        if missing:
+            fields = ", ".join(sorted(missing))
+            raise TypeError(f"{type(self).__name__} missing required state: {fields}")
 
     def __setattr__(self, name, value):
         # Private attributes bypass the DAG entirely
         if name.startswith('_'):
             self.__dict__[name] = value
             return
+
+        self._record_state_field(name)
 
         if name not in self.__dict__:
             # Initial assignment of a new attribute -> always trigger DAG
@@ -803,18 +990,25 @@ class ReactiveObject:
     def refrain(self):
         return Refrain(self)
 
-    def _init_computed(self):
-        """Scan class for @computed methods and register them as ComputedNodes.
+    def _init_computed(self, *, prime=True):
+        """Register the class's computed definitions as instance DAG nodes.
         Values are computed lazily on first access, with dependencies discovered
         by execution tracking at that point.  Dependency EDGES are primed
         eagerly (a tracking dry-run that computes no value and swallows errors)
         so a computed that is subscribed to but never rendered still
         propagates."""
-        for name, member in inspect.getmembers(self.__class__):
-            member_func = getattr(member, 'fget', member)
-            if hasattr(member_func, '_is_computed'):
-                deps = getattr(member_func, '_dependencies', [])
-                original_func = getattr(member_func, '_original_func', None)
-                if original_func:
-                    node = self._dag.add_computed(name, original_func, self, deps)
-                    node.prime_deps()
+        specs = getattr(type(self), "__computed_field_specs__", ())
+        for spec in specs:
+            node = self._dag.add_computed(
+                spec.name,
+                spec.func,
+                self,
+                spec.dependencies,
+            )
+            if prime:
+                node.prime_deps()
+
+    def _prime_computed(self):
+        for node in tuple(self._dag.nodes.values()):
+            if isinstance(node, ComputedNode):
+                node.prime_deps()

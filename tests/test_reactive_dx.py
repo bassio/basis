@@ -18,7 +18,7 @@ import pytest
 from basis.shared.base_component import BaseComponent
 from basis.shared.component import Component
 from basis.shared.element import Element
-from basis.shared.reactive import _wake_list, computed, derived
+from basis.shared.reactive import _wake_list, computed, derived, state
 from basis.shared.store import Store
 
 
@@ -110,7 +110,7 @@ def test_subscription_to_never_read_computed_propagates():
     from unittest.mock import MagicMock
 
     class CartStore(Store):
-        items = []
+        items: list = state(default_factory=list)
 
         @computed
         def count(self):
@@ -159,7 +159,7 @@ def test_derived_with_item_only_deps_does_not_warn(capsys):
     """A @derived whose only reads are item data (no tracked deps) does NOT warn
     — it is invalidated by item reuse, not by tracked deps."""
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
 
         @derived
         def label(self, it):

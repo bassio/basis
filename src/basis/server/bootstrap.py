@@ -153,6 +153,7 @@ def page_js_modules(page_cls) -> dict[str, str]:
             if name and url:
                 modules[name] = url
 
+        cls.ensure_definition()
         blueprint = getattr(cls, "__blueprint__", None)
         root_elem = blueprint.get("component") if blueprint else None
         if root_elem is None:

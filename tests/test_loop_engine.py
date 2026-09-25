@@ -13,6 +13,7 @@ These are the DOM-free unit tests for the pieces ``LoopBinding`` is built from:
 """
 
 from basis.shared.component import Component
+from basis.shared.reactive import state
 from basis.shared.bindings import LoopItem
 from basis.shared.element import Element
 from basis.shared.hydration import repoint_loop_to_ssr
@@ -110,7 +111,7 @@ def test_derive_keys_unkeyed_is_positional():
 # ---------------------------------------------------------------------------
 
 class Owner(Component):
-    items = []
+    items: list = state(default_factory=list)
 
     def template(self):
         """

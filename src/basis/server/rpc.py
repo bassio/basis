@@ -11,7 +11,6 @@ reconstruction, sync/async dispatch, response shape and error handling — so th
 endpoint registration in :mod:`basis.server.app` stays a thin glue.
 """
 
-import asyncio
 import importlib
 import inspect
 import logging
@@ -19,16 +18,51 @@ import traceback
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 logger = logging.getLogger("uvicorn.error")
 
 
 async def _read_rpc_payload(request: Request) -> dict:
-    """Parse the JSON body, raising 400 on malformed input."""
+    """Parse and normalize the RPC envelope, raising 400 on invalid input."""
     try:
-        return await request.json()
+        payload = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid RPC payload: expected object")
+
+    path = payload.get("path")
+    if not isinstance(path, str) or not path.strip():
+        raise HTTPException(status_code=400, detail="Invalid RPC field 'path'")
+
+    store_name = payload.get("store_name")
+    if store_name is not None and (
+        not isinstance(store_name, str) or not store_name.strip()
+    ):
+        raise HTTPException(status_code=400, detail="Invalid RPC field 'store_name'")
+
+    args = payload.get("args", [])
+    if not isinstance(args, list):
+        raise HTTPException(status_code=400, detail="Invalid RPC field 'args'")
+
+    kwargs = payload.get("kwargs", {})
+    if not isinstance(kwargs, dict):
+        raise HTTPException(status_code=400, detail="Invalid RPC field 'kwargs'")
+
+    normalized = {
+        "path": path,
+        "store_name": store_name,
+        "args": args,
+        "kwargs": kwargs,
+    }
+    for field in ("action_name", "plugin_name"):
+        value = payload.get(field)
+        if value is not None and not isinstance(value, str):
+            raise HTTPException(status_code=400, detail=f"Invalid RPC field '{field}'")
+        normalized[field] = value
+    return normalized
 
 
 def _vfs_to_server_path(path: str, vfs_map: dict) -> str:
@@ -123,28 +157,27 @@ async def _handle_action(app, request: Request):
     """Dispatch one action: resolve it, apply request hooks, run it, respond."""
     from basis.shared.store import attach_app_to_store, run_apply_request
 
-    payload = await _read_rpc_payload(request)
-    path = payload.get("path")
-    if not path:
-        raise HTTPException(status_code=400, detail="'path' is required")
-    vfs = getattr(app, "vfs", None)
-    vfs_map = getattr(vfs, "vfs_to_server_module", {}) if vfs is not None else {}
-    func = _registry_action(path, vfs_map)
-    store = _resolve_rpc_store(payload.get("store_name"))
-    attach_app_to_store(store, app)
-    # Request-pref hook: a store may opt in by defining
-    # ``apply_request(request)`` (e.g. ``$theme`` reads its ``basis_theme``
-    # cookie) so the server-side store reflects the persisted prefs BEFORE
-    # a server action runs. Mirrors the SSR/CSR initial-state generation
-    # (render.py). Without this, ``set_theme``/``set_mode`` run
-    # on a server store that has neither the persisted prefs applied nor a
-    # clean per-request reset (RPC is exempt from the registry clear), so
-    # the action's ``new_state`` clobbers the OTHER preference on the
-    # client — e.g. applying a theme while in dark mode reverts to light.
-    await run_apply_request(store, request)
+    path = "<unknown>"
     try:
+        payload = await _read_rpc_payload(request)
+        path = payload["path"]
+        vfs = getattr(app, "vfs", None)
+        vfs_map = getattr(vfs, "vfs_to_server_module", {}) if vfs is not None else {}
+        func = _registry_action(path, vfs_map)
+        store = _resolve_rpc_store(payload["store_name"])
+        attach_app_to_store(store, app)
+        # Request-pref hook: a store may opt in by defining
+        # ``apply_request(request)`` (e.g. ``$theme`` reads its ``basis_theme``
+        # cookie) so the server-side store reflects the persisted prefs BEFORE
+        # a server action runs. Mirrors the SSR/CSR initial-state generation
+        # (render.py). Without this, ``set_theme``/``set_mode`` run
+        # on a server store that has neither the persisted prefs applied nor a
+        # clean per-request reset (RPC is exempt from the registry clear), so
+        # the action's ``new_state`` clobbers the OTHER preference on the
+        # client — e.g. applying a theme while in dark mode reverts to light.
+        await run_apply_request(store, request)
         result = await _run_action(
-            func, store, payload.get("args", []), payload.get("kwargs", {})
+            func, store, payload["args"], payload["kwargs"]
         )
         response = _rpc_response(result, store)
         # Request-pref persistence hook: a store may opt in by defining
@@ -160,9 +193,11 @@ async def _handle_action(app, request: Request):
                     cookie_name, cookie_value, path="/", samesite="lax"
                 )
         return response
+    except StarletteHTTPException:
+        raise
     except Exception as e:
         _log_rpc_error(path, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Server action failed")
 
 
 def make_action_handler(app):

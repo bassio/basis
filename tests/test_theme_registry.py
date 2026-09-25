@@ -426,6 +426,7 @@ def test_client_watch_resyncs_meta_on_direct_dark_mode_write(monkeypatch):
     head = Store._registry["head"]
 
     store = ThemeStore("theme_watch_test")  # basis default, light
+    store.on_client_ready()
     assert store.theme_color_light == "#f6f6f7"
 
     # The direct write (no method) must drive _sync_meta_color via the watch.

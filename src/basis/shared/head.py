@@ -78,6 +78,7 @@ initial-state serialization.
 
 import hashlib
 
+from basis.shared.reactive import state
 from basis.shared.store import Store, ensure_store
 
 #: The optional ``<link>`` attributes the head loop renders. The loop's bindings list
@@ -147,15 +148,10 @@ class HeadStore(Store):
     where it costs no state.
     """
 
-    def __init__(self, name: str = "head"):
-        super().__init__(name)
-        # Store-subclass footgun: never clobber SSR-hydrated items (hydration
-        # runs inside Store.__init__, reading #basis-initial-state).
-        if not getattr(self, "_hydrated_from_ssr", False):
-            self.__dict__["metas"] = []
-            self.__dict__["links"] = []
-            self.__dict__["styles"] = []
-            self.__dict__["scripts"] = []
+    metas: list = state(default_factory=list)
+    links: list = state(default_factory=list)
+    styles: list = state(default_factory=list)
+    scripts: list = state(default_factory=list)
 
     # ── metas (name/content) ───────────────────────────────────────────────
 

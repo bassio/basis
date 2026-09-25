@@ -5,7 +5,7 @@ the loop-scope guarantees that test_loop_phase4.py exercises in more detail.
 """
 
 from basis.shared.component import Component
-from basis.shared.reactive import computed
+from basis.shared.reactive import computed, state
 from basis.shared.element import Element
 
 
@@ -37,7 +37,9 @@ def _attr_binding(instance, attr):
 # --------------------------------------------------------------------------
 def test_loop_body_parent_field_stays_live():
     class Owner(Component):
-        items = [{"n": 1, "k": "a"}, {"n": 2, "k": "b"}]
+        items: list = state(default_factory=lambda: [
+            {"n": 1, "k": "a"}, {"n": 2, "k": "b"}
+        ])
         mode = "light"
 
         @computed(dependencies=["items"])
@@ -95,8 +97,10 @@ def test_loop_scalar_item_key():
 # --------------------------------------------------------------------------
 def test_loop_nested():
     class Owner(Component):
-        groups = [{"g": "A", "items": [{"name": "a1"}, {"name": "a2"}]},
-                  {"g": "B", "items": [{"name": "b1"}]}]
+        groups: list = state(default_factory=lambda: [
+            {"g": "A", "items": [{"name": "a1"}, {"name": "a2"}]},
+            {"g": "B", "items": [{"name": "b1"}]},
+        ])
 
         def template(self):
             """
@@ -124,7 +128,9 @@ def test_loop_nested():
 # --------------------------------------------------------------------------
 def test_loop_dotted_collection():
     class Owner(Component):
-        data = {"list": [{"name": "x"}, {"name": "y"}]}
+        data: dict = state(default_factory=lambda: {
+            "list": [{"name": "x"}, {"name": "y"}]
+        })
 
         def template(self):
             """
@@ -151,8 +157,10 @@ def test_loop_index_attr():
             self.name = name
 
     class Owner(Component):
-        dicts = [{"n": "a"}, {"n": "b"}, {"n": "c"}]
-        objs = [Row("x"), Row("y")]
+        dicts: list = state(default_factory=lambda: [
+            {"n": "a"}, {"n": "b"}, {"n": "c"}
+        ])
+        objs: list = state(default_factory=lambda: [Row("x"), Row("y")])
 
         def template(self):
             """
@@ -181,7 +189,7 @@ def test_loop_index_attr():
 def test_loop_index_attr_opt_in_default():
     """Without index=, items are NOT mutated with a surprise _index key."""
     class Owner(Component):
-        dicts = [{"n": "a"}]
+        dicts: list = state(default_factory=lambda: [{"n": "a"}])
 
         def template(self):
             """
@@ -198,7 +206,7 @@ def test_loop_index_attr_opt_in_default():
 def test_loop_index_attr_scalars_skipped():
     """Immutable scalar items are skipped silently (can't hold attributes)."""
     class Owner(Component):
-        nums = [10, 20]
+        nums: list = state(default_factory=lambda: [10, 20])
 
         def template(self):
             """

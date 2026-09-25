@@ -1,7 +1,7 @@
 from basis.shared.styling import compact_block
 from basis.shared.component import Component, IS_CLIENT, extra_style, scoped
 from basis.shared.events import on_document
-from basis.shared.reactive import computed
+from basis.shared.reactive import computed, state
 
 if IS_CLIENT:
     from pyscript import window, ffi
@@ -56,15 +56,8 @@ class ContextMenu(Component):
     open = ""
     x = 0
     y = 0
-    items = []
+    items: list = state(default_factory=list)
     arrangement = "auto"
-
-    def __init__(self):
-        super().__init__()
-        self.items = []
-        self.open = ""
-        self.x = 0
-        self.y = 0
 
     @computed
     def is_open(self):

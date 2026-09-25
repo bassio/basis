@@ -17,7 +17,10 @@ from fastapi.testclient import TestClient
 
 from basis.server.app import Basis
 from basis.shared.base_component import BaseComponent
+from basis.shared.component import Component
+from basis.shared.element import Element
 from basis.shared.hmr import HMRClient
+from basis.shared.store import Store
 
 
 @pytest.fixture(autouse=True)
@@ -256,3 +259,120 @@ def test_hmr_find_component_class_by_module():
     ) is TitleBar
     # Without the module, the filename heuristic does NOT match TitleBar
     assert client._find_component_class("titlebar/titlebar.css") is None
+
+
+def test_hmr_exact_class_swap_replaces_instance_and_registry_identity():
+    class OldView(Component):
+        __tag__ = "x-hmr-old-view"
+        value = "old"
+
+        def template(self):
+            """<div>{value}</div>"""
+
+    instance = OldView.mount(Element("div", attrs={}, children=[]))
+    instance.value = "preserved"
+
+    class NewView(Component):
+        __tag__ = "x-hmr-new-view"
+        value = "new"
+
+        def template(self):
+            """<section>{value}</section>"""
+
+    client = HMRClient.__new__(HMRClient)
+    client._notify = lambda *args, **kwargs: None
+
+    assert client._hot_swap_class(OldView, NewView) == 1
+    assert type(instance) is NewView
+    assert instance.value == "preserved"
+    assert BaseComponent._registry[NewView.__tag__] is NewView
+    assert OldView.__tag__ not in BaseComponent._registry
+
+    instance.destroy()
+
+
+def test_hmr_repeated_exact_swaps_keep_state_and_identity_counts_flat():
+    store = Store("hmr_repeat")
+    store.value = "one"
+
+    class First(Component):
+        __tag__ = "x-hmr-repeat-first"
+        __component_id__ = "hmr-repeat-view"
+
+        def template(self):
+            """<div>{$hmr_repeat.value}</div>"""
+
+    class Second(Component):
+        __tag__ = "x-hmr-repeat-second"
+        __component_id__ = "hmr-repeat-view"
+
+        def template(self):
+            """<section>{$hmr_repeat.value}</section>"""
+
+    class Third(Component):
+        __tag__ = "x-hmr-repeat-third"
+        __component_id__ = "hmr-repeat-view"
+
+        def template(self):
+            """<article>{$hmr_repeat.value}</article>"""
+
+    instance = First.mount(Element("div", attrs={}, children=[]))
+    client = HMRClient.__new__(HMRClient)
+    client._notify = lambda *args, **kwargs: None
+
+    client._hot_swap_class(First, Second)
+    client._hot_swap_class(Second, Third)
+    store.value = "three"
+
+    assert type(instance) is Third
+    assert instance.__element__.childNodes[0].textContent == "three"
+    assert instance._registered_identities == ["hmr-repeat-view"]
+    assert store._subscriptions == [(instance, "value")]
+    assert len([name for name in store._dag.nodes if name.startswith("sub_")]) == 1
+
+    instance.destroy()
+
+
+def test_hmr_inherited_template_refresh_preserves_subclass_identity_and_state():
+    class OldBase(Component):
+        __tag__ = "x-hmr-base-old"
+        value = "old"
+
+        def template(self):
+            """<div>{value}</div>"""
+
+    class AppView(OldBase):
+        __tag__ = "x-hmr-app-view"
+
+    instance = AppView.mount(Element("div", attrs={}, children=[]))
+    instance.value = "preserved"
+
+    class NewBase(Component):
+        __tag__ = "x-hmr-base-new"
+        value = "new"
+
+        def template(self):
+            """<section>{value}</section>"""
+
+    class NewerBase(Component):
+        __tag__ = "x-hmr-base-newer"
+        value = "newer"
+
+        def template(self):
+            """<article>{value}</article>"""
+
+    client = HMRClient.__new__(HMRClient)
+    client._notify = lambda *args, **kwargs: None
+    client._refreshed_subclasses = {}
+
+    assert client._hot_swap_class(OldBase, NewBase, module="example.base") == 1
+    assert type(instance) is AppView
+    assert instance.value == "preserved"
+    assert instance.__element__.tagName.lower() == "section"
+
+    assert client._refresh_subclass_instances(AppView, NewerBase) == 1
+    assert type(instance) is AppView
+    assert instance.value == "preserved"
+    assert instance.__element__.tagName.lower() == "article"
+
+    instance.destroy()

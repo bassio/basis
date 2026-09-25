@@ -11,8 +11,6 @@ So the store has two obligations, and they pull in opposite directions —
   by hand.
 """
 
-import json
-
 import pytest
 
 from basis.shared import events as events_module
@@ -20,7 +18,7 @@ from basis.shared import router as router_module
 from basis.shared import store as store_module
 from basis.shared.events import EventHub
 from basis.shared.router import RouterStore
-from basis.shared.store import Store
+from basis.shared.store import Store, install_initial_state
 from js_fakes import FakeFFI
 
 
@@ -80,28 +78,11 @@ class FakeWindow(FakeAttached):
         self.history = FakeHistory()
 
 
-class _Script:
-    """Stand-in for the ``#basis-initial-state`` script tag."""
-
-    def __init__(self, payload: str):
-        self.textContent = payload
-
-
-class _Document:
-    """Stand-in for the client document, serving one initial-state payload."""
-
-    def __init__(self, state: dict):
-        self._state = state
-
-    def getElementById(self, element_id: str):
-        return _Script(json.dumps(self._state))
-
-
 @pytest.fixture(autouse=True)
 def isolate(monkeypatch):
     """Store registries, the hub registry and the browser globals are process-global."""
     monkeypatch.setattr(store_module, "_client_ready", False)
-    monkeypatch.setattr(store_module, "document", None)
+    install_initial_state({})
     monkeypatch.setattr(events_module, "document", FakeAttached("document"))
     monkeypatch.setattr(events_module, "ffi", FakeFFI())
     EventHub._instance_registry.clear()
@@ -136,16 +117,14 @@ def test_a_client_built_store_reads_the_browser(browser):
 def test_hydration_wins_over_the_browser_read(monkeypatch, browser):
     """The page stamped ``current_path`` and ``Route`` filled ``params`` on the server;
     constructing the store on the client must not throw either away."""
-    monkeypatch.setattr(
-        store_module,
-        "document",
-        _Document({"router": {"current_path": "/users/7", "params": {"user_id": "7"}}}),
+    install_initial_state(
+        {"router": {"current_path": "/users/7", "params": {"user_id": "7"}}}
     )
     browser.location.pathname = "/"           # what the browser would have said
 
     store = _attached_router()
 
-    assert store._hydrated_from_ssr is True
+    assert store._initial_load.snapshot_applied is True
     assert store.current_path == "/users/7"
     assert store.params == {"user_id": "7"}
 

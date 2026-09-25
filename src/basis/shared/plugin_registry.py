@@ -13,6 +13,7 @@ On the server side, the relevant data is ``PluginRegistration`` records.
 
 from basis.shared.actions import server_action
 from basis.shared.app_state import AppStateStore
+from basis.shared.reactive import state
 
 
 def _registry_listing(app, kinds: tuple[str, ...] | None = None) -> dict:
@@ -72,12 +73,7 @@ class PluginRegistryStore(AppStateStore):
     on the client ``_app`` is ``None`` and the store is a pure reactive view.
     """
 
-    def __init__(self, name: str = "plugins"):
-        super().__init__(name)
-        # Reactive projection: {plugin_name: {state, prefix, actions, requires}}.
-        # Never clobber the SSR-hydrated items (see the store-subclass footgun).
-        if not getattr(self, "_hydrated_from_ssr", False):
-            self.__dict__["items"] = {}
+    items: dict = state(default_factory=dict)
 
     def project(self, app) -> dict:
         """Project the app's plugin registrations as the store's ``items``."""

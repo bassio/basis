@@ -1,5 +1,8 @@
 import pytest
 import asyncio
+import json
+import sys
+import types
 from sqlmodel import SQLModel, Field, create_engine, Session
 from sqlalchemy.pool import StaticPool
 
@@ -76,6 +79,65 @@ def test_model_store_ssr_behavior():
         assert non_existent is None
 
     asyncio.run(run_ssr_test())
+
+
+def test_model_store_applies_state_synchronously():
+    class SnapshotItem(SQLModel):
+        id: int
+
+    store = ModelStore("snapshot_items", SnapshotItem)
+
+    result = store.apply_state({"loading": True, "items": [{"id": 1}]})
+
+    assert result is None
+    assert store.loading is True
+    assert len(store.items) == 1
+    assert isinstance(store.items[0], SnapshotItem)
+    assert store.items[0].id == 1
+
+
+def test_rpc_response_applies_model_store_state(monkeypatch):
+    from basis.client.actions import _post_rpc
+
+    class SnapshotItem(SQLModel):
+        id: int
+
+    class Response:
+        ok = True
+        status = 200
+
+        async def json(self):
+            return {
+                "data": "done",
+                "new_state": {"items": [{"id": 2}], "loading": False},
+            }
+
+    requests = []
+
+    async def pyfetch(url, **kwargs):
+        requests.append((url, kwargs))
+        return Response()
+
+    pyodide = types.ModuleType("pyodide")
+    pyodide_http = types.ModuleType("pyodide.http")
+    pyodide_http.pyfetch = pyfetch
+    pyodide.http = pyodide_http
+    monkeypatch.setitem(sys.modules, "pyodide", pyodide)
+    monkeypatch.setitem(sys.modules, "pyodide.http", pyodide_http)
+    store_name = "rpc_snapshot_items"
+    store = ModelStore(store_name, SnapshotItem)
+
+    result = asyncio.run(
+        _post_rpc({"path": "example.action", "store_name": store_name})
+    )
+
+    assert result == "done"
+    assert len(store.items) == 1
+    assert isinstance(store.items[0], SnapshotItem)
+    assert store.items[0].id == 2
+    assert store.loading is False
+    assert requests[0][0] == "/basis/api/action"
+    assert json.loads(requests[0][1]["body"])["store_name"] == store_name
 
 
 def test_model_store_client_crud_and_optimistic_updates():
@@ -379,6 +441,11 @@ def test_reactive_model_ssr_resolution():
 
     # Since the store is registered, the binding resolves it immediately during initialization
     assert provider._model_kwargs["patient_id"] == "5"
+    assert isinstance(ModelStoreProvider.__binding_blueprints__, tuple)
+    assert all(
+        blueprint.kwargs.get("attr") != "patient_id"
+        for blueprint in ModelStoreProvider.__binding_blueprints__
+    )
 
     # Now run server_load
     from unittest.mock import MagicMock
@@ -502,8 +569,7 @@ def test_model_store_reinstantiate_preserves_config():
 
 
 # ---------------------------------------------------------------------------
-# SSR hydration: ModelStore re-validates #basis-initial-state payloads into
-# typed model instances (parity with the CSR fetch path).
+# Snapshot preparation keeps ModelStore payloads typed on every input path.
 # ---------------------------------------------------------------------------
 
 class HydrationItem(SQLModel):
@@ -518,18 +584,11 @@ class PlainItem:
         self.name = name
 
 
-def _make_hydrated_store(name, model):
-    """ModelStore flagged as hydrated from SSR (as base Store.__init__ would)."""
-    store = ModelStore(name, model)
-    store.__dict__["_hydrated_from_ssr"] = True
-    return store
-
-
-def test_ssr_hydration_revalidates_items_into_instances():
-    store = _make_hydrated_store("hydr_revalidate", HydrationItem)
-    store.items = [{"id": 1, "name": "Apple"}, {"id": 2, "name": "Banana"}]
-
-    store._revalidate_hydrated_payloads()
+def test_state_import_validates_items_into_instances():
+    store = ModelStore("hydr_revalidate", HydrationItem)
+    store.apply_state({
+        "items": [{"id": 1, "name": "Apple"}, {"id": 2, "name": "Banana"}],
+    })
 
     assert isinstance(store.items, ReactiveCollection)
     assert all(isinstance(i, HydrationItem) for i in store.items)
@@ -537,51 +596,49 @@ def test_ssr_hydration_revalidates_items_into_instances():
     assert store.items[1].id == 2
 
 
-def test_ssr_hydration_is_noop_when_not_from_ssr():
-    store = ModelStore("hydr_not_ssr", HydrationItem)
-    store.items = [{"id": 1, "name": "Apple"}]
-
-    store._revalidate_hydrated_payloads()
-
-    assert isinstance(store.items[0], dict)
-
-
-def test_ssr_hydration_is_noop_for_empty_items():
-    store = _make_hydrated_store("hydr_empty", HydrationItem)
-    store.items = []
-
-    store._revalidate_hydrated_payloads()
+def test_state_import_preserves_empty_items():
+    store = ModelStore("hydr_empty", HydrationItem)
+    store.apply_state({"items": []})
 
     assert store.items == []
 
 
-def test_ssr_hydration_is_noop_when_already_typed():
-    store = _make_hydrated_store("hydr_typed", HydrationItem)
-    store.items = [HydrationItem(id=1, name="Apple")]
+def test_state_import_preserves_already_typed_items():
+    item = HydrationItem(id=1, name="Apple")
+    store = ModelStore("hydr_typed", HydrationItem)
+    store.apply_state({"items": [item]})
 
-    store._revalidate_hydrated_payloads()
-
-    assert isinstance(store.items[0], HydrationItem)
-    # No double-wrapping into a nested model.
-    assert store.items[0].name == "Apple"
+    assert store.items[0] is item
 
 
-def test_ssr_hydration_skips_model_without_model_validate():
-    store = _make_hydrated_store("hydr_plain", PlainItem)
-    store.items = [{"id": 1, "name": "Apple"}]
-
-    store._revalidate_hydrated_payloads()
+def test_state_import_keeps_payload_for_model_without_validator():
+    store = ModelStore("hydr_plain", PlainItem)
+    store.apply_state({"items": [{"id": 1, "name": "Apple"}]})
 
     assert isinstance(store.items[0], dict)
 
 
-def test_ssr_hydration_tolerates_validation_failure():
-    store = _make_hydrated_store("hydr_bad", HydrationItem)
-    # Missing required field "name" -> model_validate raises -> kept as-is.
-    bad_items = [{"id": 1}]
-    store.items = list(bad_items)
+def test_apply_state_prepares_every_model_item():
+    existing = HydrationItem(id=1, name="Apple")
+    store = ModelStore("apply_typed_items", HydrationItem)
 
-    store._revalidate_hydrated_payloads()
+    store.apply_state({
+        "items": [existing, {"id": 2, "name": "Banana"}],
+    })
 
-    assert store.items == bad_items
+    assert isinstance(store.items, ReactiveCollection)
+    assert store.items[0] is existing
+    assert isinstance(store.items[1], HydrationItem)
+    assert store.items[1].name == "Banana"
+
+
+def test_invalid_model_patch_leaves_existing_items_unchanged():
+    original = HydrationItem(id=1, name="Apple")
+    store = ModelStore("apply_invalid_items", HydrationItem)
+    store.items = ReactiveCollection([original])
+
+    with pytest.raises(ValueError, match=r"apply_invalid_items.*items\[0\]"):
+        store.apply_state({"items": [{"id": 2}]})
+
+    assert list(store.items) == [original]
 

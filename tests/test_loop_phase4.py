@@ -10,7 +10,7 @@ rendering:
 """
 
 from basis.shared.component import Component
-from basis.shared.reactive import computed
+from basis.shared.reactive import computed, state
 from basis.shared.element import Element
 from basis.shared.store import Store
 
@@ -32,7 +32,7 @@ def test_loop_collection_deps_trigger():
     the REAL owner field (`data`), not the raw expression string
     (`data['list']`), so the owner update actually fires the loop."""
     class Owner(Component):
-        data = {"list": []}
+        data: dict = state(default_factory=lambda: {"list": []})
 
         def template(self):
             """
@@ -56,7 +56,7 @@ def test_loop_scalar_key_stable():
     """Scalar items are keyed by the item itself; appending creates ONLY the new
     item — existing keys stay stable (no None-collapse, no full rebuild)."""
     class Owner(Component):
-        years = []
+        years: list = state(default_factory=list)
 
         def template(self):
             """
@@ -83,7 +83,7 @@ def test_loop_scalar_key_stable():
 def test_loop_shadowing():
     """A loop variable shadows an owner attribute of the same name (Vue rule)."""
     class Owner(Component):
-        items = []
+        items: list = state(default_factory=list)
         d = "owner-value"
 
         def template(self):

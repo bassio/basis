@@ -2,6 +2,7 @@ import dataclasses
 import inspect
 import json
 import sys
+from collections.abc import Mapping
 from typing import Any
 
 IS_CLIENT = "pyscript" in sys.modules or "pyodide" in sys.modules
@@ -17,21 +18,19 @@ def _get_pyfetch():
 
 if IS_CLIENT:
     try:
-        from pyscript import WebSocket, document
+        from pyscript import WebSocket
         from pyodide.http import pyfetch
     except ImportError:
         WebSocket = None
-        document = None
         pyfetch = None
 else:
     WebSocket = None
-    document = None
     pyfetch = None
 
 from basis.shared.context import ContextVarProxyDict
 from basis.shared.events import BrowserMixin
-from basis.shared.reactive import ReactiveObject
-from basis.shared.serialization import jsonable
+from basis.shared.reactive import ReactiveObject, batch, state
+from basis.shared.serialization import snapshot_jsonable
 
 
 def _format_config(config: dict) -> str:
@@ -125,6 +124,69 @@ def ensure_store(name: str, store_cls: type) -> Store:
 # point must attach its own client listeners, because the ready sweep has already run.
 # Never set on the server, where the entrypoint does not execute.
 _client_ready = False
+_NO_INITIAL_STATE = object()
+
+
+@dataclasses.dataclass(frozen=True)
+class _InitialStateClaim:
+    name: str
+    values: Any
+    metadata: Mapping[str, Any]
+
+
+@dataclasses.dataclass
+class _InitialLoadProvenance:
+    snapshot_applied: bool
+    url: Any = None
+    params: Mapping[str, Any] | None = None
+    fetch_consumed: bool = False
+
+
+class _InitialStateOwner:
+    def __init__(self) -> None:
+        self.install({})
+
+    def install(self, payload: Mapping[str, Any]) -> None:
+        if not isinstance(payload, Mapping):
+            raise ValueError("Initial state must be a mapping")
+        self._payload = dict(payload)
+        metadata = self._payload.get("__basis_meta__", {})
+        self._metadata = metadata if isinstance(metadata, Mapping) else {}
+        self._claimed: set[str] = set()
+        self._consumed: set[str] = set()
+
+    def claim(self, name: str) -> _InitialStateClaim | None:
+        if name not in self._payload or name in self._claimed or name in self._consumed:
+            return None
+        self._claimed.add(name)
+        metadata = {}
+        ssr_params = self._metadata.get("ssr_params", {})
+        if isinstance(ssr_params, Mapping) and name in ssr_params:
+            metadata["_ssr_params"] = ssr_params[name]
+        ssr_url = self._metadata.get("ssr_url", {})
+        if isinstance(ssr_url, Mapping) and name in ssr_url:
+            metadata["_ssr_url"] = ssr_url[name]
+        return _InitialStateClaim(name, self._payload[name], metadata)
+
+    def commit(self, claim: _InitialStateClaim) -> None:
+        self._claimed.discard(claim.name)
+        self._consumed.add(claim.name)
+
+    def release(self, claim: _InitialStateClaim) -> None:
+        self._claimed.discard(claim.name)
+
+    def discard(self, name: str) -> None:
+        self._claimed.discard(name)
+        if name in self._payload:
+            self._consumed.add(name)
+
+
+_initial_state_owner = _InitialStateOwner()
+
+
+def install_initial_state(payload: Mapping[str, Any]) -> None:
+    """Install the parsed initial-state payload for the current client boot."""
+    _initial_state_owner.install(payload)
 
 
 def mark_client_ready() -> None:
@@ -133,22 +195,41 @@ def mark_client_ready() -> None:
     _client_ready = True
 
 
-class Store(BrowserMixin, ReactiveObject):
+class StoreMeta(type):
+    def __call__(cls, *args, _initial_state=_NO_INITIAL_STATE, **kwargs):
+        instance = super().__call__(*args, **kwargs)
+        name = instance.__dict__.get("_name")
+        if name is None:
+            raise TypeError(f"{cls.__name__}.__init__() must initialize the store name")
+
+        config_kwargs = dict(kwargs)
+        config_kwargs.pop("name", None)
+        config_args = args[1:] if args else ()
+        config = cls._capture_config(*config_args, **config_kwargs)
+        instance._finish_construction(config, initial_state=_initial_state)
+        return instance
+
+
+class Store(BrowserMixin, ReactiveObject, metaclass=StoreMeta):
+    loading = False
+    error = None
+
     _registry = ContextVarProxyDict("store_registry")
     _pending_subscriptions = ContextVarProxyDict("store_pending_subscriptions")
-
-    #: Neutral values for *context-observed* state: fields whose real answer only the
-    #: client has, but whose neutral the server still serialises (see
-    #: ``basis.shared.device`` / ``basis.shared.network``). Declared here rather than
-    #: assigned in ``__init__`` so they are real fields before computeds are primed — and
-    #: so a store subclass needs no constructor at all.
-    neutral_defaults: dict[str, Any] = {}
 
     # Persistent config registry: name -> (cls, config_snapshot).
     # Unlike `_registry` (which is cleared per-request for SSR isolation), this is a plain
     # class-level dict that survives request boundaries, so server actions can re-instantiate
     # a store even after the per-request registry reset wiped the live instance.
     _store_blueprints: dict[str, tuple[type, dict]] = {}
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if "__new__" in cls.__dict__:
+            raise TypeError(
+                f"{cls.__name__} cannot define __new__; Store construction is finalized "
+                "after __init__"
+            )
 
     @classmethod
     def _capture_config(cls, *args, **kwargs) -> dict:
@@ -167,45 +248,6 @@ class Store(BrowserMixin, ReactiveObject):
     def _restore(cls, name: str, config: dict) -> "Store":
         """Rebuild a store instance from a captured config snapshot."""
         return cls(name, *config["args"], **config["kwargs"])
-
-    def __new__(cls, name: str | None = None, *args, **kwargs):
-        instance = super().__new__(cls)
-        if name is None:
-            name = kwargs.get("name")
-        if name is None:
-            return instance
-
-        # The store NAME is the registry key (the $<name> DSL identity), not part
-        # of the config. Capture the non-reactive constructor config so SSR/RPC
-        # can rebuild this store later (see `reinstantiate`).
-        config = cls._capture_config(*args, **kwargs)
-
-        existing = cls._store_blueprints.get(name)
-        if existing is None:
-            # First declaration wins — the canonical config used by RPC/SSR.
-            cls._store_blueprints[name] = (cls, config)
-        else:
-            # Same name, same class + config → benign (this is exactly what
-            # `reinstantiate`/SSR reconstruction does). Same name, DIFFERENT
-            # config → genuine $name ambiguity → fail loudly.
-            store_cls, store_config = existing
-            try:
-                same_config = store_cls is cls and store_config == config
-            except Exception:
-                # Exotic config whose __eq__ cannot be compared — treat as benign
-                # rather than blocking reconstruction.
-                same_config = True
-            if not same_config:
-                raise ValueError(
-                    f"Cannot redeclare store '{name}': already registered as "
-                    f"{store_cls.__name__}{_format_config(store_config)}, "
-                    f"attempting to register as "
-                    f"{cls.__name__}{_format_config(config)}. "
-                    f"Store names are unique (they are the $<name> DSL identity); "
-                    f"fix the duplicate declaration rather than re-declaring with "
-                    f"new arguments."
-                )
-        return instance
 
     @classmethod
     def reinstantiate(cls, name: str) -> "Store | None":
@@ -238,135 +280,130 @@ class Store(BrowserMixin, ReactiveObject):
     @classmethod
     def resolve(cls, name: str) -> "Store":
         """
-        Create a store by name, preferring the canonical blueprint (proper
-        subclass + constructor args); falls back to a plain ``Store(name)``
-        for config-only names.
+        Return the active store by name, reconstructing its canonical blueprint
+        only when the current context has no active instance.
         """
-        return cls.reinstantiate(name) or cls(name)
+        active = cls._registry.get(name)
+        if active is not None:
+            return active
+        restored = cls.reinstantiate(name)
+        if restored is None:
+            raise KeyError(f"No store named '{name}' has been declared")
+        return restored
 
     @classmethod
     def from_dict(cls, name:str, init_dict:dict):
-        new_store = cls(name)
-
-        for k, v in init_dict.items():
-            new_store.__dict__[k] = v
-
-        return new_store
+        return cls(name, _initial_state=init_dict)
 
     def __init__(self, name: str):
         super().__init__()
         self.__dict__['_subscriptions'] = []
         self.__dict__['_name'] = name
-        self.__dict__['_hydrated_from_ssr'] = False
+        self.__dict__['_initial_load'] = None
         self.__dict__['_first_load_completed'] = False
-        self.__dict__['loading'] = False
-        self.__dict__['error'] = None
 
-        self._dag.get_or_create_state('loading')
-        self._dag.get_or_create_state('error')
+    def _finish_construction(self, config: dict, *, initial_state=_NO_INITIAL_STATE) -> None:
+        name = self.get_store_name()
+        blueprint = self._validated_blueprint(name, config)
+        claim = None if initial_state is not _NO_INITIAL_STATE else _initial_state_owner.claim(name)
+        values = initial_state if initial_state is not _NO_INITIAL_STATE else (
+            claim.values if claim is not None else _NO_INITIAL_STATE
+        )
 
-        displaced = Store._registry.get(name)
-        if displaced is not None and displaced is not self:
-            # One name, one registry slot: the displaced instance's client listeners
-            # have no other owner.
-            displaced._detach_declarations()
-        Store._registry[name] = self
-
-        if name in Store._pending_subscriptions:
-            for subscribing_component_instance, attr_name in Store._pending_subscriptions.pop(name):
-                self.add_subscription(
-                    subscribing_component_instance, attr_name,
-                    scope=getattr(subscribing_component_instance, "_scope", None),
+        try:
+            if values is not _NO_INITIAL_STATE:
+                if not isinstance(values, Mapping):
+                    raise ValueError(f"Store '{name}' state must be a mapping")
+                self.apply_state(values)
+                self.__dict__['_first_load_completed'] = True
+            if claim is not None:
+                self.__dict__['_initial_load'] = _InitialLoadProvenance(
+                    snapshot_applied=True,
+                    url=claim.metadata.get("_ssr_url"),
+                    params=claim.metadata.get("_ssr_params"),
                 )
-                subscribed_field = f"${name}.{attr_name}" if attr_name else f"${name}"
-                with subscribing_component_instance.refrain() as refrained:
-                    if attr_name:
-                        setattr(refrained, subscribed_field, getattr(self, attr_name, None))
-                    else:
-                        setattr(refrained, subscribed_field, self)
 
-        # SSR Hydration
-        if document:
-            initial_state_script = document.getElementById("basis-initial-state")
-            if initial_state_script:
-                try:
-                    state_data = json.loads(initial_state_script.textContent)
-                    if name in state_data:
-                        for k, v in state_data[name].items():
-                            setattr(self, k, v)
-                        
-                        self.__dict__['_hydrated_from_ssr'] = True
-                        self.__dict__['_first_load_completed'] = True
-                        
-                        basis_meta = state_data.get("__basis_meta__", {})
-                        if basis_meta:
-                            ssr_params = basis_meta.get("ssr_params", {})
-                            if name in ssr_params:
-                                self.__dict__["_ssr_params"] = ssr_params[name]
-                                
-                            ssr_url = basis_meta.get("ssr_url", {})
-                            if name in ssr_url:
-                                self.__dict__["_ssr_url"] = ssr_url[name]
+            self._validate_required_state()
+            self._init_computed(prime=False)
 
-                except Exception as e:
-                    print(f"Error: Failed to hydrate store '{name}': {e}")
+            displaced = Store._registry.get(name)
+            Store._store_blueprints[name] = blueprint
+            Store._registry[name] = self
+            if claim is not None:
+                _initial_state_owner.commit(claim)
+            elif initial_state is not _NO_INITIAL_STATE:
+                _initial_state_owner.discard(name)
+        except Exception:
+            if claim is not None:
+                _initial_state_owner.release(claim)
+            raise
 
-        # Declared fields become real ones before computeds are primed, so a computed
-        # reading one settles on a state node instead of a promoted class attribute, and
-        # a browser-less render still serialises the neutral.
-        self._materialize_defaults()
-        self._materialize_levels()
+        if displaced is not None and displaced is not self:
+            displaced.on_client_teardown()
+
+        self._prime_computed()
+        self._deliver_pending_subscriptions()
         if _client_ready:
-            self._attach_declarations()
+            self.on_client_ready()
 
-        self._init_computed()
+    def _consume_initial_fetch(self, *, url=None, params=None) -> bool:
+        provenance = self.__dict__.get("_initial_load")
+        if provenance is None or provenance.fetch_consumed:
+            return False
+        if url is not None:
+            matches = provenance.url == url
+        elif params is not None and provenance.params is not None:
+            matches = all(
+                key in provenance.params and str(provenance.params[key]) == str(value)
+                for key, value in params.items()
+            )
+        else:
+            matches = False
+        if not matches:
+            return False
+        provenance.fetch_consumed = True
+        return True
 
-    @classmethod
-    def declared_neutral_defaults(cls) -> dict:
-        """The neutrals in effect for *cls*: base-first, so an override wins."""
-        merged = {}
-        for klass in reversed(cls.__mro__):
-            merged.update(klass.__dict__.get("neutral_defaults") or {})
-        return merged
+    def _validated_blueprint(self, name: str, config: dict) -> tuple[type, dict]:
+        existing = Store._store_blueprints.get(name)
+        if existing is None:
+            return type(self), config
+        store_cls, store_config = existing
+        if store_cls is type(self) and store_config == config:
+            return existing
+        raise ValueError(
+            f"Cannot redeclare store '{name}': already registered as "
+            f"{store_cls.__name__}{_format_config(store_config)}, attempting to "
+            f"register as {type(self).__name__}{_format_config(config)}. Store "
+            "names are unique (they are the $<name> DSL identity)."
+        )
 
-    def _materialize_defaults(self) -> None:
-        """Give every declared neutral a real field — unless hydration wrote one.
-
-        Absence, not hydration, is the guard: a key the server did not ship still gets
-        its neutral, so no field is ever unreadable, and a shipped value always wins.
-        """
-        for name, neutral in type(self).declared_neutral_defaults().items():
-            if name not in self.__dict__:
-                setattr(self, name, neutral)
+    def _deliver_pending_subscriptions(self) -> None:
+        name = self.get_store_name()
+        for component, attr_name in Store._pending_subscriptions.pop(name, ()):
+            self.add_subscription(
+                component,
+                attr_name,
+                scope=getattr(component, "_scope", None),
+            )
+            subscribed_field = f"${name}.{attr_name}" if attr_name else f"${name}"
+            with component.refrain() as refrained:
+                value = getattr(self, attr_name, None) if attr_name else self
+                setattr(refrained, subscribed_field, value)
 
     def serialize(self) -> dict:
-        """
-        Extract serialisable state from this Store instance.
-        Skips private/dunder attributes and non-serialisable callables.
-        """
-        state = {}
-        for k, v in self.__dict__.items():
-            if k.startswith('_'):
+        """Return a detached, strictly JSON-compatible state snapshot."""
+        snapshot = {}
+        store_path = f"Store '{self.get_store_name()}'"
+        for name in self._state_fields:
+            spec = self._state_specs.get(name)
+            if spec is not None and not spec.serialize:
                 continue
-            if callable(v):
-                continue
-            try:
-                serializable_v = jsonable(v)
-                json.dumps(serializable_v)     # quick serialisability check
-                state[k] = serializable_v
-            except (TypeError, ValueError):
-                pass
-        return state
-
-    def __getattr__(self, name: str) -> Any:
-        if name.startswith('_'):
-            raise AttributeError(name)
-
-        _first_load_completed = self.__dict__.get('_first_load_completed', False)
-        if not _first_load_completed:
-            return None
-            
-        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+            snapshot[name] = snapshot_jsonable(
+                self.__dict__[name],
+                path=f"{store_path}.{name}",
+            )
+        return snapshot
 
     def get_store_name(self):
         return self.__dict__['_name']
@@ -406,13 +443,16 @@ class Store(BrowserMixin, ReactiveObject):
 
         if scope is not None:
             scope.record_effect(self._dag, effect_name)
+            scope.record_cleanup(
+                lambda: self.remove_subscription(component_instance, attr_name)
+            )
 
     def remove_subscription(self, component_instance, attr_name:str):
         self.__dict__['_subscriptions'] = [
             sub for sub in self._subscriptions if sub != (component_instance, attr_name)
         ]
         effect_name = f"sub_{id(component_instance)}_{attr_name}"
-        self._dag.remove_effect(effect_name)
+        self._dag.remove_node(effect_name)
 
     def on_client_ready(self) -> None:
         """Client-only: the document has mounted; attach client-side listeners here.
@@ -442,13 +482,49 @@ class Store(BrowserMixin, ReactiveObject):
             )
         return app
 
-    def update(self, new_state: dict):
-        """
-        Apply a dictionary of updates to the store.
-        Each update triggers reactivity via __setattr__.
-        """
-        for k, v in new_state.items():
-            setattr(self, k, v)
+    def _prepare_state(self, values: Mapping) -> dict[str, Any]:
+        if not isinstance(values, Mapping):
+            raise ValueError(
+                f"Store '{self.get_store_name()}' state must be a mapping"
+            )
+
+        prepared = {}
+        for name, value in values.items():
+            self._validate_state_key(name)
+            prepared[name] = self._prepare_state_value(name, value)
+        return prepared
+
+    def _validate_state_key(self, name: object) -> None:
+        if not isinstance(name, str) or not name.isidentifier() or name.startswith("_"):
+            raise ValueError(
+                f"Store '{self.get_store_name()}' has invalid state field {name!r}"
+            )
+
+        spec = self._state_specs.get(name)
+        if spec is not None:
+            if not spec.serialize:
+                raise ValueError(
+                    f"Store '{self.get_store_name()}' field '{name}' is local-only"
+                )
+            return
+
+        missing = object()
+        class_member = inspect.getattr_static(type(self), name, missing)
+        if class_member is not missing:
+            raise ValueError(
+                f"Store '{self.get_store_name()}' field '{name}' collides with "
+                "class configuration or behavior"
+            )
+
+    def _prepare_state_value(self, name: str, value: Any) -> Any:
+        return value
+
+    def apply_state(self, new_state: Mapping) -> None:
+        """Validate and apply a partial state snapshot as one reactive batch."""
+        prepared = self._prepare_state(new_state)
+        with batch():
+            for key, value in prepared.items():
+                setattr(self, key, value)
 
     def __setattr__(self, key, value):
         # Delegate to ReactiveObject for DAG-based change detection and triggering.
@@ -472,9 +548,19 @@ class WebSocketStore(Store):
         # WebSocket url + handle are non-reactive wiring, not state nodes.
         self.__dict__['_config'] = {"ws_url": ws_url}
         self.__dict__['_ws'] = None
-        if WebSocket:
-            self.__dict__['_ws'] = WebSocket.new(ws_url)
+
+    def on_client_ready(self) -> None:
+        super().on_client_ready()
+        if WebSocket and self.__dict__.get('_ws') is None:
+            self.__dict__['_ws'] = WebSocket.new(self.ws_url)
             self.__dict__['_ws'].onmessage = self._on_message
+
+    def on_client_teardown(self) -> None:
+        super().on_client_teardown()
+        websocket = self.__dict__.pop('_ws', None)
+        if websocket is not None:
+            websocket.close()
+        self.__dict__['_ws'] = None
 
     @property
     def ws_url(self) -> str:
@@ -486,9 +572,7 @@ class WebSocketStore(Store):
     
     def _on_message(self, event):
         data = json.loads(event.data)
-        # Update state directly; relying on base Store __setattr__ to notify subscribers
-        for k, v in data.items():
-            setattr(self, k, v)
+        self.apply_state(data)
 
     def dispatch(self, action: str, payload: dict):
         ws = self.__dict__.get('_ws')
@@ -553,6 +637,8 @@ def _matches_params(x: Any, params: dict) -> bool:
 
 
 class ModelStore(Store):
+    items: list = state(default_factory=list)
+
     # Config attribute names are immutable metadata — never reactive state.
     _CONFIG_ATTRS = frozenset({"model", "model_name", "custom_url"})
 
@@ -573,52 +659,32 @@ class ModelStore(Store):
             "model_name": getattr(model, "__name__", str(model)),
             "url": url,
         }
-        if 'items' not in self.__dict__:
-            self.__dict__['items'] = []
 
-        # SSR parity: when hydrated from #basis-initial-state the collection was
-        # serialized as plain dicts.  Re-validate them into typed model
-        # instances so a ModelStore's payload has the same shape as the CSR
-        # fetch path (fetch_all -> model_validate), whichever route produced
-        # the page.
-        self._revalidate_hydrated_payloads()
-
-    def _revalidate_hydrated_payloads(self) -> None:
-        """Re-validate SSR-hydrated model payloads into typed instances.
-
-        The SSR serializer emits ``items`` as plain dicts (``model_dump`` into
-        ``#basis-initial-state``), while the CSR fetch path runs
-        ``model_validate``.  This restores the invariant that ``items`` holds
-        model instances on the client regardless of route.
-
-        Only the collection attribute is touched: flat ``one=True`` fields,
-        ``loading``/``error``, and non-ModelStore state are left as-is.
-        Validation is best-effort — a payload that does not fit the schema
-        keeps its plain-dict shape rather than breaking hydration.
-        """
-        if not self.__dict__.get('_hydrated_from_ssr'):
-            return
-
-        items = self.__dict__.get('items')
-        if not isinstance(items, list) or not items:
-            return
-        # Already typed (instances), or a non-model payload — nothing to do.
-        if not isinstance(items[0], dict):
-            return
+    def _prepare_state_value(self, name: str, value: Any) -> Any:
+        if name != "items":
+            return super()._prepare_state_value(name, value)
+        if not isinstance(value, (list, tuple)):
+            raise ValueError(
+                f"Store '{self.get_store_name()}' field 'items' must be a list"
+            )
 
         validate = getattr(self.model, "model_validate", None)
         if validate is None:
-            return
+            return ReactiveCollection(value)
 
-        try:
-            revalidated = [
-                validate(item) if isinstance(item, dict) else item
-                for item in items
-            ]
-            # Parity with the CSR shape (the provider wraps in ReactiveCollection).
-            setattr(self, "items", ReactiveCollection(revalidated))
-        except Exception:
-            pass
+        prepared = []
+        for index, item in enumerate(value):
+            if isinstance(item, self.model):
+                prepared.append(item)
+                continue
+            try:
+                prepared.append(validate(item))
+            except Exception as exc:
+                raise ValueError(
+                    f"Store '{self.get_store_name()}' has invalid state at "
+                    f"items[{index}]"
+                ) from exc
+        return ReactiveCollection(prepared)
 
     def __setattr__(self, name, value):
         if name in self._CONFIG_ATTRS:
@@ -677,7 +743,7 @@ class ModelStore(Store):
                 for k, v in kwargs.items():
                     if hasattr(self.model, k) and v is not None:
                         statement = statement.where(getattr(self.model, k) == v)
-                self.items = list(session.exec(statement).all())
+                self.apply_state({"items": list(session.exec(statement).all())})
             return self.items
 
         url = self._find_endpoint("GET", one=False)
@@ -701,9 +767,7 @@ class ModelStore(Store):
             response = await pf(resolved_url)
             if response.ok:
                 data = await response.json()
-                hydrated = [self.model.model_validate(item) if hasattr(self.model, "model_validate") else item for item in data]
-                self.items = hydrated
-                self.error = None
+                self.apply_state({"items": data, "error": None})
                 self.__dict__['_first_load_completed'] = True
                 self.loading = False
                 return self.items
@@ -746,10 +810,11 @@ class ModelStore(Store):
                         item = x
                         break
             if item:
-                # Spread fields flat
-                for k, v in item.__dict__.items():
-                    if not k.startswith("_"):
-                        setattr(self, k, v)
+                self.apply_state({
+                    key: value
+                    for key, value in item.__dict__.items()
+                    if not key.startswith("_")
+                })
             return item
 
 
@@ -771,14 +836,18 @@ class ModelStore(Store):
                     new_items[idx] = item
                     self.items = new_items
                 else:
-                    self.items = self.items + [item]
-                
-                # Spread fields flat onto store
-                for k, v in (item.__dict__ if hasattr(item, "__dict__") else item).items():
-                    if not k.startswith("_"):
-                        setattr(self, k, v)
-                
-                self.error = None
+                    new_items = self.items + [item]
+
+                item_values = item.__dict__ if hasattr(item, "__dict__") else item
+                self.apply_state({
+                    "items": new_items,
+                    "error": None,
+                    **{
+                        key: value
+                        for key, value in item_values.items()
+                        if not key.startswith("_")
+                    },
+                })
                 self.__dict__['_first_load_completed'] = True
                 self.loading = False
                 return item

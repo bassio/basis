@@ -18,6 +18,7 @@ from basis.server.app import Basis
 from basis.shared.styling import compact_media
 from basis.shared.component import Component
 from basis.shared.page import _synthesize_page
+from basis.shared.reactive import state
 
 # Registers the custom elements under test.
 import basis.plugins.ui.command_palette.command_palette  # noqa: F401
@@ -90,7 +91,9 @@ def test_every_arrangement_reaches_the_markup():
             <ui-toast-container arrangement="bottom"></ui-toast-container>
         </div>
         """
-        items = [{"label": "Rename", "action": "rename"}]
+        items: list = state(
+            default_factory=lambda: [{"label": "Rename", "action": "rename"}]
+        )
 
     html = _render(Root, "/test_overlay_arrangements.py")
 

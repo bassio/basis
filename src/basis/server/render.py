@@ -25,7 +25,9 @@ lower-level render function it wraps, and the route decorators (``@app.serve``,
 
 from __future__ import annotations
 import asyncio
+import inspect
 import json
+import logging
 
 from typing import Any
 
@@ -40,8 +42,11 @@ from basis.shared.store import (
     run_apply_request,
 )
 from basis.shared.base_component import BaseComponent
-from basis.shared.errors import ErrorCollector, get_error_sink, set_error_sink
+from basis.shared.errors import ErrorCollector
 from basis.shared.serialization import json_dumps_script_safe
+
+
+logger = logging.getLogger(__name__)
 
 
 def _attach_app_to_store_bound_stores(all_stores, request_app):
@@ -72,10 +77,10 @@ def _get_all_stores(
     as a fallback when no blueprint was ever recorded (config-only stores).
     """
     all_stores = stores or {}
+    from basis.shared.base_component import _effective_store_inclusions
     for cls in [page_cls, root_component_cls]:
-        if hasattr(cls, '__basis_stores__'):
-            for cfg in cls.__basis_stores__:
-                name = cfg['name']
+        for cfg in _effective_store_inclusions(cls):
+                name = cfg.name
                 if name not in all_stores:
                     if name not in Store._registry:
                         store = Store.reinstantiate(name) or Store(name)
@@ -180,6 +185,22 @@ def _serialize_initial_state(all_stores: dict[str, Store], errors=None) -> str:
     return json_dumps_script_safe(initial_state, indent=2)
 
 
+def _development_mode(request: Request) -> bool:
+    return bool(getattr(getattr(request, "app", None), "_start_hmr_watcher", False))
+
+
+def _report_render_errors(errors: ErrorCollector) -> None:
+    for error in errors.errors:
+        logger.error(
+            "Binding evaluation failed during render: component=%s binding=%s "
+            "expr=%r error=%s",
+            error.component,
+            error.binding_type,
+            error.expr,
+            error.error,
+        )
+
+
 def _resolve_render_mode(page_cls, render_mode: str | None) -> str:
     """Resolve how a page should be rendered.
 
@@ -215,28 +236,44 @@ async def render_page(
     # The in-flight request is reachable from any plugin code the render runs —
     # store hooks, components, their helpers — via ``current_request()``.
     token = request_var.set(request) if request is not None else None
+    error_collector = ErrorCollector()
     try:
-        if not getattr(page_cls, "hydrates", True):
-            from basis.shared.page import refuse_static_render_mode
+        with error_collector:
+            if not getattr(page_cls, "hydrates", True):
+                from basis.shared.page import refuse_static_render_mode
 
-            refuse_static_render_mode(page_cls, render_mode)
-            # The request's database session is bound here for the static engine too:
-            # ``apply_request`` hooks and ``server_load`` query it.
-            async with RequestDBSession(request):
-                return await _render_page_static(
-                    request, page_cls, global_stores=global_stores
-                )
-        mode = _resolve_render_mode(page_cls, render_mode)
-        if mode not in ("ssr", "csr"):
-            raise ValueError(f"render_mode must be 'ssr' or 'csr', got {mode!r}")
-        # The request's database session is bound here — the single dispatch
-        # entry, wrapping both engines — so it is established before any store
-        # hook runs, in one place rather than once per engine.
-        async with RequestDBSession(request):
-            if mode == "ssr":
-                return await _render_page_ssr(request, page_cls, global_stores=global_stores)
-            return await _render_page_csr(request, page_cls, global_stores=global_stores)
+                refuse_static_render_mode(page_cls, render_mode)
+                # The request's database session is bound here for the static engine too:
+                # ``apply_request`` hooks and ``server_load`` query it.
+                async with RequestDBSession(request):
+                    result = await _render_page_static(
+                        request, page_cls, global_stores=global_stores
+                    )
+            else:
+                mode = _resolve_render_mode(page_cls, render_mode)
+                if mode not in ("ssr", "csr"):
+                    raise ValueError(f"render_mode must be 'ssr' or 'csr', got {mode!r}")
+                # The request's database session is bound here — the single dispatch
+                # entry, wrapping both engines — so it is established before any store
+                # hook runs, in one place rather than once per engine.
+                async with RequestDBSession(request):
+                    if mode == "ssr":
+                        result = await _render_page_ssr(
+                            request,
+                            page_cls,
+                            global_stores=global_stores,
+                            errors=error_collector,
+                        )
+                    else:
+                        result = await _render_page_csr(
+                            request,
+                            page_cls,
+                            global_stores=global_stores,
+                            errors=error_collector,
+                        )
+        return result
     finally:
+        _report_render_errors(error_collector)
         if token is not None:
             request_var.reset(token)
 
@@ -291,7 +328,7 @@ async def _render_page_static(
     preload_tasks = [
         comp.server_load()
         for comp in all_components
-        if asyncio.iscoroutinefunction(getattr(comp, "server_load", None))
+        if inspect.iscoroutinefunction(getattr(comp, "server_load", None))
     ]
     if preload_tasks:
         await asyncio.gather(*preload_tasks)
@@ -305,6 +342,7 @@ async def _render_page_ssr(
     *,
     root_component=None,
     global_stores: list | None = None,
+    errors: ErrorCollector,
 ) -> str:
     """Server-side render a Page (and its root component) to a full HTML document.
 
@@ -369,70 +407,70 @@ async def _render_page_ssr(
     #    Page.mount_root_app() — no engine-side mount-region
     #    lookup is needed; the Page locates its <body> itself.
 
-    # Collect every binding-evaluation error raised during this SSR render so
-    # it can be surfaced in the client overlay.  With the sink installed,
-    # safe_eval returns an empty value instead of "[Error: ...]".
-    error_collector = ErrorCollector()
-    _prev_sink = get_error_sink()
-    set_error_sink(error_collector)
-    try:
-        # 5. Mount the root component (if any — static pages have none).
-        #    The Page owns its root as a nested ChildBinding under a hyphenated
-        #    host tag in its <body> app slot ("the root is just another
-        #    component"). Every page root gets a host tag — the root's declared
-        #    hyphenated __tag__ or one kebab-derived from its class name — so all
-        #    boot paths (real Page subclasses AND synthesized @app.page shells)
-        #    unify here. Component styles live in-tree in the <head> (every Page
-        #    renders the component_style_items loop), so nothing is re-injected.
-        mounted_apps = []
-        if root_component is not None:
-            app = page_instance.mount_root_app()
-            if app is not None:
-                mounted_apps.append(app)
+    # 5. Mount the root component (if any — static pages have none).
+    #    The Page owns its root as a nested ChildBinding under a hyphenated
+    #    host tag in its <body> app slot ("the root is just another
+    #    component"). Every page root gets a host tag — the root's declared
+    #    hyphenated __tag__ or one kebab-derived from its class name — so all
+    #    boot paths (real Page subclasses AND synthesized @app.page shells)
+    #    unify here. Component styles live in-tree in the <head> (every Page
+    #    renders the component_style_items loop), so nothing is re-injected.
+    mounted_apps = []
+    if root_component is not None:
+        app = page_instance.mount_root_app()
+        if app is not None:
+            mounted_apps.append(app)
 
-        # 6. Collect every component for the server_load preload phase
-        all_components = []
-        for app in mounted_apps:
-            child_bindings = list(app.get_child_bindings(recursive=True))
-            child_components = [cb.childinstance for cb in child_bindings]
-            all_components.extend([app] + child_components)
-            if hasattr(app, '_mounted_providers'):
-                for provider in app._mounted_providers:
-                    if provider not in all_components:
-                        all_components.append(provider)
+    # 6. Collect every component for the server_load preload phase
+    all_components = []
+    for app in mounted_apps:
+        child_bindings = list(app.get_child_bindings(recursive=True))
+        child_components = [cb.childinstance for cb in child_bindings]
+        all_components.extend([app] + child_components)
+        if hasattr(app, '_mounted_providers'):
+            for provider in app._mounted_providers:
+                if provider not in all_components:
+                    all_components.append(provider)
 
-        # 7. Run server_load hooks concurrently; re-check stores created by them
-        preload_tasks = []
-        for comp in all_components:
-            if hasattr(comp, 'server_load') and asyncio.iscoroutinefunction(comp.server_load):
-                preload_tasks.append(comp.server_load())
+    # 7. Run server_load hooks concurrently; re-check stores created by them
+    preload_tasks = []
+    for comp in all_components:
+        if hasattr(comp, 'server_load') and inspect.iscoroutinefunction(comp.server_load):
+            preload_tasks.append(comp.server_load())
 
-        if preload_tasks:
-            await asyncio.gather(*preload_tasks)
+    if preload_tasks:
+        await asyncio.gather(*preload_tasks)
 
-            for store_name, store_instance in Store._registry.items():
-                if store_name not in all_stores:
-                    all_stores[store_name] = store_instance
-
-        # 8. Final render: serialize all stores into the initial state
         for store_name, store_instance in Store._registry.items():
             if store_name not in all_stores:
                 all_stores[store_name] = store_instance
-        initial_state_json = _serialize_initial_state(all_stores, errors=error_collector)
-    finally:
-        set_error_sink(_prev_sink)
+
+    # 8. Final render: serialize all stores into the initial state
+    for store_name, store_instance in Store._registry.items():
+        if store_name not in all_stores:
+            all_stores[store_name] = store_instance
+    initial_state_json = _serialize_initial_state(
+        all_stores, errors=errors if _development_mode(request) else None
+    )
 
     # Whole-page hydration (HYDRATION-WHOLEPAGE.md No.2 / Option A): stamp the
     # Page's OWN hydration surface (head h: + body b:) right here, passing the
     # declaratively-mounted body app into the b: walk — the served SSR document
     # then carries the whole head+body surface the client keeps alive. CSR
     # leaves this off (its head is served static).
-    return page_instance._render(
+    html = page_instance._render(
         request,
         initial_state_json=initial_state_json,
         stamp_hydration=True,
         body_app=(mounted_apps[0] if mounted_apps else None),
     )
+    final_state_json = _serialize_initial_state(
+        all_stores, errors=errors if _development_mode(request) else None
+    )
+    if final_state_json != initial_state_json:
+        page_instance.initial_state_json = final_state_json
+        html = page_instance._serialize_document()
+    return html
 
 
 async def _render_page_csr(
@@ -440,6 +478,7 @@ async def _render_page_csr(
     page_cls=None,
     *,
     global_stores: list | None = None,
+    errors: ErrorCollector,
 ) -> str:
     """Client-side-rendered shell: the page shell plus the serialized initial
     state; the unified client entrypoint mounts the root component.
@@ -464,6 +503,15 @@ async def _render_page_csr(
     root_component = getattr(page_cls, "root_component", None)
     all_stores = _collect_stores(request, page_cls, root_component, global_stores)
     await _run_store_request_hooks(request, all_stores.values())
-    initial_state_json = _serialize_initial_state(all_stores)
+    initial_state_json = _serialize_initial_state(
+        all_stores, errors=errors if _development_mode(request) else None
+    )
 
-    return page_instance._render(request, initial_state_json=initial_state_json)
+    html = page_instance._render(request, initial_state_json=initial_state_json)
+    final_state_json = _serialize_initial_state(
+        all_stores, errors=errors if _development_mode(request) else None
+    )
+    if final_state_json != initial_state_json:
+        page_instance.initial_state_json = final_state_json
+        html = page_instance._serialize_document()
+    return html

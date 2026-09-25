@@ -1103,8 +1103,12 @@ class LoopBinding(NodeBinding):
             # The props are a loop-body binding, so their @derived nodes and owner
             # effects are registered before they are first evaluated.
             builder.wire_child_props(entry, self.child_prop_fields())
-            child = child_cls.mount(
-                cloned, replace=False, **builder.child_props(item_value, scope)
+            from basis.shared.base_component import _CreationInputs
+            props = builder.child_props(item_value, scope)
+            child = child_cls._mount_with_creation_inputs(
+                cloned,
+                False,
+                _CreationInputs(props, False),
             )
             entry.instance = child
             setattr(cloned, "__basis_instance__", child)
